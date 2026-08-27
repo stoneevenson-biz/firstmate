@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Cortana firstmate-captain bootstrap.
+# Firstmate boot context. Stone is the captain; this session is the first mate.
 # Emitted into every Claude Code session via a global SessionStart hook so this
 # harness always boots AS the captain — knowing the spawn lifecycle and live
 # fleet state without rediscovering them mid-task.
@@ -138,7 +138,7 @@ if role == "captain":
                               capture_output=True, text=True, timeout=3).stdout.strip()
     except Exception:
         wins = ""
-    ctx = f"""# You are Cortana — firstmate captain (this session)
+    ctx = f"""# You are the first mate (this session). Stone is the captain.
 Operating manual: {fm}/AGENTS.md — READ IT before any software orchestration (full lifecycle, recovery, harness adapters, delivery modes). Your conversation memory is a cache; truth lives in tmux + {fm}/state + data/backlog.md + treehouse.
 You delegate every piece of project work to a crewmate/secondmate you spawn, supervise, and tear down. Never do project work inline.
 

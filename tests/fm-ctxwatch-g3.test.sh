@@ -39,7 +39,13 @@ out2=$(FM_CTX_WINDOW=nohandoff FM_CTX_ROLE=crew run_boot '{"source":"clear","cwd
 
 # --- Case 3: normal startup, captain pane, no handoff -> captain ctx intact --
 out3=$(FM_CTX_WINDOW=capnone FM_CTX_ROLE=captain run_boot '{"source":"startup","cwd":"'"$FM"'","session_id":"s3"}')
-printf '%s' "$out3" | grep -q 'You are Cortana' || fail "captain bootstrap regressed (no captain context)"
+# Assert the STRUCTURE of the boot context and the RANK, not a persona string.
+# The old check grepped 'You are Cortana', pinning a name that contradicted
+# AGENTS.md's "You are the first mate. The user is the captain." Renaming the
+# persona should not fail this gate; emitting no context, or inverting the rank
+# so the session believes it is the captain, must.
+printf '%s' "$out3" | grep -q 'Operating manual:' || fail "captain bootstrap regressed (no captain context)"
+printf '%s' "$out3" | grep -q 'Stone is the captain' || fail "boot context must not claim the session is the captain"
 printf '%s' "$out3" | grep -q 'Rehydrate'       && fail "no handoff -> must NOT inject a rehydrate block"
 
 pass "G3 rehydrate injects+archives handoff; no-handoff path unchanged (captain ctx preserved)"
