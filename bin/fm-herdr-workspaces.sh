@@ -15,7 +15,7 @@
 # Naming convention:  <project-short>/<what-the-work-is>
 #   afs/resource-registry      afs/doc-index         cellarsky/booking-fix
 #   mac-config/cutover-guard   stone-skills/lint-edges
-# Keep it under ~28 chars so it fits the tab bar. Kebab-case, no task suffix -
+# Keep it under 28 chars so it fits the sidebar (herdr's sidebar_width is 30). Kebab-case, no task suffix -
 # the id lives in state/<id>.meta, which is where an id belongs.
 #
 # Usage:
@@ -44,7 +44,7 @@ if [ "${1:-}" = "--name" ]; then
   target=$2; proj=$3; shift 3
   work=$(printf '%s' "$*" | tr '[:upper:] ' '[:lower:]-' | tr -cd 'a-z0-9/-' | sed 's/--*/-/g; s/^-//; s/-$//')
   name="$proj/$work"
-  [ "${#name}" -le 40 ] || die "name '$name' is ${#name} chars; keep it short enough to read in the tab bar"
+  [ "${#name}" -le 28 ] || die "name '$name' is ${#name} chars; keep it short enough to read in the tab bar"
   herdr agent rename "$target" "$name" >/dev/null || die "rename failed for $target"
   printf 'named %s -> %s\n' "$target" "$name"
   exit 0
