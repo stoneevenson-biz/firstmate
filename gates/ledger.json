@@ -359,9 +359,9 @@
       "test_ref": "bash tests/fm-captain-bootstrap-digest.test.sh",
       "baseline_ref": null,
       "first_observed_red": "2026-07-08T21:00:30.169Z",
-      "mutation_verified": "2026-08-28T19:02:33.486Z",
-      "status": "green",
-      "vacuous": true,
+      "mutation_verified": "2026-08-28T19:23:23.020Z",
+      "status": "frozen",
+      "vacuous": false,
       "regression": false,
       "created": "2026-07-08T00:00:00Z",
       "last_verified": "2026-08-28T19:11:27.496Z"
