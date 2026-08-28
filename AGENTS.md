@@ -81,7 +81,7 @@ projects/            cloned repos; gitignored; READ-ONLY for you
 state/               volatile runtime signals; gitignored
   <id>.status        appended by crewmates through bin/fm-status.sh: "<state>: <note>" lines
   <id>.turn-ended    touched by turn-end hooks
-  <id>.meta          written by fm-spawn: window=, worktree=, project=, harness=, kind=, mode=, yolo=; kind=secondmate also records home= and projects= (fm-pr-check appends pr=)
+  <id>.meta          written by fm-spawn: window=, worktree=, project=, harness=, mux=, name=, kind=, mode=, yolo=; window= is the OPAQUE multiplexer target and mux= the driver that minted it (section 8); kind=secondmate also records home= and projects= (fm-pr-check appends pr=)
   <id>.check.sh      optional slow poll you write per task (e.g. merged-PR check)
   .wake-queue        durable queued wakes: epoch<TAB>seq<TAB>kind<TAB>key<TAB>payload
   .afk               durable away-mode flag; present = sub-supervisor may inject escalations (set by /afk, cleared on user return)
@@ -542,11 +542,47 @@ Silence is the correct state while a healthy background watcher is waiting.
 
 ### herdr workspace hygiene
 
-When the crew runs on herdr, the fleet stays legible only if it is organised:
+**Agents are spawned in herdr. This is the captain's standing rule, and it is the default.**
+A pane the captain cannot see does not count, so `bin/fm-spawn.sh` puts every crewmate
+in herdr whenever a herdr server is reachable - no flag, no opt-in, nothing to remember.
+`FM_MUX=tmux` is the explicit fallback for headless and non-herdr contexts (cron, CI, a
+plain SSH session) and reproduces the pre-seam behaviour exactly, so it is a true rollback.
+When no herdr server is reachable the multiplexer seam degrades to tmux **and says so on
+stderr**: a silent degrade would leave the captain believing he is watching a fleet that
+is actually landing somewhere invisible. Reachability is the test, not `HERDR_ENV` -
+that variable is unset in firstmate's own process even while a server is running.
+
+The three entry points firstmate creates, steers, and observes direct reports with -
+`bin/fm-spawn.sh`, `bin/fm-send.sh`, `bin/fm-peek.sh` - address panes through the
+multiplexer seam in `bin/fm-mux-lib.sh`, never tmux directly. `state/<id>.meta` records
+the opaque target in `window=` and the driver that minted it in `mux=`; every later steer
+or peek uses that recorded driver, so a crewmate is never re-routed to a multiplexer it
+does not live in. A meta with no `mux=` predates the seam and is a tmux target.
+Under herdr, `fm-send.sh` delivers through `herdr agent prompt --wait`, which returns only
+once the agent has consumed the prompt - real acknowledgment, where tmux can only guess.
+A crewmate blocked at an approval dialog is refused rather than typed over.
+
+Beyond spawning, the fleet stays legible only if it is organised:
 **one workspace per project, and every agent pane named for the work it is doing**,
 not for its task id. herdr addresses agents by name, so the name is the address.
-`bin/fm-herdr-workspaces.sh` reconciles workspaces against `data/projects.md` and
-carries the naming convention; run it with no arguments for a plan that changes nothing.
+The workspace is resolved explicitly from the project name and created if absent - never
+left to whichever workspace happens to be focused; `FM_HERDR_WORKSPACE` overrides it.
+
+**Pane naming: `<project-short>-<what-the-work-is>`, kebab-case, under 28 characters.**
+`afs-resource-registry`, `mac-config-cutover-guard`, `firstmate-fleet-view`,
+`archify-leak-fixes`. One hyphen joins the halves; **never a slash**. That is not a style
+preference - herdr rejects an agent name that is not `^[a-z][a-z0-9_-]{0,31}$`, so a
+slashed name renames nothing and leaves the pane unaddressable. No task suffix: the id
+lives in `state/<id>.meta`, which is where an id belongs. `fm-spawn.sh --name <work>`
+supplies the work half; absent it, the id's random suffix is dropped and the rest is used.
+`bin/fm-herdr-workspaces.sh` reconciles workspaces against `data/projects.md` and carries
+the naming convention; run it with no arguments for a plan that changes nothing.
+
+Not yet migrated: `bin/fm-watch.sh`, `bin/fm-teardown.sh`, and `bin/fm-ff-lib.sh` still
+read `window=` and call tmux on it directly, so for a herdr-spawned crewmate their
+stale-pane detection and window kill are inert. Supervision still works - status files,
+heartbeats, and the per-task checks are multiplexer-agnostic - and nothing unsafe happens,
+but a closed herdr tab must be tidied by hand until those callers move onto the seam too.
 
 ### Away-mode stub
 

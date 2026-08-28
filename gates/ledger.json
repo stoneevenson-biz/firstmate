@@ -376,12 +376,12 @@
       "test_ref": "bash tests/fm-mux-h1.test.sh",
       "baseline_ref": null,
       "first_observed_red": "2026-08-28T00:00:00Z",
-      "mutation_verified": null,
-      "status": "red",
+      "mutation_verified": "2026-08-28T00:00:00Z",
+      "status": "green",
       "vacuous": false,
       "regression": false,
       "created": "2026-08-28T00:00:00Z",
-      "last_verified": null
+      "last_verified": "2026-08-28T00:00:00Z"
     },
     "gate-h2-mux-workspace-scoping": {
       "id": "gate-h2-mux-workspace-scoping",
@@ -393,12 +393,12 @@
       "test_ref": "bash tests/fm-mux-h2.test.sh",
       "baseline_ref": null,
       "first_observed_red": "2026-08-28T00:00:00Z",
-      "mutation_verified": null,
-      "status": "red",
+      "mutation_verified": "2026-08-28T00:00:00Z",
+      "status": "green",
       "vacuous": false,
       "regression": false,
       "created": "2026-08-28T00:00:00Z",
-      "last_verified": null
+      "last_verified": "2026-08-28T00:00:00Z"
     },
     "gate-h3-spawn-named-herdr-tab": {
       "id": "gate-h3-spawn-named-herdr-tab",
@@ -410,12 +410,12 @@
       "test_ref": "bash tests/fm-mux-h3.test.sh",
       "baseline_ref": null,
       "first_observed_red": "2026-08-28T00:00:00Z",
-      "mutation_verified": null,
-      "status": "red",
+      "mutation_verified": "2026-08-28T00:00:00Z",
+      "status": "green",
       "vacuous": false,
       "regression": false,
       "created": "2026-08-28T00:00:00Z",
-      "last_verified": null
+      "last_verified": "2026-08-28T00:00:00Z"
     },
     "gate-h4-send-peek-routed-by-meta": {
       "id": "gate-h4-send-peek-routed-by-meta",
@@ -427,12 +427,12 @@
       "test_ref": "bash tests/fm-mux-h4.test.sh",
       "baseline_ref": null,
       "first_observed_red": "2026-08-28T00:00:00Z",
-      "mutation_verified": null,
-      "status": "red",
+      "mutation_verified": "2026-08-28T00:00:00Z",
+      "status": "green",
       "vacuous": false,
       "regression": false,
       "created": "2026-08-28T00:00:00Z",
-      "last_verified": null
+      "last_verified": "2026-08-28T00:00:00Z"
     },
     "gate-h5-herdr-live-roundtrip": {
       "id": "gate-h5-herdr-live-roundtrip",
@@ -444,12 +444,12 @@
       "test_ref": "bash tests/fm-mux-h5-live.test.sh",
       "baseline_ref": null,
       "first_observed_red": "2026-08-28T00:00:00Z",
-      "mutation_verified": null,
-      "status": "red",
+      "mutation_verified": "2026-08-28T00:00:00Z",
+      "status": "green",
       "vacuous": false,
       "regression": false,
       "created": "2026-08-28T00:00:00Z",
-      "last_verified": null
+      "last_verified": "2026-08-28T00:00:00Z"
     },
     "gate-h6-tmux-call-parity": {
       "id": "gate-h6-tmux-call-parity",
@@ -461,12 +461,12 @@
       "test_ref": "bash tests/fm-mux-h6.test.sh",
       "baseline_ref": null,
       "first_observed_red": "2026-08-28T00:00:00Z",
-      "mutation_verified": null,
-      "status": "red",
+      "mutation_verified": "2026-08-28T00:00:00Z",
+      "status": "green",
       "vacuous": false,
       "regression": false,
       "created": "2026-08-28T00:00:00Z",
-      "last_verified": null
+      "last_verified": "2026-08-28T00:00:00Z"
     },
     "gate-h7-tmux-live-roundtrip": {
       "id": "gate-h7-tmux-live-roundtrip",
@@ -478,12 +478,12 @@
       "test_ref": "bash tests/fm-mux-h7-live.test.sh",
       "baseline_ref": null,
       "first_observed_red": "2026-08-28T00:00:00Z",
-      "mutation_verified": null,
-      "status": "red",
+      "mutation_verified": "2026-08-28T00:00:00Z",
+      "status": "green",
       "vacuous": false,
       "regression": false,
       "created": "2026-08-28T00:00:00Z",
-      "last_verified": null
+      "last_verified": "2026-08-28T00:00:00Z"
     }
   }
 }
