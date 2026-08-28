@@ -542,7 +542,7 @@ Silence is the correct state while a healthy background watcher is waiting.
 
 ### herdr workspace hygiene
 
-**Agents run in herdr, and herdr is the only automatic choice.**
+**Agents run in herdr, and herdr is the only surface.**
 A pane the captain cannot see does not count, so `bin/fm-spawn.sh` puts every crewmate in
 herdr - no flag, no opt-in, nothing to remember. The canonical statement of the rule is
 `data/captain.md`, section "Where agents run".
@@ -554,26 +554,35 @@ reserved for himself: believing he is watching the fleet while work lands somewh
 cannot see is worse than knowing it is invisible, and a warning in a log nobody is reading
 at 2am does not close that gap.
 
-**An unreachable herdr is an escalation, not a branch.** `fm_mux_require_available` checks
+**An unreachable herdr is an escalation, not a branch.** `fm_herdr_require` checks
 reachability before a pane is created; when no server can be reached it fails non-zero with
 a message naming the reason, and `fm-spawn.sh` stops. Nothing is created - no window, no
 tab, no meta. Any tier may *recommend* a headless run, but it recommends by stopping and
 saying why; the captain decides.
 
-**`FM_MUX=tmux` is that decision, once he has made it.** A person setting it is the
-captain's word; a machine inferring it is the failure. It reproduces the pre-seam behaviour
-exactly, so it is also a true rollback, and it is honoured silently and without a herdr
-server anywhere in sight.
+**There is no override to set.** With one surface there is no driver to select, so headless
+is not a flag someone can flip by accident or by habit - it is a conversation with the
+captain. `FM_MUX` was an interim override and is read by nothing.
 
 The three entry points firstmate creates, steers, and observes direct reports with -
-`bin/fm-spawn.sh`, `bin/fm-send.sh`, `bin/fm-peek.sh` - address panes through the
-multiplexer seam in `bin/fm-mux-lib.sh`, never tmux directly. `state/<id>.meta` records
-the opaque target in `window=` and the driver that minted it in `mux=`; every later steer
-or peek uses that recorded driver, so a crewmate is never re-routed to a multiplexer it
-does not live in. A meta with no `mux=` predates the seam and is a tmux target.
-Under herdr, `fm-send.sh` delivers through `herdr agent prompt --wait`, which returns only
-once the agent has consumed the prompt - real acknowledgment, where tmux can only guess.
-A crewmate blocked at an approval dialog is refused rather than typed over.
+`bin/fm-spawn.sh`, `bin/fm-send.sh`, `bin/fm-peek.sh` - address panes through
+`bin/fm-herdr.sh`, never tmux directly. There is one library and one surface, so there is
+no driver to select and nothing to configure. `state/<id>.meta` records the herdr pane id
+in `window=` and marks the crewmate post-cutover with `mux=herdr`.
+`fm-send.sh` delivers through `herdr agent prompt --wait`, which returns only once the
+agent has consumed the prompt - real acknowledgment, where tmux could only guess. A
+crewmate blocked at an approval dialog is refused rather than typed over, and a delivery
+that goes in without a state change is reported as unconfirmed rather than as a failure,
+because re-sending a steer the crewmate already has is the worse of the two errors.
+
+**The drain.** Crewmates spawned before the cutover live in tmux windows and their meta has
+no `mux=herdr` line. Those stay readable, steerable and closable until they are torn down:
+a watcher that cannot read a live crewmate is blind, a supervisor that can watch but not
+correct it has lost half of supervision, and a teardown that cannot close it strands work
+carrying unlanded commits. `bin/fm-tmux-lib.sh` is therefore retired for NEW use - nothing
+spawns onto it - but kept while any such meta exists. Which panes are draining is derived
+from the metas, never a hardcoded list; `fm_herdr_drain_pending` answers it, and when it
+reports nothing pending in every home the legacy library can go.
 
 Beyond spawning, the fleet stays legible only if it is organised:
 **one workspace per project, and every agent pane named for the work it is doing**,
@@ -588,14 +597,18 @@ preference - herdr rejects an agent name that is not `^[a-z][a-z0-9_-]{0,31}$`, 
 slashed name renames nothing and leaves the pane unaddressable. No task suffix: the id
 lives in `state/<id>.meta`, which is where an id belongs. `fm-spawn.sh --name <work>`
 supplies the work half; absent it, the id's random suffix is dropped and the rest is used.
-`bin/fm-herdr-workspaces.sh` reconciles workspaces against `data/projects.md` and carries
-the naming convention; run it with no arguments for a plan that changes nothing.
+`bin/fm-herdr.sh` is both the library and the reconcile CLI: run it with no arguments for a
+plan that changes nothing, `--apply` to create the missing workspaces, and
+`--name <pane> <project> <work>` to name a live pane. It is deliberately not called `herdr`,
+which would shadow the real binary and make every call site depend on `PATH` order.
 
 Not yet migrated: `bin/fm-watch.sh`, `bin/fm-teardown.sh`, and `bin/fm-ff-lib.sh` still
-read `window=` and call tmux on it directly, so for a herdr-spawned crewmate their
-stale-pane detection and window kill are inert. Supervision still works - status files,
-heartbeats, and the per-task checks are multiplexer-agnostic - and nothing unsafe happens,
-but a closed herdr tab must be tidied by hand until those callers move onto the seam too.
+read `window=` and call tmux on it directly. That is what keeps the drain working, and it
+is also a gap: for a herdr-spawned crewmate their stale-pane detection and window kill are
+inert. Supervision still works - status files, heartbeats, and the per-task checks do not
+depend on the multiplexer - and nothing unsafe happens, but a closed herdr tab must be
+tidied by hand until those three move onto `fm-herdr.sh` as well. They should move once
+the drain is empty, and not before.
 
 ### Away-mode stub
 

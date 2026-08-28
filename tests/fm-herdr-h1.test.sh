@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+# GATE h1 - herdr is the only surface. There is nothing to select.
+#
+# THE CAPTAIN'S RULE (data/captain.md, "Where agents run", 2026-08-28):
+#
+#   "Headless is not an automatic fallback and must never be selected by a
+#    reachability rule. Any tier may *recommend* a headless run, but it asks me
+#    first... Silent degradation to headless is the specific failure this rule
+#    exists to prevent."
+#
+# This gate has been re-cut twice, and the history is the point.
+#
+#   v1 pinned a reachability rule: herdr when a server answered, tmux otherwise,
+#      announced on stderr. Loud, but still the machine choosing headless.
+#   v2 removed the reachability branch but kept FM_MUX as an explicit override
+#      and a whole driver-dispatch layer behind it.
+#   v3 (here) removes the selection machinery entirely. With one surface there
+#      is no driver to choose, so there is no code that could choose wrongly.
+#
+# A rule enforced by a branch is a rule that can be branched around. A rule
+# enforced by there being no branch cannot. What is left to gate is that the
+# machinery is genuinely GONE - not reduced to a constant that a later edit
+# could turn back into a decision - and that an unreachable herdr escalates.
+set -u
+
+# shellcheck source=tests/herdr-helpers.sh
+. "$(dirname "${BASH_SOURCE[0]}")/herdr-helpers.sh"
+# shellcheck source=bin/fm-herdr.sh
+. "$ROOT/bin/fm-herdr.sh"
+
+TMP_ROOT=$(fm_test_tmproot fm-herdr-h1)
+FB=$(fm_herdr_fake_server "$TMP_ROOT")
+PATH="$FB:$PATH"; export PATH
+CALLS="$TMP_ROOT/calls"; export CALLS
+: > "$CALLS"
+
+LIB="$ROOT/bin/fm-herdr.sh"
+
+# --- the selection machinery is gone ----------------------------------------
+
+# Not "returns herdr" - ABSENT. A constant-returning selector is an invitation
+# to add a branch back into it; no selector at all is not.
+test_there_is_no_driver_selector() {
+  if grep -qE '^\s*fm_(mux|herdr)_driver\s*\(\)' "$LIB"; then
+    fail "a driver selector still exists; the rule is enforced by there being no choice"
+  fi
+  # Strip comments first: the collapsed library NAMES the machinery it removed,
+  # which is documentation, not a surviving call site.
+  if grep -h -vE '^[[:space:]]*#' "$ROOT"/bin/fm-*.sh | grep -qE 'fm_mux_dispatch|fm_mux_driver'; then
+    fail "driver dispatch survives somewhere in bin/"
+  fi
+  pass "selection: no driver selector and no dispatch layer exist"
+}
+
+# FM_MUX was the override in v2. With one surface there is nothing for it to
+# select, so it must not be readable anywhere - a variable that still works is
+# a way to divert an agent off the captain's screen.
+test_fm_mux_no_longer_selects_anything() {
+  local hits
+  hits=$(grep -h -vE '^[[:space:]]*#' "$ROOT"/bin/*.sh | grep -F 'FM_MUX' || true)
+  if [ -n "$hits" ]; then
+    fail "FM_MUX is still read by bin/: $hits"
+  fi
+  pass "selection: FM_MUX selects nothing; it is not read by any script"
+}
+
+# The proof that matters to the fleet, not to the source: setting the old
+# override cannot divert a spawn. Covered end to end in h3; asserted here
+# because this is the file that owns the rule.
+test_the_old_override_cannot_divert_anything() {
+  local out
+  out=$(FM_MUX=tmux bash -c '. "$1"; fm_herdr_pane_name proj work' _ "$LIB" 2>&1)
+  assert_eq "$out" "proj-work" "the library behaved differently under the retired override"
+  pass "selection: the retired FM_MUX override changes nothing"
+}
+
+# --- reachability is a diagnostic, never a selector --------------------------
+
+test_reachability_is_only_ever_a_diagnostic() {
+  local rc=0
+  HERDR_SERVER=running bash -c '. "$1"; fm_herdr_up' _ "$LIB" >/dev/null 2>&1 || rc=$?
+  expect_code 0 "$rc" "fm_herdr_up did not see a running server"
+  rc=0
+  HERDR_SERVER=stopped bash -c '. "$1"; fm_herdr_up' _ "$LIB" >/dev/null 2>&1 || rc=$?
+  if [ "$rc" = 0 ]; then fail "fm_herdr_up reported a stopped server as up"; fi
+  pass "reachability: answers honestly, and nothing selects a surface from it"
+}
+
+# --- an unreachable herdr ESCALATES -----------------------------------------
+
+# The message has to be one the captain can act on: what is wrong, and that the
+# call is his. A tier RECOMMENDS headless by printing this and stopping - it
+# never chooses it.
+test_unreachable_herdr_escalates_with_an_actionable_message() {
+  local out rc=0
+  out=$(HERDR_SERVER=stopped bash -c '. "$1"; fm_herdr_require "crewmate x"' _ "$LIB" 2>&1) || rc=$?
+  if [ "$rc" = 0 ]; then fail "an unreachable herdr was treated as fine"; fi
+  assert_contains "$out" "no herdr server is reachable" "the escalation does not name the problem"
+  assert_contains "$out" "crewmate x" "the escalation does not say what could not be placed"
+  assert_contains "$out" "captain" "the escalation does not say whose decision this is"
+  assert_contains "$out" "NOT falling back" "the escalation does not say it refused to degrade"
+  pass "escalation: an unreachable herdr stops and asks, naming the problem and the decision"
+}
+
+test_absent_binary_escalates_with_its_own_reason() {
+  local out rc=0 clean
+  clean=$(fm_herdr_path_without_binary)
+  out=$(PATH="$clean" bash -c '. "$1"; fm_herdr_require "crewmate y"' _ "$LIB" 2>&1) || rc=$?
+  if [ "$rc" = 0 ]; then fail "a missing herdr binary was treated as fine"; fi
+  assert_contains "$out" "not on PATH" "an absent binary is not reported as its own distinct reason"
+  pass "escalation: an absent binary escalates too - installing it is not this script's call"
+}
+
+test_reachable_herdr_passes_silently() {
+  local out rc=0
+  out=$(HERDR_SERVER=running bash -c '. "$1"; fm_herdr_require' _ "$LIB" 2>&1) || rc=$?
+  expect_code 0 "$rc" "a reachable herdr server failed the precondition"
+  assert_eq "$out" "" "the precondition is noisy on the happy path"
+  pass "escalation: a reachable server passes silently"
+}
+
+test_there_is_no_driver_selector
+test_fm_mux_no_longer_selects_anything
+test_the_old_override_cannot_divert_anything
+test_reachability_is_only_ever_a_diagnostic
+test_unreachable_herdr_escalates_with_an_actionable_message
+test_absent_binary_escalates_with_its_own_reason
+test_reachable_herdr_passes_silently

@@ -19,15 +19,15 @@
 # --wait is a regression this gate treats as a failure, not a style question.
 set -u
 
-# shellcheck source=tests/mux-helpers.sh
-. "$(dirname "${BASH_SOURCE[0]}")/mux-helpers.sh"
+# shellcheck source=tests/herdr-helpers.sh
+. "$(dirname "${BASH_SOURCE[0]}")/herdr-helpers.sh"
 
 SEND="$ROOT/bin/fm-send.sh"
 PEEK="$ROOT/bin/fm-peek.sh"
 TMP_ROOT=$(fm_test_tmproot fm-mux-h4)
 
-FB=$(fm_mux_fake_herdr "$TMP_ROOT")
-fm_mux_fake_tmux "$TMP_ROOT" >/dev/null   # same fakebin dir; adds tmux
+FB=$(fm_herdr_fake_server "$TMP_ROOT")
+fm_herdr_fake_tmux "$TMP_ROOT" >/dev/null   # same fakebin dir; adds tmux
 CALLS="$TMP_ROOT/calls"; export CALLS
 PANE="$TMP_ROOT/pane.txt"
 

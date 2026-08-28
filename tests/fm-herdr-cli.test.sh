@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Behavior tests for fm-herdr-workspaces.sh.
+# Behavior tests for the bin/fm-herdr.sh reconcile CLI.
 #
 # The captain's standing order is that every project gets its own herdr
 # workspace and every agent pane is named for the WORK it is doing, not for a
@@ -10,7 +10,7 @@ set -u
 
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
-SCRIPT="$ROOT/bin/fm-herdr-workspaces.sh"
+SCRIPT="$ROOT/bin/fm-herdr.sh"
 TMP_ROOT=$(fm_test_tmproot fm-herdr-ws)
 
 # A fake herdr: reports a running server, records rename/create calls.

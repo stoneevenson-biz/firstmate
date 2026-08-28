@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/mux-helpers.sh - fakes for the multiplexer seam.
+# tests/herdr-helpers.sh - fakes for the multiplexer seam.
 #
 # THE RULE THESE FAKES EXIST TO ENFORCE: a gate must not pass against a stub
 # that would never satisfy the real multiplexer. So the fake herdr here is not
@@ -20,7 +20,7 @@
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-# fm_mux_fake_herdr <dir> -> prints a fakebin dir holding a herdr stub.
+# fm_herdr_fake_server <dir> -> prints a fakebin dir holding a herdr stub.
 # Behaviour knobs, all read at call time from the environment:
 #   HERDR_SERVER      running|stopped   (default running)
 #   HERDR_WORKSPACES  "id=label,id=label"  the workspaces that already exist
@@ -29,7 +29,7 @@
 #   HERDR_PANE_CWD    what `pane get` reports as foreground_cwd
 #   HERDR_PANE_FILE   file whose contents `agent read`/`pane read` return
 #   CALLS             file every invocation's argv is appended to
-fm_mux_fake_herdr() {  # <dir>
+fm_herdr_fake_server() {  # <dir>
   local fb="$1/fakebin"; mkdir -p "$fb"
   cat > "$fb/herdr" <<'SH'
 #!/usr/bin/env bash
@@ -143,9 +143,9 @@ SH
   printf '%s\n' "$fb"
 }
 
-# fm_mux_fake_tmux <dir> -> a tmux that records argv and answers the few reads
+# fm_herdr_fake_tmux <dir> -> a tmux that records argv and answers the few reads
 # the seam performs. TMUX_RC forces a failure; PANE_FILE backs capture-pane.
-fm_mux_fake_tmux() {  # <dir>
+fm_herdr_fake_tmux() {  # <dir>
   local fb="$1/fakebin"; mkdir -p "$fb"
   cat > "$fb/tmux" <<'SH'
 #!/usr/bin/env bash
@@ -176,7 +176,7 @@ SH
 }
 
 # A herdr binary that is absent entirely: PATH with no herdr on it at all.
-fm_mux_path_without_herdr() {
+fm_herdr_path_without_binary() {
   local p out=""
   IFS=:; for p in $PATH; do
     [ -n "$p" ] || continue

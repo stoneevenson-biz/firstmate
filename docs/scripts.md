@@ -27,7 +27,8 @@ Each file also starts with a short header comment.
 | `fm-wake-drain.sh`       | Atomically drain queued watcher wakes before handling supervision work                                              |
 | `fm-wake-lib.sh`         | Shared durable wake queue and portable lock helpers sourced by the watcher, drain, arm, guard, and daemon          |
 | `fm-send.sh`             | Send one verified literal line (or `--key Escape`) to a crewmate window; exits non-zero when Enter is positively swallowed; text sends pause `FM_SEND_SETTLE` seconds after success |
-| `fm-tmux-lib.sh`         | Shared tmux pane primitives for busy detection, dim-ghost-aware and border-aware composer detection, and verified submit retry |
+| `fm-herdr.sh`            | The herdr surface: library plus workspace-reconcile CLI. Workspace resolution, `<project>-<work>` pane naming, tab/pane verbs, acknowledged `agent prompt --wait` delivery, and the escalation when no herdr server is reachable. Not named `herdr`, which would shadow the real binary |
+| `fm-tmux-lib.sh`         | Shared tmux pane primitives for busy detection, dim-ghost-aware and border-aware composer detection, and verified submit retry. RETIRED for new use: nothing spawns onto tmux. Still sourced by the away-mode daemon and context-watch, and by `fm-send.sh` for panes that predate the herdr cutover; delete it only once no meta lacks `mux=herdr` |
 | `fm-peek.sh`             | Print a bounded tail of a crewmate pane                                                                             |
 | `fm-status.sh`           | Append one crewmate status line to a home's status file; briefs teach this verb because a shell redirect into the firstmate tree is refused as an edit |
 | `fm-pr-check.sh`         | Record a PR-ready task and arm the watcher's merge poll                                                             |

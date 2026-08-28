@@ -1,27 +1,27 @@
 #!/usr/bin/env bash
 # GATE h3 - a herdr spawn lands as a NAMED TAB in the RESOLVED workspace.
 #
-# THE DEFECT. bin/fm-spawn.sh contained zero FM_MUX/fm_mux_ references and drove
-# tmux directly, so every crewmate this fleet spawned landed in a tmux session
-# the captain cannot see. A pane he cannot see does not count. The seam existed
-# and was complete; nothing called it.
+# THE DEFECT. bin/fm-spawn.sh drove tmux directly, so every crewmate this fleet
+# spawned landed in a tmux session the captain cannot see. A pane he cannot see
+# does not count.
 #
-# WHAT THIS GATE PINS, end to end through fm-spawn.sh with no FM_MUX set:
-#   * a reachable herdr server is what the crewmate is created in;
+# WHAT THIS GATE PINS, end to end through fm-spawn.sh:
+#   * herdr is where the crewmate is created - there is no other surface, and
+#     an unreachable server stops the spawn rather than diverting it;
 #   * the tab is scoped to the project's workspace, resolved by label;
 #   * the tab is NAMED <project>-<work>, never the task id;
 #   * the name is one herdr will actually accept as an agent address - the fake
 #     enforces herdr 0.8.2's real ^[a-z][a-z0-9_-]{0,31}$ rule, so a slash
 #     separator fails here rather than in the captain's sidebar;
-#   * the meta records the opaque target AND the driver that minted it, which is
-#     what keeps the crewmate steerable later;
+#   * the meta records the herdr pane id and marks the crewmate post-cutover,
+#     which is what keeps it addressed with herdr verbs later;
 #   * the task id stays in the meta and out of the name.
 set -u
 export FM_INTAKE_OVERRIDE=1   # wardroom: this suite tests spawn machinery, not intake
-export FM_SKIP_SHELL_READY=1  # readiness is gated by h5/h7 against live panes
+export FM_SKIP_SHELL_READY=1  # readiness is gated by h5 against a live pane
 
-# shellcheck source=tests/mux-helpers.sh
-. "$(dirname "${BASH_SOURCE[0]}")/mux-helpers.sh"
+# shellcheck source=tests/herdr-helpers.sh
+. "$(dirname "${BASH_SOURCE[0]}")/herdr-helpers.sh"
 
 TMP_ROOT=$(fm_test_tmproot fm-mux-h3)
 fm_git_identity fmtest fmtest@example.invalid
@@ -42,21 +42,16 @@ WT=$(cd "$TMP_ROOT/wt" && pwd -P)
 # captain's live firstmate session - which is exactly what happened once during
 # this work, and what the duplicate-window guard then refused on the next run.
 # A spawn test must be unable to reach any live multiplexer.
-FB=$(fm_mux_fake_herdr "$TMP_ROOT")
-fm_mux_fake_tmux "$TMP_ROOT" >/dev/null
+FB=$(fm_herdr_fake_server "$TMP_ROOT")
+fm_herdr_fake_tmux "$TMP_ROOT" >/dev/null
 fm_fake_exit0 "$FB" treehouse
 CALLS="$TMP_ROOT/calls"; export CALLS
 
-# Spawn with NO FM_MUX set - the whole point is what happens by default. The
-# ambient FM_MUX=tmux that tests/lib.sh pins for every other suite is stripped
-# here on purpose; FORCE_MUX puts an explicit choice back for the fallback case.
 run_spawn() {  # <home> <id> [extra args...]
   local home=$1 id=$2; shift 2
-  local forced=()
-  [ -z "${FORCE_MUX:-}" ] || forced=("FM_MUX=$FORCE_MUX")
   mkdir -p "$home/data/$id"
   printf 'brief\n' > "$home/data/$id/brief.md"
-  env -u FM_MUX "${forced[@]}" \
+  env \
     FM_ROOT_OVERRIDE='' FM_HOME="$home" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
@@ -76,16 +71,16 @@ reset() { : > "$CALLS"; : > "$TMP_ROOT/tabs"; : > "$TMP_ROOT/created"; }
 
 # --- the default lands in herdr ---------------------------------------------
 
-test_no_fm_mux_spawns_into_herdr() {
+test_a_spawn_lands_in_herdr() {
   reset
   local home out
   home="$TMP_ROOT/home-default"; mkdir -p "$home/data"
   out=$(run_spawn "$home" fleet-view-q4 --name "fleet view")
   assert_contains "$out" "spawned fleet-view-q4" "the spawn did not succeed"
-  assert_contains "$out" "mux=herdr" "the spawn did not report herdr as the driver"
+  assert_contains "$out" "mux=herdr" "the spawn did not report herdr as the surface"
   assert_grep "tab create" "$CALLS" "no herdr tab was created - the crewmate went somewhere invisible"
-  assert_no_grep "new-window" "$CALLS" "spawn still created a tmux window by default"
-  pass "default: with no FM_MUX and a reachable server, the crewmate is a herdr tab"
+  assert_no_grep "new-window" "$CALLS" "the spawn created a tmux window; herdr is the only surface"
+  pass "surface: a crewmate is created as a herdr tab, with nothing to configure"
 }
 
 # --- scoped to the project's workspace --------------------------------------
@@ -180,7 +175,7 @@ test_a_refused_pane_name_is_reported() {
   reset
   local home out
   home="$TMP_ROOT/home-badname"; mkdir -p "$home/data"
-  # HERDR_NO_TAB makes `pane get` return no tab_id, so fm_mux_label cannot find
+  # HERDR_NO_TAB makes `pane get` return no tab_id, so fm_herdr_label cannot find
   # a tab to rename and returns 2 - herdr refusing the name.
   out=$(HERDR_NO_TAB=1 run_spawn "$home" unnamed-x4 --name unnamed)
   assert_contains "$out" "would not name pane" "a refused pane name was silently swallowed"
@@ -205,7 +200,7 @@ test_unreachable_herdr_fails_the_spawn() {
   if [ "$rc" = 0 ]; then fail "the spawn succeeded with no herdr server: $out"; fi
   assert_contains "$out" "no herdr server is reachable" "the failure does not name the reason"
   assert_contains "$out" "captain" "the failure does not say whose decision this is"
-  assert_contains "$out" "FM_MUX=tmux" "the failure does not say how a headless run is authorised"
+  assert_contains "$out" "NOT falling back" "the failure does not say it refused to degrade"
   pass "escalation: an unreachable herdr fails the spawn and asks the captain"
 }
 
@@ -223,21 +218,7 @@ test_unreachable_herdr_creates_nothing() {
   pass "escalation: an unreachable herdr creates no window, no tab, and no meta"
 }
 
-# --- the explicit override still works --------------------------------------
-
-# FM_MUX=tmux is a person's decision, not a machine's inference, so it is
-# honoured without a herdr server anywhere in sight.
-test_fm_mux_tmux_still_creates_a_tmux_window() {
-  reset
-  local home out
-  home="$TMP_ROOT/home-tmux"; mkdir -p "$home/data"
-  out=$(FORCE_MUX=tmux run_spawn "$home" fallback-t8 --name fallback)
-  assert_contains "$out" "mux=tmux" "FM_MUX=tmux did not select the tmux driver"
-  assert_no_grep "tab create" "$CALLS" "FM_MUX=tmux still created a herdr tab"
-  pass "fallback: FM_MUX=tmux keeps creating a tmux window, not a herdr tab"
-}
-
-test_no_fm_mux_spawns_into_herdr
+test_a_spawn_lands_in_herdr
 test_tab_is_scoped_to_the_project_workspace
 test_tab_is_named_for_the_work
 test_the_name_is_one_herdr_accepts
@@ -247,4 +228,3 @@ test_the_task_id_lives_in_the_meta_not_the_name
 test_a_refused_pane_name_is_reported
 test_unreachable_herdr_fails_the_spawn
 test_unreachable_herdr_creates_nothing
-test_fm_mux_tmux_still_creates_a_tmux_window

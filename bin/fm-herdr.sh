@@ -1,0 +1,521 @@
+#!/usr/bin/env bash
+# fm-herdr.sh — firstmate's herdr surface: one library, one multiplexer.
+#
+# Sourceable as a library, and executable as the workspace-reconcile CLI (see
+# the bottom of this file). It replaces bin/fm-mux-lib.sh and
+# bin/fm-herdr-workspaces.sh, which were split across a driver-selection seam
+# that no longer has two drivers to choose between.
+#
+# THE NAME. `fm-herdr.sh`, deliberately not a bare `herdr`: a script called
+# `herdr` would shadow the real binary at ~/.local/bin/herdr, and which one a
+# call site got would depend on PATH order at the moment of the call.
+#
+# WHY THERE IS NO DRIVER SELECTION. Agents run in herdr and herdr is the ONLY
+# automatic choice (data/captain.md, "Where agents run"). Headless is never
+# selected automatically — not by a reachability probe, not by a missing binary,
+# not by an environment variable, and not loudly. Degrading is the decision the
+# captain reserved for himself: believing he is watching the fleet while work
+# lands somewhere he cannot see is worse than knowing it is invisible.
+#
+# So there is no `fm_mux_driver`, no dispatch table, and no FM_MUX. Reachability
+# is still CHECKED — by fm_herdr_require, which ESCALATES when no server can be
+# reached rather than quietly picking something else. A tier may RECOMMEND a
+# headless run; it recommends by stopping and saying why, and the captain
+# decides.
+#
+# WHY TARGETS ARE NOT OPAQUE ANY MORE. The opacity rule existed so a tmux
+# `session:window` and a herdr id could travel through one contract without
+# either caller knowing which it held. With one surface there is nothing to hide
+# behind: a target here is a herdr PANE ID, and it is named as one.
+#
+# THE DRAIN. Crewmates spawned before this cutover live in tmux windows, and
+# their `state/<id>.meta` has no `mux=` line. They must stay readable, steerable
+# and closable until they are torn down, or the watcher goes blind and teardown
+# cannot clean up work that is still running. fm_herdr_resolve marks those
+# targets so callers take the legacy path; nothing NEW ever does.
+# See "the drain" below, and bin/fm-peek.sh / bin/fm-send.sh.
+
+# --- reachability, and the escalation ---------------------------------------
+
+# Is a herdr server actually reachable? Not "are we running inside herdr" —
+# HERDR_ENV is unset in firstmate's own process even while a server is running
+# and the captain is watching it, so this is the only correct way to ask.
+#
+# It is a DIAGNOSTIC. Nothing in this file selects anything from its answer.
+fm_herdr_up() {
+  command -v herdr >/dev/null 2>&1 || return 1
+  herdr session list 2>/dev/null | awk '$1=="default"{print $2}' | grep -q running
+}
+
+# Precondition for putting an AGENT anywhere. Call it before creating a pane.
+#
+# When herdr cannot be reached this returns non-zero with an escalation and the
+# caller must STOP. It must not fall back, because falling back is the decision
+# the captain reserved for himself. The message says what is wrong, whose call
+# it is, and that a headless run needs his word — a tier recommends headless by
+# printing this and stopping, never by choosing it.
+fm_herdr_require() {  # [what-for]
+  local what=${1:-this agent}
+  if fm_herdr_up; then return 0; fi
+  {
+    echo "fm-herdr: cannot place $what - no herdr server is reachable."
+    if command -v herdr >/dev/null 2>&1; then
+      echo "  herdr is installed but no server is running. Start or attach one with \`herdr\`."
+    else
+      echo "  herdr is not on PATH. Install it, or run this where a server is reachable."
+    fi
+    echo "  NOT falling back to a headless pane: where agents run is the captain's"
+    echo "  decision, and a pane he cannot see does not count. If this particular"
+    echo "  run genuinely belongs headless, that is his call to make, not this script's."
+  } >&2
+  return 1
+}
+
+# --- reading herdr's responses ----------------------------------------------
+#
+# herdr answers over its socket API in single-line JSON. jq is not a firstmate
+# dependency, so fields are pulled with targeted sed, splitting on `{` first so
+# a per-record grep cannot straddle two objects.
+#
+# ASSUMPTION, worth naming: the first match wins. That is exact for the flat
+# sibling arrays this reads (workspace list, tab list) and for single-object
+# reads (pane get). It is only safe on `tab create` — whose response nests
+# root_pane.tab_id beside tab.tab_id — because those two ids are identical in
+# every shape herdr emits. If a future herdr let them diverge this would take
+# the first; the extraction that matters there asks for pane_id, which appears
+# exactly once.
+fm_herdr_field() {  # <json> <key>
+  printf '%s' "$1" | tr '{' '\n' | sed -n "s/.*\"$2\":\"\\([^\"]*\\)\".*/\\1/p" | head -1
+}
+
+# --- naming -----------------------------------------------------------------
+#
+# A pane name is the ADDRESS, not decoration: herdr addresses agents by name, so
+# a task id like `afs-resources-r7` is not merely untidy at a glance, it is
+# unreadable. `afs-resource-registry` says both the project and the work without
+# attaching to the pane.
+#
+# THE CONVENTION: <project-short>-<what-the-work-is>, kebab-case, under 28 chars.
+#   afs-resource-registry   mac-config-cutover-guard   cellarsky-booking-fix
+#   firstmate-fleet-view    firstmate-hook-register    archify-leak-fixes
+#
+# One HYPHEN joins the halves, never a slash. That is not a style preference:
+# verified against herdr 0.8.2, `herdr agent rename` rejects anything but
+# ^[a-z][a-z0-9_-]{0,31}$ with invalid_agent_name, so a slashed name renames
+# nothing and leaves the pane unaddressable. A live gate pins the separator
+# against the real binary, so restoring a slash turns that gate red.
+#
+# 28 chars keeps the name readable in herdr's sidebar (sidebar_width 30) and
+# inside the 32-char address limit at once. No task suffix — the id lives in
+# state/<id>.meta, which is where an id belongs.
+
+fm_herdr_name_max=28
+
+# Sanitize one half of a name. Anything herdr would reject is removed here
+# rather than discovered at rename time.
+fm_herdr_work_name() {  # <work...>
+  printf '%s' "$*" | tr '[:upper:]' '[:lower:]' | tr ' _/' '-' \
+    | tr -cd 'a-z0-9-' | sed 's/--*/-/g; s/^[^a-z]*//; s/-*$//'
+}
+
+# The full pane name: project, one hyphen, work. Over-length truncates the WORK
+# half; callers that would rather refuse than accept a name the captain did not
+# choose check the length themselves before calling.
+fm_herdr_pane_name() {  # <project-short> <work...>
+  local proj=$1; shift
+  local work room
+  proj=$(fm_herdr_work_name "$proj")
+  work=$(fm_herdr_work_name "$@")
+  [ -n "$proj" ] || { fm_herdr_work_name "$@" | cut -c "1-$fm_herdr_name_max"; return 0; }
+  [ -n "$work" ] || { printf '%s' "$proj" | cut -c "1-$fm_herdr_name_max"; return 0; }
+  room=$(( fm_herdr_name_max - ${#proj} - 1 ))
+  if [ "$room" -lt 1 ]; then
+    printf '%s' "$proj" | cut -c "1-$fm_herdr_name_max" | sed 's/-*$//'
+    return 0
+  fi
+  work=$(printf '%s' "$work" | cut -c "1-$room" | sed 's/-*$//')
+  printf '%s-%s' "$proj" "$work"
+}
+
+# 0 when a name is one herdr will actually accept as an agent address. This is
+# the check a slash fails, and the reason the separator is a hyphen.
+fm_herdr_name_valid() {  # <name>
+  case "$1" in
+    '' ) return 1 ;;
+    *[!a-z0-9_-]* ) return 1 ;;
+    [!a-z]* ) return 1 ;;
+  esac
+  [ "${#1}" -le "$fm_herdr_name_max" ]
+}
+
+# --- workspaces -------------------------------------------------------------
+#
+# One workspace per project (the captain's standing order), and the workspace is
+# resolved EXPLICITLY. `herdr tab create` without --workspace puts the tab in
+# whatever workspace happens to be FOCUSED, which is luck, not targeting: it is
+# how a crewmate for project A ends up in the captain's config workspace.
+#
+# Resolution order:
+#   1. FM_HERDR_WORKSPACE — an explicit override; a label if one matches, else
+#      taken as a literal workspace id. Refused loudly if it names nothing live,
+#      so a typo cannot quietly become focus-luck again.
+#   2. the workspace whose LABEL is the project name.
+#   3. neither exists -> CREATE it, labelled for the project. That is the
+#      documented policy: refusing would strand the first spawn into every newly
+#      added project, and it is what the reconcile CLI below already does, so
+#      the spawn path and the reconcile path agree instead of disagreeing.
+# A creation failure is fatal to the caller — never a silent focus fallback.
+#
+# Ids are never hardcoded: `wJ` is a runtime value that does not survive a
+# server restart.
+
+fm_herdr_workspace_id() {  # <label>
+  herdr workspace list 2>/dev/null | tr '{' '\n' \
+    | grep -F "\"label\":\"$1\"" \
+    | sed -n 's/.*"workspace_id":"\([^"]*\)".*/\1/p' | head -1
+}
+
+fm_herdr_workspace_exists() {  # <workspace-id>
+  herdr workspace list 2>/dev/null | tr '{' '\n' | grep -qF "\"workspace_id\":\"$1\""
+}
+
+fm_herdr_workspace_for() {  # <project-label> <cwd>
+  local label=$1 cwd=${2:-} ws out
+  if [ -n "${FM_HERDR_WORKSPACE:-}" ]; then
+    ws=$(fm_herdr_workspace_id "$FM_HERDR_WORKSPACE")
+    [ -n "$ws" ] || ws=$FM_HERDR_WORKSPACE
+    if fm_herdr_workspace_exists "$ws"; then printf '%s' "$ws"; return 0; fi
+    echo "fm-herdr: FM_HERDR_WORKSPACE='$FM_HERDR_WORKSPACE' matches no live workspace" >&2
+    return 1
+  fi
+  ws=$(fm_herdr_workspace_id "$label")
+  if [ -n "$ws" ]; then printf '%s' "$ws"; return 0; fi
+  out=$(herdr workspace create --cwd "$cwd" --label "$label" --no-focus 2>&1) || {
+    echo "fm-herdr: could not create workspace '$label': $out" >&2; return 1; }
+  ws=$(fm_herdr_field "$out" workspace_id)
+  [ -n "$ws" ] || ws=$(fm_herdr_workspace_id "$label")
+  [ -n "$ws" ] || { echo "fm-herdr: created workspace '$label' but no id came back" >&2; return 1; }
+  printf '%s' "$ws"
+}
+
+# --- tabs and panes ---------------------------------------------------------
+
+fm_herdr_tab_exists() {  # <workspace-id> <label>
+  herdr tab list --workspace "$1" 2>/dev/null | tr '{' '\n' | grep -qF "\"label\":\"$2\""
+}
+
+# Creates the tab and prints the PANE ID it runs in. That id is what every agent
+# verb below addresses, and what state/<id>.meta records as window=.
+fm_herdr_new_tab() {  # <workspace-id> <label> <cwd>
+  local ws=$1 label=$2 cwd=$3 out pane
+  out=$(herdr tab create --workspace "$ws" --cwd "$cwd" --label "$label" --no-focus 2>&1) || {
+    echo "fm-herdr: tab create failed: $out" >&2; return 1; }
+  pane=$(fm_herdr_field "$out" pane_id)
+  [ -n "$pane" ] || { echo "fm-herdr: tab create returned no pane id: $out" >&2; return 1; }
+  printf '%s' "$pane"
+}
+
+# A shell pane, not an agent: `pane run` types the command line and submits it.
+fm_herdr_run() {  # <pane> <shell-command>
+  local out
+  out=$(herdr pane run "$1" "$2" 2>&1) && return 0
+  echo "fm-herdr: pane run failed: $out" >&2
+  return 1
+}
+
+# Atomic, acknowledged delivery to a running AGENT. --wait makes herdr confirm
+# the agent actually consumed the prompt — the acknowledgment tmux never had.
+#
+# Return codes are the whole contract, because "did it land" is the only
+# question a supervisor actually has:
+#   0  delivered AND acknowledged — the agent consumed it
+#   3  refused: the agent is blocked at an approval dialog, nothing was sent
+#   4  delivered but NOT acknowledged
+#   1  failed
+#
+# WHY 4 IS NOT 1. herdr accepts the submission first and only then waits for a
+# state change; when none arrives it returns agent_prompt_stalled AFTER the text
+# has already gone in. Observed live against a claude TUI herdr reported as idle
+# while it was still finishing its boot. Calling that a failure would be the
+# worse of the two available errors: firstmate would re-send a steer that
+# already landed and the crewmate would be told twice.
+fm_herdr_prompt() {  # <pane> <text>
+  local pane=$1 text=$2 out
+  out=$(herdr agent prompt "$pane" "$text" --wait --timeout "${FM_HERDR_SEND_TIMEOUT_MS:-15000}" 2>&1) || true
+  case "$out" in
+    *agent_blocked*)
+      echo "fm-herdr: $pane is at an approval dialog; not overwriting it" >&2; return 3 ;;
+    *agent_prompt_stalled*|*'"code":"timeout"'*)
+      echo "fm-herdr: $pane took the prompt but never changed state; delivery is unconfirmed, NOT re-sent" >&2
+      return 4 ;;
+    *agent_not_found*)
+      # herdr has not classified an agent in this pane — plausible in the beat
+      # right after a launch. Deliver through the shell so the steer still
+      # lands, but report 4, not 0: this is unacknowledged delivery, and 0 means
+      # acknowledged. Returning 0 would make a blind steer indistinguishable
+      # from a confirmed one, erasing the distinction herdr exists to provide.
+      echo "fm-herdr: no detected agent in $pane; delivering unacknowledged via the shell" >&2
+      fm_herdr_run "$pane" "$text" || return 1
+      return 4 ;;
+    *'{"error"'*)
+      # Anchored to the top-level error ENVELOPE, not a bare "error" substring:
+      # a future success payload carrying a field named e.g. last_error must not
+      # be read as a steer that failed to land.
+      echo "fm-herdr: prompt failed: $out" >&2; return 1 ;;
+    '' )
+      echo "fm-herdr: prompt produced no response for $pane" >&2; return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+fm_herdr_send_key() {  # <pane> <key>
+  herdr agent send-keys "$1" "$2" >/dev/null 2>&1 || herdr pane send-keys "$1" "$2" >/dev/null 2>&1
+}
+
+fm_herdr_read() {  # <pane> [lines]
+  herdr agent read "$1" --source visible --lines "${2:-40}" --format text 2>/dev/null \
+    || herdr pane read "$1" --source visible --lines "${2:-40}" --format text 2>/dev/null
+}
+
+fm_herdr_cwd() {  # <pane>
+  fm_herdr_field "$(herdr pane get "$1" 2>/dev/null)" foreground_cwd
+}
+
+# A real lifecycle state, not a regex over rendered text.
+fm_herdr_is_busy() {  # <pane>
+  herdr agent get "$1" 2>/dev/null | grep -qiE '(^|[^a-z])(working|busy)([^a-z]|$)'
+}
+
+# Shell readiness, not agent readiness: at spawn time the pane holds a bare
+# shell and `agent wait` would fail. The proof is positive — a marker echoed
+# back on a line of its OWN, so the command echo cannot pass for the output.
+# Inferring readiness from anything weaker is what left two secondmates as dead
+# bare shells on 2026-08-26.
+fm_herdr_wait_shell_ready() {  # <pane> [timeout-seconds]
+  local pane=$1 timeout=${2:-${FM_SHELL_READY_TIMEOUT:-20}}
+  local poll=${FM_SHELL_READY_POLL:-0.2} marker deadline waited
+  marker="fmready$$$(od -An -N3 -tu4 /dev/urandom 2>/dev/null | tr -cd '0-9')"
+  deadline=$(( $(date +%s) + timeout ))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    fm_herdr_run "$pane" "printf '%s\\n' $marker" >/dev/null 2>&1 || return 1
+    waited=0
+    while [ "$waited" -lt 10 ]; do
+      sleep "$poll"
+      waited=$((waited + 1))
+      if fm_herdr_read "$pane" 40 | grep -qx "$marker"; then return 0; fi
+    done
+  done
+  return 1
+}
+
+# Post-launch verification. If the launch string reached the shell as text
+# instead of starting the agent, the shell says so — and firstmate should fail
+# loudly rather than record a meta for a pane that holds nothing.
+fm_herdr_launch_failed() {  # <pane>
+  fm_herdr_read "$1" 15 \
+    | grep -qiE 'parse error|command not found|syntax error near|no such file or directory'
+}
+
+# Name the pane for the work. The SAME name goes in both slots — the tab label
+# the captain reads, and the socket-API address herdr steers by.
+#
+# The tab label is the gated half and its failure is REPORTED: an unnamed tab is
+# the exact defect this naming exists to remove, so it is never assumed. The
+# agent rename is best effort by timing alone — herdr classifies an agent a beat
+# after launch — and a spawn must not die waiting for it.
+# Returns: 0 both named, 1 tab named but no agent yet, 2 the tab rename failed.
+fm_herdr_label() {  # <pane> <name>
+  local pane=$1 name=$2 tab out
+  if ! fm_herdr_name_valid "$name"; then
+    echo "fm-herdr: '$name' is not a valid pane name (want ^[a-z][a-z0-9_-]{0,$((fm_herdr_name_max-1))}$)" >&2
+    return 2
+  fi
+  tab=$(fm_herdr_field "$(herdr pane get "$pane" 2>/dev/null)" tab_id)
+  if [ -z "$tab" ]; then
+    echo "fm-herdr: no tab found for $pane; cannot name it" >&2
+    return 2
+  fi
+  if ! out=$(herdr tab rename "$tab" "$name" 2>&1); then
+    echo "fm-herdr: tab rename failed for $tab: $out" >&2
+    return 2
+  fi
+  herdr agent rename "$pane" "$name" >/dev/null 2>&1 || return 1
+  return 0
+}
+
+fm_herdr_close() {  # <pane>
+  local tab
+  tab=$(fm_herdr_field "$(herdr pane get "$1" 2>/dev/null)" tab_id)
+  if [ -n "$tab" ]; then herdr tab close "$tab" >/dev/null 2>&1 && return 0; fi
+  herdr tab close "$1" >/dev/null 2>&1 || herdr pane close "$1" >/dev/null 2>&1
+}
+
+# --- resolution, and the drain ----------------------------------------------
+#
+# THE DRAIN, and why it is derived rather than listed. Crewmates spawned before
+# this cutover live in tmux windows; their meta records `window=<session>:<name>`
+# and has no `mux=` line, because the seam that would have written one did not
+# exist yet. Those windows must stay readable, steerable and closable until they
+# are torn down — a watcher that cannot read them is blind, and a teardown that
+# cannot close them strands work that is still running, some of it carrying
+# unlanded commits.
+#
+# The discriminator is the META, never a hardcoded inventory. A list would have
+# to be right, and the one this migration was handed was not: it named four
+# windows and missed three live crewmates with metas in another firstmate home,
+# while naming two whose metas live somewhere the author had not enumerated. A
+# meta-derived rule is correct under any inventory and needs no census, and it
+# closes by itself — when no meta lacks `mux=herdr`, the drain is empty.
+#
+# Sets, for the caller:
+#   FM_HERDR_TARGET  the pane id (herdr) or session:window (drain)
+#   FM_HERDR_DRAIN   1 when this is a pre-cutover tmux window, 0 otherwise
+#
+# Accepts a bare firstmate window name (fm-xyz) resolved through this home's
+# state/<id>.meta; an explicit target carrying a colon; or a plain tmux window
+# name looked up across sessions, which is a drain-only convenience.
+# shellcheck disable=SC2034  # both globals are the point: read by the caller, not here
+fm_herdr_resolve() {  # <window-or-target> <state-dir>
+  local want=$1 state=$2 meta window mux
+  case "$want" in
+    *:*)
+      # An explicit target, checked FIRST exactly as the pre-collapse resolve
+      # had it, so a session literally named `fm-something` still addresses
+      # `fm-something:window` rather than being looked up as a task id.
+      # A herdr pane id is `<workspace>:p<n>`; anything else with a colon is a
+      # tmux session:window, which is drain-only.
+      FM_HERDR_TARGET=$want
+      case "$want" in
+        *:p[0-9]*) FM_HERDR_DRAIN=0 ;;
+        *)         FM_HERDR_DRAIN=1 ;;
+      esac
+      ;;
+    fm-*)
+      meta="$state/${want#fm-}.meta"
+      if [ ! -f "$meta" ]; then
+        echo "error: no metadata for $want in $state; pass an explicit target to reach a pane outside this firstmate home" >&2
+        return 1
+      fi
+      window=$(grep '^window=' "$meta" 2>/dev/null | tail -1 | cut -d= -f2- || true)
+      [ -n "$window" ] || { echo "error: no window recorded in $meta" >&2; return 1; }
+      mux=$(grep '^mux=' "$meta" 2>/dev/null | tail -1 | cut -d= -f2- || true)
+      FM_HERDR_TARGET=$window
+      if [ "$mux" = herdr ]; then FM_HERDR_DRAIN=0; else FM_HERDR_DRAIN=1; fi
+      ;;
+    *)
+      window=$(tmux list-windows -a -F '#{session_name}:#{window_name}' 2>/dev/null | grep -m1 ":$want\$") \
+        || { echo "error: no window named $want" >&2; return 1; }
+      FM_HERDR_TARGET=$window
+      FM_HERDR_DRAIN=1
+      ;;
+  esac
+  return 0
+}
+
+# 0 while any pre-cutover tmux window is still accounted-for work. Once this
+# returns 1 for every firstmate home, bin/fm-tmux-lib.sh has no drain left to
+# serve and can be deleted. It is a question with an answer, not a date.
+fm_herdr_drain_pending() {  # <state-dir>
+  local state=${1:-} meta
+  [ -d "$state" ] || return 1
+  for meta in "$state"/*.meta; do
+    [ -f "$meta" ] || continue
+    grep -q '^mux=herdr$' "$meta" || return 0
+  done
+  return 1
+}
+
+# --- the reconcile CLI ------------------------------------------------------
+#
+# Everything above is a library. Below runs only when this file is EXECUTED, so
+# sourcing it never trips the caller's shell options or runs a command.
+
+fm_herdr_cli() {
+  set -euo pipefail
+  # NOT `local FM_HOME`: declaring it local blanks the caller's value before the
+  # default below can read it, which silently points the CLI at the wrong home.
+  local home REGISTRY PROJECTS_DIR
+  home="${FM_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+  REGISTRY="$home/data/projects.md"
+  PROJECTS_DIR="$home/projects"
+
+  die() { printf 'fm-herdr: %s\n' "$1" >&2; exit 1; }
+  require_server() {
+    command -v herdr >/dev/null 2>&1 || die "herdr is not on PATH"
+    fm_herdr_up || die "no herdr server is running — run \`herdr\` to start or attach it, then retry"
+  }
+
+  # --name: apply the naming convention to a live agent pane. Names BOTH slots -
+  # the tab label the captain reads and the address herdr steers by - with the
+  # same string, because they are the same name.
+  if [ "${1:-}" = "--name" ]; then
+    require_server
+    [ $# -ge 4 ] || die "usage: --name <pane> <project-short> <what-the-work-is>"
+    local pane=$2 proj=$3 name untruncated label_rc
+    shift 3
+    name=$(fm_herdr_pane_name "$proj" "$*")
+    [ -n "$name" ] || die "'$proj' + '$*' leaves nothing usable as a name"
+    # Refuse an unreadably long name rather than silently truncating it: a name
+    # the captain did not choose is worse than being told to choose a shorter
+    # one. (fm_herdr_pane_name truncates for callers that must not fail, e.g. a
+    # spawn, where a cosmetic name must never abort the work.)
+    untruncated="$(fm_herdr_work_name "$proj")-$(fm_herdr_work_name "$*")"
+    [ "${#untruncated}" -le 28 ] \
+      || die "'$untruncated' is ${#untruncated} chars; keep it under 28, e.g. afs-resource-registry"
+    fm_herdr_name_valid "$name" \
+      || die "'$name' is not a name herdr will accept as an address (want ^[a-z][a-z0-9_-]{0,31}$ - a slash is rejected)"
+    label_rc=0
+    fm_herdr_label "$pane" "$name" || label_rc=$?
+    case "$label_rc" in
+      0) printf 'named %s -> %s\n' "$pane" "$name" ;;
+      # rc=1 is not a refusal: the tab carries the name and herdr has simply not
+      # classified an agent in the pane yet.
+      1) printf 'named %s -> %s (tab only; no agent detected in the pane yet)\n' "$pane" "$name" ;;
+      *) die "herdr did not accept '$name' for $pane" ;;
+    esac
+    exit 0
+  fi
+
+  # Default: reconcile one workspace per project against data/projects.md.
+  local APPLY=0
+  [ "${1:-}" = "--apply" ] && APPLY=1
+  [ -f "$REGISTRY" ] || die "no project registry at $REGISTRY"
+  require_server
+
+  local existing made=0 skipped=0 missing=0 name cwd
+  existing=$(herdr workspace list 2>/dev/null || true)
+  printf '%-26s %-9s %s\n' PROJECT STATUS CWD
+  printf '%-26s %-9s %s\n' "-------" "------" "---"
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    cwd="$PROJECTS_DIR/$name"
+    if [ ! -d "$cwd" ]; then
+      printf '%-26s %-9s %s\n' "$name" "NO-DIR" "$cwd"; missing=$((missing+1)); continue
+    fi
+    if printf '%s' "$existing" | grep -qw -- "$name"; then
+      printf '%-26s %-9s %s\n' "$name" "exists" "$cwd"; skipped=$((skipped+1)); continue
+    fi
+    if [ "$APPLY" = 1 ]; then
+      herdr workspace create --cwd "$cwd" --label "$name" --no-focus >/dev/null \
+        && { printf '%-26s %-9s %s\n' "$name" "CREATED" "$cwd"; made=$((made+1)); } \
+        || printf '%-26s %-9s %s\n' "$name" "FAILED" "$cwd"
+    else
+      printf '%-26s %-9s %s\n' "$name" "would-add" "$cwd"; made=$((made+1))
+    fi
+  done < <(sed -n 's/^- \([a-z0-9][a-z0-9._-]*\) .*/\1/p' "$REGISTRY")
+
+  printf '\n'
+  if [ "$APPLY" = 1 ]; then
+    printf 'created %s, already present %s, no directory %s\n' "$made" "$skipped" "$missing"
+  else
+    printf 'plan only: %s to create, %s present, %s missing a directory\n' "$made" "$skipped" "$missing"
+    printf 'run with --apply to create them.\n'
+  fi
+}
+
+# Executed, not sourced? The standard idiom: when this file is run directly,
+# $0 is its own path; when sourced, $0 is the caller's. (A caller contriving
+# `bash -c '. "$0"' <this file>` would defeat that - source it as "$1" instead.)
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+  fm_herdr_cli "$@"
+fi

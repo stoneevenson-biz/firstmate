@@ -20,13 +20,13 @@
 #   derived from the task id with its random suffix stripped. The id is NOT the
 #   name - it lives in state/<id>.meta, which is where an id belongs.
 #
-# PANES ARE CREATED THROUGH THE MULTIPLEXER SEAM (bin/fm-mux-lib.sh), not by
-# calling tmux directly. Agents run in herdr and herdr is the only automatic
-# choice (data/captain.md, "Where agents run"), so with no FM_MUX set the
-# crewmate becomes a named tab in that project's workspace. An unreachable herdr
-# STOPS this spawn with an escalation - it is never a reason to fall back to a
-# pane the captain cannot see. FM_MUX=tmux is his explicit word authorising a
-# headless run, and reproduces the pre-seam behaviour exactly.
+# CREWMATES ARE CREATED IN HERDR, through bin/fm-herdr.sh, never by calling tmux.
+# herdr is the only surface (data/captain.md, "Where agents run"): the crewmate
+# becomes a named tab in that project's workspace, and there is no driver to
+# select. An unreachable herdr STOPS this spawn with an escalation - it is never
+# a reason to put an agent in a pane the captain cannot see. Panes that predate
+# the cutover keep being read, steered and closed over tmux until they drain
+# (see bin/fm-peek.sh / bin/fm-send.sh); nothing new is ever created there.
 # Batch dispatch: pass one or more `id=repo` pairs instead of a single <id> <project>, e.g.
 #     fm-spawn.sh fix-a-k3=projects/foo add-b-q7=projects/bar [--scout]
 #   Each pair re-execs this script in single-task mode, so the single path stays the only
@@ -40,7 +40,7 @@
 #     __PIEXT__    absolute path to state/<task-id>.pi-ext.ts (pi turn-end extension,
 #                  written by this script; outside the worktree to avoid pi's trust gate)
 # Per-harness turn-end hooks are installed automatically; some live outside the worktree.
-# On success prints: spawned <id> harness=<name> kind=<ship|scout|secondmate> mode=<mode> yolo=<on|off> mux=<driver> name=<work> window=<target> worktree=<path>
+# On success prints: spawned <id> harness=<name> kind=<ship|scout|secondmate> mode=<mode> yolo=<on|off> mux=herdr name=<work> workspace=<id> pane=<id> worktree=<path>
 # mode/yolo are resolved per-project from data/projects.md for ship/scout tasks;
 # secondmate spawns record mode=secondmate, yolo=off, home=, and projects=.
 set -eu
@@ -54,10 +54,8 @@ PROJECTS="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}"
 SUB_HOME_MARKER=".fm-secondmate-home"
 # shellcheck source=bin/fm-ff-lib.sh
 . "$SCRIPT_DIR/fm-ff-lib.sh"
-# shellcheck source=bin/fm-tmux-lib.sh
-. "$SCRIPT_DIR/fm-tmux-lib.sh"
-# shellcheck source=bin/fm-mux-lib.sh
-. "$SCRIPT_DIR/fm-mux-lib.sh"
+# shellcheck source=bin/fm-herdr.sh
+. "$SCRIPT_DIR/fm-herdr.sh"
 # Skip the watcher guard when re-exec'd for one pair of a batch (FM_SPAWN_NO_GUARD is
 # set by the batch loop below), so the guard runs once for the batch, not once per pair.
 [ -n "${FM_SPAWN_NO_GUARD:-}" ] || "$FM_ROOT/bin/fm-guard.sh" || true
@@ -376,26 +374,18 @@ if [ "$KIND" = ship ]; then
   fm_intake_require_proceed "$STATE" "$ID" fm-spawn
 fi
 
-# --- the multiplexer seam ---------------------------------------------------
+# --- the herdr surface ------------------------------------------------------
 #
-# Everything below addresses panes through bin/fm-mux-lib.sh rather than tmux
-# directly, so the captain's standing rule - agents are spawned in herdr - is
-# the default without the rest of this script knowing which multiplexer it is
-# talking to. The seam resolves the driver; nothing here may choose a headless
-# one on its own, so an unreachable herdr escalates below rather than branching.
-MUX=$(fm_mux_driver)
-
 # Where agents run is the captain's decision (AGENTS.md, herdr workspace
-# hygiene). herdr is the only automatic choice, so an unreachable herdr STOPS
-# this spawn and escalates - it never falls back to a pane the captain cannot
-# see. A headless run is available, but only on his word, as FM_MUX=tmux.
-fm_mux_require_available "crewmate $ID" || exit 1
+# hygiene). herdr is the only surface, so an unreachable herdr STOPS this spawn
+# and escalates - it is never a reason to put an agent somewhere he cannot see.
+# Nothing below may choose otherwise; there is no driver to choose.
+fm_herdr_require "crewmate $ID" || exit 1
 
-# The scope is a tmux session or a herdr workspace - opaque either way. Under
-# herdr it is resolved EXPLICITLY from the project name, never from whichever
-# workspace happens to be focused, and created when absent (AGENTS.md: one
-# workspace per project).
-SCOPE_LABEL=$(basename "$PROJ_ABS")
+# The workspace is resolved EXPLICITLY from the project name, never from
+# whichever workspace happens to be focused, and created when absent
+# (AGENTS.md: one workspace per project).
+PROJ_LABEL=$(basename "$PROJ_ABS")
 
 # The pane is named <project>-<work>, never for the task id: herdr addresses
 # agents by name, so `afs-resources-r7` is not merely untidy, it is unreadable
@@ -405,34 +395,33 @@ SCOPE_LABEL=$(basename "$PROJ_ABS")
 if [ -z "$WORK_NAME" ]; then
   WORK_NAME=$(printf '%s' "$ID" | sed -E 's/-[a-z0-9]{1,3}$//')
 fi
-PANE_NAME=$(fm_mux_pane_name "$SCOPE_LABEL" "$WORK_NAME")
-[ -n "$PANE_NAME" ] || PANE_NAME=$(fm_mux_pane_name "$SCOPE_LABEL" "$ID")
-if ! fm_mux_name_valid "$PANE_NAME"; then
-  echo "error: '$SCOPE_LABEL' + '$WORK_NAME' does not reduce to a usable pane name; pass --name <kebab-work-name>" >&2
+PANE_NAME=$(fm_herdr_pane_name "$PROJ_LABEL" "$WORK_NAME")
+[ -n "$PANE_NAME" ] || PANE_NAME=$(fm_herdr_pane_name "$PROJ_LABEL" "$ID")
+if ! fm_herdr_name_valid "$PANE_NAME"; then
+  echo "error: '$PROJ_LABEL' + '$WORK_NAME' does not reduce to a usable pane name; pass --name <kebab-work-name>" >&2
   exit 2
 fi
-SCOPE=$(fm_mux_scope "$SCOPE_LABEL" "$PROJ_ABS") || {
-  echo "error: could not resolve a $MUX scope for '$SCOPE_LABEL'" >&2; exit 1; }
+WS=$(fm_herdr_workspace_for "$PROJ_LABEL" "$PROJ_ABS") || {
+  echo "error: could not resolve a herdr workspace for '$PROJ_LABEL'" >&2; exit 1; }
 
-W="fm-$ID"
-if fm_mux_window_exists "$SCOPE" "$W" "$PANE_NAME"; then
-  echo "error: a $MUX window for $ID already exists in $SCOPE ($W / $PANE_NAME)" >&2
+if fm_herdr_tab_exists "$WS" "$PANE_NAME"; then
+  echo "error: a herdr tab named $PANE_NAME already exists in workspace $WS" >&2
   exit 1
 fi
 
-T=$(fm_mux_new_window "$SCOPE" "$W" "$PROJ_ABS" "$PANE_NAME") || {
-  echo "error: could not create a $MUX window for $ID in $SCOPE" >&2; exit 1; }
-[ -n "$T" ] || { echo "error: $MUX returned no target for $ID" >&2; exit 1; }
+T=$(fm_herdr_new_tab "$WS" "$PANE_NAME" "$PROJ_ABS") || {
+  echo "error: could not create a herdr tab for $ID in workspace $WS" >&2; exit 1; }
+[ -n "$T" ] || { echo "error: herdr returned no pane id for $ID" >&2; exit 1; }
 
 if [ "$KIND" != secondmate ]; then
-  fm_mux_run "$T" 'treehouse get'
+  fm_herdr_run "$T" 'treehouse get'
 
   # Wait for the treehouse subshell: the pane's cwd moves from the project to the worktree.
   # Compare against the resolved project path too - herdr reports a realpath, so
   # a symlinked project dir would otherwise read as "already moved" instantly.
   PROJ_REAL=$(cd "$PROJ_ABS" 2>/dev/null && pwd -P) || PROJ_REAL=$PROJ_ABS
   for _ in $(seq 1 60); do
-    p=$(fm_mux_cwd "$T" 2>/dev/null || true)
+    p=$(fm_herdr_cwd "$T" 2>/dev/null || true)
     if [ -n "$p" ] && [ "$p" != "$PROJ_ABS" ] && [ "$p" != "$PROJ_REAL" ]; then
       WT="$p"
       break
@@ -440,7 +429,7 @@ if [ "$KIND" != secondmate ]; then
     sleep 1
   done
   if [ -z "$WT" ]; then
-    echo "error: treehouse get did not enter a worktree within 60s; inspect $MUX pane $T" >&2
+    echo "error: treehouse get did not enter a worktree within 60s; inspect herdr pane $T" >&2
     exit 1
   fi
 
@@ -544,12 +533,11 @@ mkdir -p "$STATE"
   echo "worktree=$WT"
   echo "project=$PROJ_ABS"
   echo "harness=$HARNESS"
-  # The multiplexer that MINTED this target, and the pane name it is shown and
-  # addressed by. window= is opaque - `session:window` under tmux, a pane id
-  # under herdr - so every later steer or peek must use the driver recorded
-  # here, not whatever driver happens to resolve at that moment. Without it a
-  # crewmate spawned into herdr becomes unsteerable the moment the server blips.
-  echo "mux=$MUX"
+  # window= above is the herdr PANE ID. mux=herdr records that this crewmate was
+  # created after the cutover, which is what tells fm-peek and fm-send to use
+  # herdr verbs rather than the pre-cutover tmux drain path. A meta with no such
+  # line is a tmux window still being drained (bin/fm-herdr.sh, "the drain").
+  echo "mux=herdr"
   echo "name=$PANE_NAME"
   echo "kind=$KIND"
   echo "mode=$MODE"
@@ -583,18 +571,18 @@ else
 fi
 # Never type a launch command into a shell that has not proven it is ready.
 # Inferring readiness from a cwd change is what left two secondmates as dead
-# bare shells on 2026-08-26 (see fm_tmux_wait_shell_ready). Both drivers demand
-# the same positive proof: a marker echoed back on a line of its own.
-if [ "${FM_SKIP_SHELL_READY:-0}" != 1 ] && ! fm_mux_wait_ready "$T"; then
+# bare shells on 2026-08-26. The proof is positive: a marker echoed back on a
+# line of its own, so the command echo cannot pass for the output.
+if [ "${FM_SKIP_SHELL_READY:-0}" != 1 ] && ! fm_herdr_wait_shell_ready "$T"; then
   echo "error: pane $T never reached a ready shell prompt; refusing to launch" >&2
   echo "  typing the launch command into a busy shell is what leaves a dead, un-launched pane" >&2
   exit 1
 fi
-fm_mux_run_launch "$T" "$LAUNCH"
+fm_herdr_run "$T" "$LAUNCH"
 
 # The launch either started an agent or landed in the shell as text. Say which.
 sleep "${FM_LAUNCH_VERIFY_SLEEP:-1.5}"
-if fm_mux_launch_failed "$T"; then
+if fm_herdr_launch_failed "$T"; then
   echo "error: launch did not start an agent in $T - the pane shows a shell error" >&2
   echo "  the command was typed as text instead of starting the harness; pane left for inspection" >&2
   exit 1
@@ -608,10 +596,10 @@ fi
 # status (always 0), so a `case $?` there could never see rc=2 and the one
 # warning this block exists to emit would never print.
 label_rc=0
-fm_mux_label "$T" "$PANE_NAME" || label_rc=$?
+fm_herdr_label "$T" "$PANE_NAME" || label_rc=$?
 case "$label_rc" in
   0|1) : ;;  # 0 = named; 1 = tab named, agent not detected yet (herdr lags a beat)
-  *)   echo "warning: $MUX would not name pane $T '$PANE_NAME'; it will show unlabelled" >&2 ;;
+  *)   echo "warning: herdr would not name pane $T '$PANE_NAME'; it will show unlabelled" >&2 ;;
 esac
 
 # A secondmate watches its OWN tree's context: start a context-watch scoped to its
@@ -631,4 +619,4 @@ if [ "$KIND" = secondmate ] && [ "${FM_SECONDMATE_NO_WATCH:-}" != 1 ]; then
   fi
 fi
 
-echo "spawned $ID harness=$HARNESS kind=$KIND mode=$MODE yolo=$YOLO mux=$MUX name=$PANE_NAME window=$T worktree=$WT"
+echo "spawned $ID harness=$HARNESS kind=$KIND mode=$MODE yolo=$YOLO mux=herdr name=$PANE_NAME workspace=$WS pane=$T worktree=$WT"
