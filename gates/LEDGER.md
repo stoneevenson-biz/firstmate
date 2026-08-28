@@ -32,7 +32,7 @@
 | m0-ledger-shape | frozen | Gate harness loads: gates/ledger.json is an array, and a broken ledger fails loudly |
 | m1-hook-registered | red | bin/fm-boot-context.sh is registered as a real SessionStart hook |
 | m2-boot-emitter-is-read-only | frozen | A full boot through bin/fm-boot-context.sh performs zero writes |
-| m4-boot-budget-hostile | frozen | Boot stays inside its wall-clock budget with every helper wedged |
-| m5-digest-never-silent | green | A section that fails to build says so; failure is never silent |
+| m4-boot-budget-hostile | green | Boot stays inside its wall-clock budget with every helper wedged |
+| m5-digest-never-silent | frozen | A section that fails to build says so; failure is never silent |
 | gate-ci-declared-red | frozen | CI skips a test only when its gate is red AND declared accepted |
 | gate-status-verb | frozen | Status reporting is a verb a crewmate whose redirect is refused can still use |
