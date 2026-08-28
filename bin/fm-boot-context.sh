@@ -655,6 +655,13 @@ def peer_line(path):
     try:
         age = time.time() - os.path.getmtime(path)
         d = json.loads(read(path))
+        # A record that parses but lacks its required fields is not an idle
+        # peer. Defaulting the counts to 0 would report live work as none -
+        # the same defect one level down from an unreadable directory.
+        missing = [f for f in ("in_flight", "needs_decision") if f not in d]
+        if missing:
+            return "- %-14s [UNAVAILABLE: record missing %s]" % (
+                clip(str(d.get("id") or name), PEER_ID_MAX), ", ".join(missing))
         pid_ = clip(str(d.get("id") or name), PEER_ID_MAX)
         inflight = int(d.get("in_flight") or 0)
         decisions = int(d.get("needs_decision") or 0)
@@ -686,14 +693,33 @@ def human_age(seconds):
 
 
 def build_fleet(own_summary):
-    peers = []
-    if os.path.isdir(FLEET_DIR):
-        peers = sorted(glob.glob(os.path.join(FLEET_DIR, "*.json")))
+    """The fleet section. Three states, and they must not be conflated.
+
+    An ABSENT fleet dir genuinely means there is no shared view yet - no writer
+    exists for it, so that is today's ordinary condition and it says so plainly.
+    An UNREADABLE one is a different statement entirely: peers may exist and we
+    cannot see them, so reporting "no shared fleet view yet" would claim the
+    fleet is just this home when we have no idea. That is the same lie as
+    counting an unreadable state/ to zero, in the one section whose entire job
+    is answering "what is the fleet doing".
+    """
+    peers, problem = [], None
+    if os.path.exists(FLEET_DIR):
+        problem = dir_problem(FLEET_DIR, "fleet view")
+        if not problem:
+            try:
+                peers = sorted(glob.glob(os.path.join(FLEET_DIR, "*.json")))
+            except Exception as e:
+                problem = "fleet view is unreadable (%s)" % type(e).__name__
+
     lines = [own_summary] + [peer_line(p) for p in peers]
     head = "## Fleet (%d instance%s)" % (len(lines), "" if len(lines) == 1 else "s")
     tail = ["To act on another instance's work, ask it - do not reach into its home.",
             DISCLAIMER]
-    if not peers:
+    if problem:
+        tail.insert(0, "UNAVAILABLE (%s) - peers may exist that are not listed here; "
+                       "this is NOT a report that the fleet is only this home." % problem)
+    elif not peers:
         tail.insert(0, "(no shared fleet view yet - only this home is reported)")
     return "\n".join([head] + lines + tail)
 

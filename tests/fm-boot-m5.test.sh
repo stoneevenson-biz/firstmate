@@ -154,6 +154,15 @@ assert_contains "$noisy_ctx" "FM_BOOT_TOTAL_BUDGET" \
 #   STRUCTURAL - the home or state/ cannot be listed, so the COUNT is unknown
 #   DETAIL     - state/ lists fine, one status file will not read; the count is
 #                real and must survive, only that detail is marked
+unreadable_boot_fleet() {
+  fm_boot_hook_json | env \
+    FM_HOME="$1" \
+    FM_BOOT_FLEET_DIR="$2" \
+    FM_CTX_WINDOW=probe-session \
+    FIRSTMATE_ROLE=captain \
+    bash "$UNDER_TEST"
+}
+
 unreadable_boot() {
   fm_boot_hook_json | env \
     FM_HOME="$1" \
@@ -233,5 +242,47 @@ assert_contains "$e_ctx" "Wake queue: empty" \
   "an absent wake queue is genuinely empty and must say so, not cry UNAVAILABLE"
 assert_not_contains "$e_ctx" "UNAVAILABLE" \
   "ordinary absence must not raise a marker - or the marker means nothing"
+
+# 6. an unreadable FLEET DIR is not an empty fleet.
+#
+# The same defect one level out from the home: the fleet section collapsed an
+# unreadable directory into "(no shared fleet view yet - only this home is
+# reported)". Peers may exist and be invisible, so that line claims the fleet is
+# just this home when nothing is known - in the one section whose entire job is
+# answering "what is the fleet doing".
+#
+# Absence stays absence: no fleet dir at all is today's ordinary condition,
+# because the writer for it does not exist yet, and it must keep saying so
+# plainly or the marker means nothing.
+NOFLEET="$TMP/no-fleet-dir"
+absent=$(unreadable_boot_fleet "$HOME_DIR" "$NOFLEET") || fail "an absent fleet dir must boot"
+absent_ctx=$(fm_boot_context "$absent")
+assert_contains "$absent_ctx" "no shared fleet view yet" \
+  "an ABSENT fleet dir is ordinary absence and must say so plainly"
+assert_not_contains "$absent_ctx" "UNAVAILABLE" \
+  "ordinary absence must not raise a marker - or the marker means nothing"
+
+BLINDFLEET="$TMP/blind-fleet"
+mkdir -p "$BLINDFLEET"
+chmod 000 "$BLINDFLEET"
+blind=$(unreadable_boot_fleet "$HOME_DIR" "$BLINDFLEET"); blind_rc=$?
+blind_ctx=$(fm_boot_context "$blind")
+chmod 755 "$BLINDFLEET"
+expect_code 0 "$blind_rc" "an unreadable fleet dir must not break the hook"
+assert_contains "$blind_ctx" "UNAVAILABLE" \
+  "an UNREADABLE fleet dir must be marked, not reported as no-view-yet"
+assert_not_contains "$blind_ctx" "no shared fleet view yet" \
+  "an unreadable fleet dir must never claim the fleet is only this home"
+
+# 7. a peer record that parses but lacks its required fields is not idle.
+BADREC="$TMP/bad-record"
+mkdir -p "$BADREC"
+printf '{"id":"peer-x","watcher":"healthy"}' > "$BADREC/peer-x.json"
+badrec=$(unreadable_boot_fleet "$HOME_DIR" "$BADREC") || fail "a malformed peer record must boot"
+badrec_ctx=$(fm_boot_context "$badrec")
+assert_contains "$badrec_ctx" "UNAVAILABLE" \
+  "a peer record missing required fields must be marked"
+assert_not_contains "$badrec_ctx" "peer-x         [0 in flight" \
+  "a record missing its counts must not be rendered as an idle peer"
 
 pass "m5 boot context never fails silently"

@@ -116,6 +116,10 @@ esac
 
 # --- run ---------------------------------------------------------------------
 
+# A test claiming a prerequisite skip must print this. Inferring a skip from the
+# exit code alone let a syntax error pass for one.
+PREREQ_MARKER="PREREQUISITE MISSING:"
+
 ran=0; skipped=0; failed=0
 FAILED_LIST=""
 
@@ -138,23 +142,55 @@ for test_script in "$ROOT"/tests/*.test.sh; do
     continue
   fi
 
+  # Syntax-check before executing. A test that cannot even be parsed is a hard
+  # failure, never a skip, and catching it here means the exit-code handling
+  # below never has to guess what an exit 2 meant.
+  if ! syntax_err=$(bash -n "$test_script" 2>&1); then
+    failed=$((failed + 1))
+    FAILED_LIST="$FAILED_LIST $name"
+    echo "FAIL $name - does not parse; this is a broken test, not a skip."
+    printf '%s\n' "$syntax_err" | sed 's/^/     /'
+    annotate error "$name has a syntax error"
+    continue
+  fi
+
   ran=$((ran + 1))
   out="$("$test_script" 2>&1)"; code=$?
   case "$code" in
     0)
       printf '%s\n' "$out" ;;
     2)
-      # Exit 2 is this repo's existing convention for "a prerequisite tool is
-      # missing", used by tests/fm-loop-l2.test.sh and tests/fm-boot-m0.test.sh
-      # for the globally-installed loop-audit and ledger CLIs. CI installs
-      # neither, so treating it as failure made those tests fail the job for a
-      # reason that says nothing about the code. It is a skip - announced by
-      # name, with the test's own explanation, so it can never pass silently.
-      ran=$((ran - 1))
-      skipped=$((skipped + 1))
-      echo "SKIP $name - prerequisite missing (test exited 2)"
-      printf '%s\n' "$out" | sed 's/^/     /'
-      annotate notice "SKIP $name (prerequisite missing)" ;;
+      # Exit 2 is this repo's convention for "a prerequisite tool is missing",
+      # used by fm-loop-l2 (loop-audit) and fm-boot-m0 (ledger), neither of
+      # which CI installs. Treating that as failure made those tests fail the
+      # job for a reason that says nothing about the code.
+      #
+      # But bash ALSO exits 2 on a syntax error, so accepting a bare exit 2 as a
+      # skip laundered a broken test into a green build - verified: a test whose
+      # entire body was `fi` was reported "SKIP ... prerequisite missing" and the
+      # suite exited 0. That is a fail-open in the one place this runner
+      # promises to fail closed, and it is worse than the problem it solved: a
+      # test that cannot run at all is exactly what CI exists to catch.
+      #
+      # A skip therefore has to be CLAIMED, not inferred. The test must say so
+      # in its output with the marker below; anything else exiting 2 is a
+      # failure. The syntax pre-check above catches the broken-test case even
+      # when the marker is somehow present.
+      if printf '%s' "$out" | grep -q "$PREREQ_MARKER"; then
+        ran=$((ran - 1))
+        skipped=$((skipped + 1))
+        echo "SKIP $name - prerequisite missing (declared)"
+        printf '%s\n' "$out" | sed 's/^/     /'
+        annotate notice "SKIP $name (prerequisite missing)"
+      else
+        failed=$((failed + 1))
+        FAILED_LIST="$FAILED_LIST $name"
+        echo "FAIL $name - exited 2 without declaring a missing prerequisite."
+        echo "     An exit 2 is only a skip when the test prints '$PREREQ_MARKER'."
+        echo "     A bash SYNTAX ERROR also exits 2, and must never be a skip."
+        printf '%s\n' "$out" | sed 's/^/     /'
+        annotate error "$name exited 2 without a prerequisite marker"
+      fi ;;
     *)
       failed=$((failed + 1))
       FAILED_LIST="$FAILED_LIST $name"

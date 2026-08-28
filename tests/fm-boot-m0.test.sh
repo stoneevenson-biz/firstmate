@@ -67,7 +67,10 @@ PY
 
 # --- B. loud failure on a broken ledger, against isolated fixtures -----------
 command -v ledger >/dev/null 2>&1 || {
-  echo "ledger CLI not on PATH - install via claude-pm-system/scripts/install-global.sh" >&2
+  # The marker is what makes this a SKIP rather than a failure. tests/run-all.sh
+  # will not infer a skip from the exit code alone, because bash also exits 2 on
+  # a syntax error and a broken test must never be laundered into a green build.
+  echo "PREREQUISITE MISSING: ledger CLI not on PATH - install via claude-pm-system/scripts/install-global.sh" >&2
   exit 2
 }
 

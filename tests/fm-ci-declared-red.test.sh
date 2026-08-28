@@ -185,14 +185,14 @@ assert_not_contains "$outF" "SKIP" \
 G="$TMP/g"; fixture "$G" no
 cat > "$G/tests/dd-prereq.test.sh" <<'SH'
 #!/usr/bin/env bash
-echo "some-cli not on PATH - install it to run this suite" >&2
+echo "PREREQUISITE MISSING: some-cli not on PATH - install it to run this suite" >&2
 exit 2
 SH
 chmod +x "$G/tests/dd-prereq.test.sh"
 outG=$(run_suite "$G"); codeG=$?
 expect_code 0 "$codeG" "a missing prerequisite (exit 2) must not fail the suite"
-assert_contains "$outG" "prerequisite missing" \
-  "an exit-2 skip must be announced as a prerequisite skip"
+assert_contains "$outG" "prerequisite missing (declared)" \
+  "an exit-2 skip must be announced, and only when the test DECLARED it"
 assert_contains "$outG" "dd-prereq.test.sh" "the skip line must name the test"
 assert_contains "$outG" "some-cli not on PATH" \
   "the test's own explanation must be shown, so the skip is diagnosable"
@@ -207,5 +207,38 @@ chmod +x "$G/tests/ee-real-failure.test.sh"
 outG2=$(run_suite "$G"); codeG2=$?
 [ "$codeG2" -ne 0 ] || fail "exit 1 must still fail the suite"
 assert_contains "$outG2" "a real assertion failed" "a real failure must still surface"
+
+# --- case H: a BROKEN test must never be laundered into a skip ---------------
+#
+# The regression this freezes was live and shipped: exit 2 was accepted as
+# "prerequisite missing" purely from the exit code, and bash ALSO exits 2 on a
+# syntax error. A test whose entire body was `fi` was reported as
+# "SKIP ... prerequisite missing" and the suite exited 0. A test that cannot run
+# at all is exactly what CI exists to catch, so that fail-open was worse than
+# the problem it solved.
+#
+# Three outcomes must now be distinguishable, and case G above already covers a
+# properly declared skip.
+H="$TMP/h"; fixture "$H" no
+
+# A syntax error: fails, and is named as a broken test rather than a skip.
+printf '#!/usr/bin/env bash\nfi\n' > "$H/tests/zz-syntax.test.sh"
+chmod +x "$H/tests/zz-syntax.test.sh"
+outH=$(run_suite "$H"); codeH=$?
+[ "$codeH" -ne 0 ] || fail "a test with a syntax error must FAIL the suite, never skip it"
+assert_contains "$outH" "does not parse" \
+  "a syntax error must be reported as a broken test"
+assert_not_contains "$outH" "SKIP zz-syntax" \
+  "a syntax error must never be reported as a skip"
+
+# An undeclared exit 2: also a failure, because the skip must be CLAIMED.
+rm -f "$H/tests/zz-syntax.test.sh"
+printf '#!/usr/bin/env bash\necho "something went wrong"\nexit 2\n' > "$H/tests/zz-bare2.test.sh"
+chmod +x "$H/tests/zz-bare2.test.sh"
+outH2=$(run_suite "$H"); codeH2=$?
+[ "$codeH2" -ne 0 ] \
+  || fail "exit 2 without a declared prerequisite must fail, not skip"
+assert_contains "$outH2" "without declaring a missing prerequisite" \
+  "an undeclared exit 2 must say why it was not treated as a skip"
 
 pass "ci suite runner skips only declared-red gates"
