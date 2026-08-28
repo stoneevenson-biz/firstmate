@@ -1,9 +1,15 @@
 # Gate Ledger
 
-## Drain list (2)
+## Drain list (8)
 
+- [ ] gate-h1-mux-default-loud-fallback — driver selection: herdr default, loud tmux fallback (red) **ready**
+- [ ] gate-h2-mux-workspace-scoping — workspace scoping resolved, never focus-luck (red) **ready**
+- [ ] gate-h3-spawn-named-herdr-tab — fm-spawn lands a named herdr tab (red) **ready**
+- [ ] gate-h4-send-peek-routed-by-meta — send/peek acknowledged and routed by the meta (red) **ready**
+- [ ] gate-h5-herdr-live-roundtrip — live herdr round-trip (red) **ready**
+- [ ] gate-h6-tmux-call-parity — tmux call-sequence parity (red) **ready**
+- [ ] gate-h7-tmux-live-roundtrip — live tmux round-trip (red) **ready**
 - [ ] gate-l2-loop-audit-level — loop-audit scores the repo at level L2 or better (score >= 58) (red) **ready**
-- [ ] m1-hook-registered — bin/fm-boot-context.sh is registered as a real SessionStart hook (red) **ready**
 
 ## All gates
 
@@ -29,10 +35,10 @@
 | gate-l1-drain-instrumented | green | Wake drain appends a run-log JSON line and stamps STATE.md; FM_LOOP_LOG=0 disables; log failure never breaks the drain |
 | gate-l2-loop-audit-level | red | loop-audit scores the repo at level L2 or better (score >= 58) |
 | g-boot-digest | frozen | Boot-time reconciliation digest in captain context; fm-watch-arm --status read-only |
-| m0-ledger-shape | frozen | Gate harness loads: gates/ledger.json is an array, and a broken ledger fails loudly |
-| m1-hook-registered | red | bin/fm-boot-context.sh is registered as a real SessionStart hook |
-| m2-boot-emitter-is-read-only | frozen | A full boot through bin/fm-boot-context.sh performs zero writes |
-| m4-boot-budget-hostile | frozen | Boot holds its budget by enforced deadline and concurrent helpers, leaks nothing, and never elides a peer |
-| m5-digest-never-silent | frozen | A section that fails to build says so; failure is never silent |
-| gate-ci-declared-red | frozen | CI skips a test only when its gate is red AND declared accepted |
-| gate-status-verb | frozen | Status reporting is a verb a crewmate whose redirect is refused can still use |
+| gate-h1-mux-default-loud-fallback | red | Driver selection: herdr by default when reachable; tmux fallback is loud; FM_MUX wins both ways |
+| gate-h2-mux-workspace-scoping | red | Workspace scoping: resolved by project label, FM_HERDR_WORKSPACE overrides, missing is created, never focus-luck |
+| gate-h3-spawn-named-herdr-tab | red | fm-spawn with no FM_MUX lands a crewmate as a herdr tab in the project workspace, named for the work |
+| gate-h4-send-peek-routed-by-meta | red | fm-send/fm-peek use acknowledged herdr delivery and route by the driver recorded in the meta |
+| gate-h5-herdr-live-roundtrip | red | LIVE herdr: workspace, tab, shell readiness, run/read, naming accepted by the binary, acknowledged send, close |
+| gate-h6-tmux-call-parity | red | FM_MUX=tmux emits the pre-seam tmux call sequence byte for byte |
+| gate-h7-tmux-live-roundtrip | red | LIVE tmux: window lifecycle, shell readiness, run/run_launch, cwd, launch-failure detection, send_key, close |
