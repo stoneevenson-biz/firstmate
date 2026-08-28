@@ -28,6 +28,7 @@
 #
 # spec: docs/specs/2026-08-27-n-concurrent-firstmates.md
 set -u
+# shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 RUNNER="$ROOT/tests/run-all.sh"

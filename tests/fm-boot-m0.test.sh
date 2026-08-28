@@ -30,6 +30,7 @@
 #
 # spec: docs/specs/2026-08-27-n-concurrent-firstmates.md
 set -u
+# shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 LEDGER_JSON="$ROOT/gates/ledger.json"

@@ -26,7 +26,9 @@
 #
 # spec: docs/specs/2026-08-27-n-concurrent-firstmates.md
 set -u
+# shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source=tests/fm-boot-helpers.sh
 . "$(dirname "${BASH_SOURCE[0]}")/fm-boot-helpers.sh"
 
 assert_present "$FM_BOOT_EMITTER" "bin/fm-boot-context.sh must exist"
