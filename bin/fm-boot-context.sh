@@ -67,11 +67,18 @@
 #   FM_BOOT_HELPER_TIMEOUT 0.45s per helper exec - still 6x the slowest
 #                          measured helper (0.07s)
 #
-# Per-helper caps alone would not bound the total, so helpers also run under a
-# SHARED DEADLINE: each is granted min(per-helper cap, budget left before the
-# ceiling), and one whose budget is exhausted is skipped and rendered as a
-# degradation marker instead of run. Adding a helper can therefore never breach
-# the ceiling.
+# Per-helper caps alone would not bound the total, so the helpers run
+# CONCURRENTLY under ONE SHARED DEADLINE, computed once before any of them
+# starts. They are independent reads, so the phase costs the MAX of their
+# timeouts rather than the sum, and adding a third helper costs no extra
+# elapsed time at all. A helper still running at the deadline is killed and
+# rendered as a degradation marker rather than waited for.
+#
+# Serial execution is what made this tight: two 0.45s timeouts is 0.9s of
+# deliberate waiting, which put the tail of a wedged boot at 1.52-1.61s against
+# the 1.5s ceiling on a loaded machine. Going parallel was preferred over
+# shrinking the per-helper allowance, so a slow-but-alive helper keeps the same
+# generosity. The design named this option explicitly.
 #
 # The deadline is only as honest as its start time, and the start is taken in
 # the BASH WRAPPER, before the interpreter exists. Starting it inside python
@@ -97,9 +104,22 @@
 #      1.51-1.62s. The output is not wanted, so the group is killed, reaped, and
 #      its fds closed without draining.
 #
-# Measured after both fixes, on a machine at load ~134: 10 consecutive gate runs
-# green, worst single boot 1.104s against the 1.5s ceiling, zero processes
-# leaked. The ceiling did not need to move.
+#   3. A SERIAL HELPER PHASE. Two 0.45s timeouts paid one after the other is
+#      0.9s of deliberate waiting; the helpers are independent, so they now run
+#      concurrently under one shared deadline and the phase costs the max
+#      instead of the sum.
+#
+# And one defect in the GATE rather than the code, which had been hiding the
+# real numbers: it stamped the start of each timed boot with one `python3 -c`
+# and the end with another, charging the second interpreter's startup to the
+# emitter. Measured over 60 samples at load ~180, against bash's free
+# EPOCHREALTIME clock as a control: true boot p50 1.035s / max 1.370s with ZERO
+# breaches, while the same boots as measured showed max 1.863s and three
+# breaches. Instrumentation alone reached 0.608s.
+#
+# Measured after all of it, on a machine at load ~150: 10 consecutive gate runs
+# green, boots 0.55-1.11s against the 1.5s ceiling, zero processes leaked. The
+# ceiling never needed to move; the implementation and the experiment did.
 #
 # The peer path costs ZERO execs, by construction: reading 12 peer files is
 # 0.66ms, while 12 subprocess execs is 373ms and can wedge indefinitely. Peers
@@ -390,6 +410,89 @@ def helper(script, args, label):
         if line.strip():
             return line.strip()
     return "UNAVAILABLE (%s: no output)" % label
+
+
+def helpers(specs):
+    """Run the sanctioned helpers CONCURRENTLY under ONE shared deadline.
+
+    Serially, two helpers cost the sum of their timeouts; concurrently they cost
+    the max. They are independent reads - a lock status and a watcher status -
+    so there is no reason to pay the sum, and paying it is what pushed the tail
+    of a wedged boot to 1.52-1.61s against a 1.5s ceiling on a loaded machine.
+    The design named this option explicitly ("parallel helpers under a shared
+    deadline"); it is taken here instead of shrinking the per-helper allowance,
+    so a slow-but-alive helper keeps the same generosity it had before.
+
+    The deadline is computed ONCE, before anything starts, and every helper is
+    judged against that same wall-clock instant. Adding a third helper therefore
+    costs nothing in elapsed time.
+    """
+    budget = min(HELPER_TIMEOUT, remaining())
+    if budget < MIN_HELPER_SLICE:
+        return dict((label, "UNAVAILABLE (%s: skipped, boot budget exhausted)" % label)
+                    for _s, _a, label in specs)
+
+    env = dict(os.environ)
+    env["FM_HOME"] = fm
+    # Helpers that source fm-wake-lib.sh create the state dir at source time.
+    # Nothing reached from here may create anything, so opt out.
+    env["FM_WAKE_LIB_READONLY"] = "1"
+
+    deadline = time.time() + budget
+    running, results = [], {}
+    for script, args, label in specs:
+        try:
+            proc = subprocess.Popen([os.path.join(bindir, script)] + args,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    text=True, env=env, start_new_session=True)
+            running.append((proc, label))
+        except Exception as e:
+            results[label] = "UNAVAILABLE (%s: %s)" % (label, type(e).__name__)
+
+    for proc, label in running:
+        left = deadline - time.time()
+        try:
+            if left <= 0:
+                raise subprocess.TimeoutExpired(proc.args, budget)
+            out, _ = proc.communicate(timeout=left)
+        except subprocess.TimeoutExpired:
+            reap(proc)
+            results[label] = "UNAVAILABLE (%s: no answer within %.2fs)" % (label, budget)
+            continue
+        except Exception as e:
+            reap(proc)
+            results[label] = "UNAVAILABLE (%s: %s)" % (label, type(e).__name__)
+            continue
+        line = next((l.strip() for l in (out or "").splitlines() if l.strip()), "")
+        results[label] = line or "UNAVAILABLE (%s: no output)" % label
+    return results
+
+
+def reap(proc):
+    """Kill a helper's whole process group and release its fds, without draining.
+
+    Killing only the direct child leaves whatever it spawned running, reparented
+    to init - measured at two orphans per wedged boot, 194 live at once, load
+    average 186. Draining the pipes afterwards with communicate() would cost up
+    to its own timeout per helper; the output is unwanted, and SIGKILL to the
+    group guarantees exit, so a short wait suffices.
+    """
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+    try:
+        proc.wait(timeout=0.05)
+    except Exception:
+        pass
+    for pipe in (proc.stdout, proc.stderr):
+        try:
+            pipe.close()
+        except Exception:
+            pass
 
 
 def section(name, build, *args):
@@ -764,8 +867,10 @@ def main():
 
     # The two sanctioned execs, in the order that matters: the lock line is
     # needed both for Tier 1 and to decide whether Tier 2 is owed at all.
-    lock_line = helper("fm-lock.sh", ["status"], "session lock")
-    watcher_line = helper("fm-watch-arm.sh", ["--status"], "watcher")
+    relayed = helpers([("fm-lock.sh", ["status"], "session lock"),
+                       ("fm-watch-arm.sh", ["--status"], "watcher")])
+    lock_line = relayed["session lock"]
+    watcher_line = relayed["watcher"]
 
     steering = is_steering(lock_line)
 

@@ -79,18 +79,6 @@ done
 # tmux or git is recorded rather than performed.
 PYDIR=$(dirname "$(command -v python3)")
 
-hostile_boot() {
-  fm_boot_hook_json | env \
-    PATH="$LOGBIN:$PYDIR:/usr/bin:/bin" \
-    FM_HOME="$HOME_DIR" \
-    FM_BOOT_FLEET_DIR="$FLEET" \
-    FM_BOOTSTRAP_BIN="$HANGING" \
-    ${BUDGET_ENV[@]+"${BUDGET_ENV[@]}"} \
-    FM_CTX_WINDOW=probe-session \
-    FIRSTMATE_ROLE=captain \
-    bash "$FM_BOOT_EMITTER"
-}
-
 # 0. the boot must not leak processes.
 #
 # This assertion exists because its absence invalidated every measurement this
@@ -110,26 +98,79 @@ sleepers_before=$(leaked_sleepers)
 
 # 1. inside the budget - measured over REPEATED runs, judged on the WORST.
 #
-# A single sample is not evidence about a ceiling. The first version of this
-# gate took one, and hid a real defect: the budget clock started inside python,
-# so it never counted interpreter startup, and the ceiling was breached in about
-# 28% of runs while the gate passed most of the time. A gate that is 72% green
-# is worse than a red one, because it launders a defect as flake. The worst of
-# N runs is the honest statistic, and it makes the gate deterministic.
+# A single sample is not evidence about a ceiling, and the worst of N is the
+# honest statistic. But the measurement itself has to be sound first.
+#
+# The measurement must not launch an interpreter INSIDE the window it is timing.
+# The previous version stamped the start with one `python3 -c` and the end with
+# another, so the second interpreter's startup was charged to the emitter. Under
+# load that startup spikes, and it is the entire reason this gate looked flaky.
+# Measured over 60 samples at load ~180, bracketing each boot with bash's free
+# EPOCHREALTIME clock as a control:
+#
+#   TRUE boot time   p50 1.035s  p90 1.174s  max 1.370s   breaches of 1.5s: 0
+#   AS MEASURED      p50 1.097s  p90 1.291s  max 1.863s   breaches of 1.5s: 3
+#   instrumentation  p50 0.059s  p90 0.163s  max 0.608s
+#
+# Every breach was the gate timing its own instrumentation. The emitter never
+# exceeded the ceiling. So the ceiling stays at 1.5s and the measurement is what
+# gets fixed - moving the threshold would have hidden a sound implementation
+# behind a bad experiment.
+#
+# One interpreter now runs the whole loop and times each boot around the
+# subprocess itself, so nothing but the boot is inside the window. fork/exec of
+# the boot is inside it, correctly: the harness pays that too.
 RUNS=${FM_BOOT_M4_RUNS:-5}
-worst=0
-out=""
-code=0
-for _ in $(seq 1 "$RUNS"); do
-  start=$(python3 -c 'import time; print(time.time())')
-  out=$(hostile_boot); code=$?
-  elapsed=$(python3 -c "import sys; print('%.3f' % (__import__('time').time() - float(sys.argv[1])))" "$start")
-  expect_code 0 "$code" "the emitter must exit 0 even with every helper wedged"
-  worst=$(python3 -c "import sys; print('%.3f' % max(float(sys.argv[1]), float(sys.argv[2])))" "$worst" "$elapsed")
-done
+LASTOUT="$TMP/last-boot.json"
+timings=$(env \
+  PATH="$LOGBIN:$PYDIR:/usr/bin:/bin" \
+  FM_HOME="$HOME_DIR" \
+  FM_BOOT_FLEET_DIR="$FLEET" \
+  FM_BOOTSTRAP_BIN="$HANGING" \
+  ${BUDGET_ENV[@]+"${BUDGET_ENV[@]}"} \
+  FM_CTX_WINDOW=probe-session \
+  FIRSTMATE_ROLE=captain \
+  python3 - "$FM_BOOT_EMITTER" "$RUNS" "$LASTOUT" "$(fm_boot_hook_json)" <<'PY'
+import os, subprocess, sys, time
+emitter, runs, lastout, hook = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
+worst = 0.0
+for _ in range(runs):
+    t0 = time.time()
+    r = subprocess.run(["bash", emitter], input=hook, capture_output=True,
+                       text=True, env=os.environ)
+    dt = time.time() - t0
+    worst = max(worst, dt)
+    if r.returncode != 0:
+        print("RC %d" % r.returncode)
+        sys.exit(0)
+    print("  boot %.3fs" % dt, file=sys.stderr)
+open(lastout, "w").write(r.stdout)
+print("WORST %.3f" % worst)
+PY
+) || fail "the timing harness must run"
+
+case "$timings" in
+  RC\ *) fail "the emitter must exit 0 even with every helper wedged (got exit ${timings#RC })" ;;
+esac
+worst=${timings#WORST }
+out=$(cat "$LASTOUT")
 
 # Checked before the timing verdict, because a leak invalidates the timing.
+#
+# Settle first. Killing is asynchronous: SIGKILL is delivered, and the process
+# is reaped a moment later, so an instantaneous sample can catch one mid-death
+# and call it a leak. Measured: 30 consecutive hostile boots never elevated the
+# count at all, yet one sample in a 10-run sweep saw a single dying process. The
+# property being asserted is that no orphan PERSISTS, so wait briefly for the
+# count to return to baseline and only then judge. The wait is bounded, so a
+# genuine leak still fails - it simply never comes back down.
 sleepers_after=$(leaked_sleepers)
+settle=0
+while [ "$sleepers_after" -gt "$sleepers_before" ] && [ "$settle" -lt 15 ]; do
+  sleep 0.2
+  sleepers_after=$(leaked_sleepers)
+  settle=$((settle + 1))
+done
 leaked=$((sleepers_after - sleepers_before))
 [ "$leaked" -le 0 ] || fail "a wedged helper must be killed as a process group, not left \
 running: $RUNS boots orphaned $leaked processes. That is a production leak, and it also \
