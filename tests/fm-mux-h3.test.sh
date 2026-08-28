@@ -61,7 +61,7 @@ run_spawn() {  # <home> <id> [extra args...]
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
     FM_SPAWN_NO_GUARD=1 FM_LAUNCH_VERIFY_SLEEP=0 \
-    HERDR_SERVER=running \
+    HERDR_SERVER="${HERDR_SERVER:-running}" \
     HERDR_WORKSPACES="wJ=config,wM=archify" \
     HERDR_PANE_CWD="$WT" \
     HERDR_TABS="$TMP_ROOT/tabs" \
@@ -171,8 +171,45 @@ test_the_task_id_lives_in_the_meta_not_the_name() {
   pass "naming: the id lives in state/<id>.meta; the tab carries the work"
 }
 
-# --- the explicit fallback still works --------------------------------------
+# --- an unreachable herdr STOPS the spawn ------------------------------------
 
+# THE GATE THAT PROVES THE RULE (data/captain.md, "Where agents run"). With no
+# FM_MUX set and no herdr server reachable, the spawn must FAIL - non-zero, with
+# an escalation - and must not put the crewmate anywhere else. Falling back to a
+# tmux window here is the exact failure the captain drew the line against:
+# he would believe he is watching the fleet while the work landed somewhere
+# invisible. Knowing the fleet is invisible is strictly better than wrongly
+# believing it is visible.
+test_unreachable_herdr_fails_the_spawn() {
+  reset
+  local home out rc=0
+  home="$TMP_ROOT/home-noserver"; mkdir -p "$home/data"
+  out=$(HERDR_SERVER=stopped run_spawn "$home" stranded-w2 --name stranded) || rc=$?
+  if [ "$rc" = 0 ]; then fail "the spawn succeeded with no herdr server: $out"; fi
+  assert_contains "$out" "no herdr server is reachable" "the failure does not name the reason"
+  assert_contains "$out" "captain" "the failure does not say whose decision this is"
+  assert_contains "$out" "FM_MUX=tmux" "the failure does not say how a headless run is authorised"
+  pass "escalation: an unreachable herdr fails the spawn and asks the captain"
+}
+
+# The other half, and the one that would go unnoticed: nothing may be created.
+# Not a tmux window, not a herdr tab, not a meta recording a pane that holds
+# nothing.
+test_unreachable_herdr_creates_nothing() {
+  reset
+  local home
+  home="$TMP_ROOT/home-nothing"; mkdir -p "$home/data"
+  HERDR_SERVER=stopped run_spawn "$home" stranded-w3 --name stranded >/dev/null 2>&1
+  assert_no_grep "new-window" "$CALLS" "a tmux window was created after herdr was unreachable"
+  assert_no_grep "tab create" "$CALLS" "a herdr tab was created against an unreachable server"
+  assert_absent "$home/state/stranded-w3.meta" "a meta was recorded for a pane that was never created"
+  pass "escalation: an unreachable herdr creates no window, no tab, and no meta"
+}
+
+# --- the explicit override still works --------------------------------------
+
+# FM_MUX=tmux is a person's decision, not a machine's inference, so it is
+# honoured without a herdr server anywhere in sight.
 test_fm_mux_tmux_still_creates_a_tmux_window() {
   reset
   local home out
@@ -190,4 +227,6 @@ test_the_name_is_one_herdr_accepts
 test_name_defaults_from_the_task_id_without_its_suffix
 test_meta_records_the_target_and_its_driver
 test_the_task_id_lives_in_the_meta_not_the_name
+test_unreachable_herdr_fails_the_spawn
+test_unreachable_herdr_creates_nothing
 test_fm_mux_tmux_still_creates_a_tmux_window

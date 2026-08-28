@@ -28,7 +28,7 @@
 | gate-l1-drain-instrumented | green | Wake drain appends a run-log JSON line and stamps STATE.md; FM_LOOP_LOG=0 disables; log failure never breaks the drain |
 | gate-l2-loop-audit-level | red | loop-audit scores the repo at level L2 or better (score >= 58) |
 | g-boot-digest | frozen | Boot-time reconciliation digest in captain context; fm-watch-arm --status read-only |
-| gate-h1-mux-default-loud-fallback | green | Driver selection: herdr by default when reachable; tmux fallback is loud; FM_MUX wins both ways |
+| gate-h1-herdr-only-default | green | Driver selection: herdr is the only automatic choice; unreachable herdr escalates, never falls back |
 | gate-h2-mux-workspace-scoping | green | Workspace scoping: resolved by project label, FM_HERDR_WORKSPACE overrides, missing is created, never focus-luck |
 | gate-h3-spawn-named-herdr-tab | green | fm-spawn with no FM_MUX lands a crewmate as a herdr tab in the project workspace, named for the work |
 | gate-h4-send-peek-routed-by-meta | green | fm-send/fm-peek use acknowledged herdr delivery and route by the driver recorded in the meta |

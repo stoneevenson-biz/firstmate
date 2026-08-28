@@ -542,15 +542,28 @@ Silence is the correct state while a healthy background watcher is waiting.
 
 ### herdr workspace hygiene
 
-**Agents are spawned in herdr. This is the captain's standing rule, and it is the default.**
-A pane the captain cannot see does not count, so `bin/fm-spawn.sh` puts every crewmate
-in herdr whenever a herdr server is reachable - no flag, no opt-in, nothing to remember.
-`FM_MUX=tmux` is the explicit fallback for headless and non-herdr contexts (cron, CI, a
-plain SSH session) and reproduces the pre-seam behaviour exactly, so it is a true rollback.
-When no herdr server is reachable the multiplexer seam degrades to tmux **and says so on
-stderr**: a silent degrade would leave the captain believing he is watching a fleet that
-is actually landing somewhere invisible. Reachability is the test, not `HERDR_ENV` -
-that variable is unset in firstmate's own process even while a server is running.
+**Agents run in herdr, and herdr is the only automatic choice.**
+A pane the captain cannot see does not count, so `bin/fm-spawn.sh` puts every crewmate in
+herdr - no flag, no opt-in, nothing to remember. The canonical statement of the rule is
+`data/captain.md`, section "Where agents run".
+
+**Headless is never selected automatically.** No code path may choose tmux, or any other
+headless transport, on its own - not from a reachability probe, not from a missing binary,
+not from an environment variable, and not loudly. Degrading is the decision the captain
+reserved for himself: believing he is watching the fleet while work lands somewhere he
+cannot see is worse than knowing it is invisible, and a warning in a log nobody is reading
+at 2am does not close that gap.
+
+**An unreachable herdr is an escalation, not a branch.** `fm_mux_require_available` checks
+reachability before a pane is created; when no server can be reached it fails non-zero with
+a message naming the reason, and `fm-spawn.sh` stops. Nothing is created - no window, no
+tab, no meta. Any tier may *recommend* a headless run, but it recommends by stopping and
+saying why; the captain decides.
+
+**`FM_MUX=tmux` is that decision, once he has made it.** A person setting it is the
+captain's word; a machine inferring it is the failure. It reproduces the pre-seam behaviour
+exactly, so it is also a true rollback, and it is honoured silently and without a herdr
+server anywhere in sight.
 
 The three entry points firstmate creates, steers, and observes direct reports with -
 `bin/fm-spawn.sh`, `bin/fm-send.sh`, `bin/fm-peek.sh` - address panes through the

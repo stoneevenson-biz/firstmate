@@ -33,13 +33,16 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # --- multiplexer driver -----------------------------------------------------
 #
-# Every suite here drives a FAKE multiplexer. Since the seam now defaults to
-# herdr whenever a herdr server is REACHABLE (the captain's standing rule), an
-# unpinned test run on a developer machine with herdr up would leave the fakes
-# untouched and go create real tabs in his real workspaces. Pin the driver to
-# tmux so a suite's fakes are actually the thing under test, and so no test can
-# reach the live fleet. Suites exercising the herdr driver set FM_MUX themselves
-# after sourcing this file; the live gates set it per case.
+# Every suite here drives a FAKE multiplexer. The seam defaults to herdr and
+# never auto-selects anything else, so an unpinned test run would aim at the
+# captain's real herdr server and create real tabs in his real workspaces -
+# which is exactly what happened once, leaving a stray workspace behind.
+#
+# This pin is an EXPLICIT harness choice, the same kind of decision FM_MUX exists
+# for, not the automatic degradation the captain's rule forbids: it is set here,
+# deliberately, so a suite's fakes are the thing under test and no test can reach
+# the live fleet. Suites exercising the herdr driver set FM_MUX themselves after
+# sourcing this file; the live gates set it per case.
 : "${FM_MUX:=tmux}"
 export FM_MUX
 

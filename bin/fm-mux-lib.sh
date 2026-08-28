@@ -12,17 +12,25 @@
 # The three entry points firstmate uses to create, steer, and observe a direct
 # report — fm-spawn.sh, fm-send.sh, fm-peek.sh — are wired onto it.
 #
-# THE STANDING RULE (captain, 2026-08-28): agents are spawned in herdr.
-# So the DEFAULT driver is herdr whenever a herdr server is actually reachable.
-# `FM_MUX=tmux` is the explicit fallback for headless and non-herdr contexts,
-# and it reproduces today's behaviour exactly. When herdr is unreachable the
-# seam degrades to tmux and SAYS SO on stderr — never silently, because a
-# captain who believes he is watching the fleet in herdr while the crew land in
-# an invisible tmux session is worse off than one who knows.
+# THE STANDING RULE (captain, data/captain.md "Where agents run", 2026-08-28):
+# agents run in herdr, and herdr is the ONLY default. Headless is never selected
+# automatically — not by a reachability probe, not by a missing binary, not by
+# an environment variable. Any tier may RECOMMEND a headless run, but it asks
+# the captain first and he decides. Silent degradation to headless is the
+# specific failure the rule exists to prevent: believing he is watching the
+# fleet while work happens somewhere he cannot see is worse than knowing it is
+# invisible.
+#
+# So `fm_mux_driver` consults nothing. A rule that asks is a rule that can
+# answer "headless". Reachability is still CHECKED — by fm_mux_require_available,
+# which ESCALATES when herdr cannot be reached rather than quietly picking
+# something else. `FM_MUX` is the explicit, human-chosen override; that is a
+# decision already made, not a fallback, so it is honoured silently.
 #
 # Every verb has one contract across drivers:
 #
 #   fm_mux_driver                          -> prints the active driver name
+#   fm_mux_require_available [what]        -> 0 when it can be reached; escalates otherwise
 #   fm_mux_scope <label> <cwd>             -> prints an OPAQUE scope handle
 #   fm_mux_window_exists <scope> <name> <label>
 #                                          -> 0 when that window/tab is present
@@ -65,38 +73,55 @@
 
 # Is a herdr server actually REACHABLE? Not "are we running inside herdr" —
 # HERDR_ENV is unset in firstmate's own process even while a server is running
-# and the captain is watching it, so reachability is the only correct predicate.
-# This is the canonical owner of the check; bin/fm-herdr-workspaces.sh defers to
-# it rather than keeping a second copy.
+# and the captain is watching it, so this is the only correct way to ask.
+#
+# It is a DIAGNOSTIC, never a selector. Nothing here picks a driver from its
+# answer; fm_mux_require_available uses it to escalate. This is the canonical
+# owner of the check; bin/fm-herdr-workspaces.sh defers to it rather than
+# keeping a second copy.
 fm_mux_herdr_up() {
   command -v herdr >/dev/null 2>&1 || return 1
   herdr session list 2>/dev/null | awk '$1=="default"{print $2}' | grep -q running
 }
 
-# Announce a driver choice once per process, on stderr. Only the surprising
-# case is announced: an automatic fall back from the standing herdr default.
-fm_mux_announce_fallback() {  # <reason>
-  [ -z "${FM_MUX_ANNOUNCED:-}" ] || return 0
-  FM_MUX_ANNOUNCED=1
-  [ "${FM_MUX_QUIET:-0}" = 1 ] && return 0
-  echo "fm-mux: driver=tmux (herdr is the default but $1); panes will NOT appear in herdr" >&2
-  return 0
-}
-
-# An explicit FM_MUX always wins — that is the rollback switch, and the
-# supported way to spawn from cron, CI, or a plain SSH session with no server.
-# Otherwise herdr, per the standing rule, whenever one is reachable.
+# Driver selection, in full. An explicit FM_MUX is the captain's word (or an
+# operator's, on his authority) and wins. Absent that, herdr — always, with
+# nothing consulted and nothing to probe. There is deliberately no branch here
+# that can produce a headless driver on its own.
 fm_mux_driver() {
   if [ -n "${FM_MUX:-}" ]; then printf '%s' "$FM_MUX"; return 0; fi
-  if ! command -v herdr >/dev/null 2>&1; then
-    fm_mux_announce_fallback "herdr is not on PATH"
-    printf 'tmux'; return 0
-  fi
-  if ! fm_mux_herdr_up; then
-    fm_mux_announce_fallback "no herdr server is running"
-    printf 'tmux'; return 0
-  fi
   printf 'herdr'
+}
+
+# Precondition for putting an AGENT somewhere: can the chosen driver actually be
+# reached? Call this before creating a pane, never to choose one.
+#
+# When herdr cannot be reached this returns non-zero with an escalation, and the
+# caller must STOP. It must not fall back, because falling back is the decision
+# the captain reserved for himself. The message says what is wrong, whose call
+# it is, and the exact thing he would say to authorise a headless run — a tier
+# may recommend headless, but it recommends by printing this and stopping.
+#
+# An explicitly chosen NON-herdr driver is a decision already made and is never
+# second-guessed. An explicit FM_MUX=herdr is still checked: choosing herdr does
+# not make an unreachable server reachable, and the agent has to go somewhere.
+fm_mux_require_available() {  # [what-for]
+  local what=${1:-this agent} drv
+  drv=$(fm_mux_driver)
+  [ "$drv" = herdr ] || return 0
+  if fm_mux_herdr_up; then return 0; fi
+  {
+    echo "fm-mux: cannot place $what - no herdr server is reachable."
+    if command -v herdr >/dev/null 2>&1; then
+      echo "  herdr is installed but no server is running. Start or attach one with \`herdr\`."
+    else
+      echo "  herdr is not on PATH. Install it, or run this where a server is reachable."
+    fi
+    echo "  NOT falling back to a headless pane: where agents run is the captain's"
+    echo "  decision, and a pane he cannot see does not count. If this particular"
+    echo "  run genuinely belongs headless, ask the captain and re-run with FM_MUX=tmux."
+  } >&2
+  return 1
 }
 
 fm_mux_dispatch() {  # <verb> [args...]
@@ -509,6 +534,22 @@ fm_mux_herdr_close() {  # <target>
 fm_mux_resolve() {  # <window-or-target> <state-dir>
   local want=$1 state=$2 meta window drv
   case "$want" in
+    *:*)
+      # Checked FIRST, exactly as the pre-seam resolve() had it: an argument
+      # carrying a colon is an explicit target and wins over any name-shaped
+      # reading of it, so a session literally named `fm-something` still
+      # addresses `fm-something:window` rather than being looked up as a task id.
+      #
+      # A raw target with no meta behind it. The documented form here is
+      # `session:window` - a tmux address - so tmux is what it means unless the
+      # caller says otherwise with FM_MUX. Ambient resolution would be wrong and
+      # dangerous: on any machine with a herdr server up, `fm-peek sess:win`
+      # would be answered by herdr verbs aimed at a tmux address, and quietly
+      # return nothing. The target stays OPAQUE - the driver comes from the
+      # caller's declaration, never from parsing the string's shape.
+      [ -n "${FM_MUX:-}" ] || FM_MUX=tmux
+      FM_MUX_TARGET=$want
+      ;;
     fm-*)
       meta="$state/${want#fm-}.meta"
       if [ ! -f "$meta" ]; then
@@ -524,17 +565,6 @@ fm_mux_resolve() {  # <window-or-target> <state-dir>
       [ -n "$drv" ] || drv=tmux
       FM_MUX=$drv
       FM_MUX_TARGET=$window
-      ;;
-    *:*)
-      # A raw target with no meta behind it. The documented form here is
-      # `session:window` - a tmux address - so tmux is what it means unless the
-      # caller says otherwise with FM_MUX. Ambient resolution would be wrong and
-      # dangerous: on any machine with a herdr server up, `fm-peek sess:win`
-      # would be answered by herdr verbs aimed at a tmux address, and quietly
-      # return nothing. The target stays OPAQUE - the driver comes from the
-      # caller's declaration, never from parsing the string's shape.
-      [ -n "${FM_MUX:-}" ] || FM_MUX=tmux
-      FM_MUX_TARGET=$want
       ;;
     *)
       window=$(tmux list-windows -a -F '#{session_name}:#{window_name}' 2>/dev/null | grep -m1 ":$want\$") \

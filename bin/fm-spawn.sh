@@ -21,11 +21,12 @@
 #   name - it lives in state/<id>.meta, which is where an id belongs.
 #
 # PANES ARE CREATED THROUGH THE MULTIPLEXER SEAM (bin/fm-mux-lib.sh), not by
-# calling tmux directly. The captain's standing rule is that agents are spawned
-# in herdr, so with no FM_MUX set a reachable herdr server gets the crewmate as
-# a named tab in that project's workspace; FM_MUX=tmux is the explicit fallback
-# for headless and non-herdr contexts and reproduces the old behaviour. When
-# herdr is unreachable the seam degrades to tmux and says so on stderr.
+# calling tmux directly. Agents run in herdr and herdr is the only automatic
+# choice (data/captain.md, "Where agents run"), so with no FM_MUX set the
+# crewmate becomes a named tab in that project's workspace. An unreachable herdr
+# STOPS this spawn with an escalation - it is never a reason to fall back to a
+# pane the captain cannot see. FM_MUX=tmux is his explicit word authorising a
+# headless run, and reproduces the pre-seam behaviour exactly.
 # Batch dispatch: pass one or more `id=repo` pairs instead of a single <id> <project>, e.g.
 #     fm-spawn.sh fix-a-k3=projects/foo add-b-q7=projects/bar [--scout]
 #   Each pair re-execs this script in single-task mode, so the single path stays the only
@@ -380,8 +381,15 @@ fi
 # Everything below addresses panes through bin/fm-mux-lib.sh rather than tmux
 # directly, so the captain's standing rule - agents are spawned in herdr - is
 # the default without the rest of this script knowing which multiplexer it is
-# talking to. The seam resolves the driver and announces a fallback loudly.
+# talking to. The seam resolves the driver; nothing here may choose a headless
+# one on its own, so an unreachable herdr escalates below rather than branching.
 MUX=$(fm_mux_driver)
+
+# Where agents run is the captain's decision (AGENTS.md, herdr workspace
+# hygiene). herdr is the only automatic choice, so an unreachable herdr STOPS
+# this spawn and escalates - it never falls back to a pane the captain cannot
+# see. A headless run is available, but only on his word, as FM_MUX=tmux.
+fm_mux_require_available "crewmate $ID" || exit 1
 
 # The scope is a tmux session or a herdr workspace - opaque either way. Under
 # herdr it is resolved EXPLICITLY from the project name, never from whichever
