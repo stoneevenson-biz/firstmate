@@ -13,14 +13,24 @@
 #
 # Under that, the emitter must:
 #   0. leak no processes - a wedged helper is killed as a group, not orphaned
-#   1. hold its budget: MEDIAN boot under 1.5s, no boot within 5s of the
-#      declared 10s hook timeout, and the helper phase provably CONCURRENT
+#   1. hold its budget, asserted through properties the CODE controls rather
+#      than a wall-clock threshold: the helper deadline is ENFORCED (helpers
+#      wedged for 999s cost seconds, not 999s), and the helper phase is provably
+#      CONCURRENT (both helpers start milliseconds apart, not one allowance
+#      apart). See the measurements at assertion 1 for why elapsed time is not
+#      the observable here.
 #   2. print valid JSON carrying a SessionStart envelope
 #   3. keep additionalContext under the 10,000-char injection cap
 #   4. render a degradation marker for each helper it could not reach, rather
 #      than a plausible-looking line or nothing at all
 #   5. list all 12 peers - a peer is NEVER elided (per-task detail may be)
 #   6. perform ZERO execs on the peer path
+#
+# And on the NORMAL path - real helpers, nothing stubbed - the same structural
+# guarantees that make a boot fast: at most two helper execs, zero execs per
+# peer, no network. Its latency is MEASURED AND PRINTED but deliberately not
+# asserted as a threshold; see the END-GOAL note at that assertion for exactly
+# what is and is not machine-checked.
 #
 # On the timeout arithmetic: the design's section 7 set a 1.5s total ceiling AND
 # a 2s per-helper timeout for two helpers, which is 4s and cannot satisfy this
@@ -321,5 +331,108 @@ listed=$(printf '%s\n' "$huge_ctx" | grep -c '^- peer-')
   || fail "all 200 peers must be listed even past the cap (listed: $listed)"
 assert_contains "$huge_ctx" "injection cap - UNAVAILABLE" \
   "overrunning the cap to keep every peer must be stated, never silent"
+
+# 9. THE NORMAL PATH, and END-GOAL condition 2.
+#
+# Condition 2 reads: "Boot injects the fleet picture in UNDER A SECOND, with no
+# synchronous network sweep, and degrades to an explicit marker rather than
+# silently reporting an empty fleet." Everything above is the HOSTILE path, so
+# it was never the right home for a normal-path latency claim - and until this
+# section existed, the sub-second half rode entirely on a wall-clock threshold
+# that has since been removed as unsound. This closes that honestly.
+#
+# WHAT IS MACHINE-CHECKED HERE: the structural properties that determine
+# latency, all of them immune to machine load -
+#   - at most TWO helper execs for the whole boot, however many peers exist
+#   - ZERO execs attributable to any peer (the peer path is file reads)
+#   - no network call of any kind
+#   - a valid envelope, on real helpers with nothing stubbed
+#
+# WHAT IS NOT MACHINE-CHECKED, STATED PLAINLY: the "under a second" figure
+# itself. Measured on this host, same code: 0.23s against the live primary home,
+# and 0.55-1.11s on the hostile path at ambient load - comfortably inside a
+# second. But elapsed wall clock here swings 0.55s to 4.5s with load alone
+# (130 -> 205), so a sub-second assertion would be a claim about the machine,
+# not the emitter, and gating it would produce exactly the flakiness this gate
+# spent three rounds removing. The latency is measured and PRINTED on every run
+# so the real number is always visible; it is not a pass/fail condition.
+#
+# END-GOAL.md says "machine-checked, not asserted", so this is a real and
+# deliberate gap against condition 2, recorded rather than papered over. It is
+# written up in docs/specs/2026-08-27-n-concurrent-firstmates.md.
+NORMTMP="$TMP/normal"
+mkdir -p "$NORMTMP"
+NORMLOG="$NORMTMP/exec.log"
+: > "$NORMLOG"
+NORMBIN="$NORMTMP/bin"; mkdir -p "$NORMBIN"
+# Trap any network reach. A boot that swept the network would need one of these.
+for tool in curl wget nc ssh; do
+  cat > "$NORMBIN/$tool" <<SH
+#!/usr/bin/env bash
+printf 'NETWORK %s %s\n' "$tool" "\$*" >> "$NORMLOG"
+exit 1
+SH
+  chmod +x "$NORMBIN/$tool"
+done
+
+# Wrappers around the two real helpers: each logs its invocation, then delegates
+# to the genuine script, so the boot is a real one and the exec count is exact.
+HELPWRAP="$NORMTMP/helperbin"; mkdir -p "$HELPWRAP"
+HELPLOG="$NORMTMP/helper-execs.log"
+: > "$HELPLOG"
+for helper in fm-lock.sh fm-watch-arm.sh; do
+  cat > "$HELPWRAP/$helper" <<SH
+#!/usr/bin/env bash
+printf '%s %s\n' "$helper" "\$*" >> "$HELPLOG"
+exec "$ROOT/bin/$helper" "\$@"
+SH
+  chmod +x "$HELPWRAP/$helper"
+done
+
+norm=$(env \
+  PATH="$NORMBIN:$PATH" \
+  FM_BOOTSTRAP_BIN="$HELPWRAP" \
+  FM_HOME="$HOME_DIR" FM_BOOT_FLEET_DIR="$FLEET" \
+  FM_CTX_WINDOW=probe-session FIRSTMATE_ROLE=captain \
+  python3 - "$FM_BOOT_EMITTER" "$(fm_boot_hook_json)" <<'PY'
+import os, subprocess, sys, time
+t0 = time.time()
+r = subprocess.run(["bash", sys.argv[1]], input=sys.argv[2], capture_output=True,
+                   text=True, env=os.environ)
+dt = time.time() - t0
+print("  normal-path boot %.3fs (measured, not asserted - see assertion 9)" % dt,
+      file=sys.stderr)
+sys.stdout.write(r.stdout)
+PY
+) || fail "a normal boot with real helpers must exit 0"
+
+norm_ctx=$(fm_boot_context "$norm")
+assert_contains "$norm_ctx" "## Fleet" "a normal boot must render the fleet picture"
+assert_not_contains "$norm_ctx" "network" "a normal boot must not mention a network sweep"
+assert_no_grep "NETWORK" "$NORMLOG" \
+  "a boot must perform NO network call - the fleet picture comes from files"
+
+# At most two helper execs, for the WHOLE boot, however many peers there are.
+# This is the property that actually keeps a boot fast, and unlike wall clock it
+# does not move with machine load. 12 peers are present in $FLEET throughout.
+helper_execs=$(wc -l < "$HELPLOG" | tr -d ' ')
+[ "$helper_execs" -le 2 ] \
+  || fail "a boot must exec at most 2 helpers regardless of fleet size, but made \
+$helper_execs:"$'\n'"$(cat "$HELPLOG")"
+# Deliberately NOT "exactly 2". On a loaded host the boot can spend its whole
+# budget on interpreter startup and skip both helpers - measured here, at load
+# ~130, the normal boot reported "session lock: skipped, boot budget exhausted"
+# and rendered watcher and steering as UNAVAILABLE. That is the degradation
+# contract working, not a fault, and asserting a lower bound would make this
+# load-dependent in exactly the way the rest of this gate stopped being.
+#
+# It is worth knowing, though, and it is written up with condition 2 in
+# docs/specs/2026-08-27-n-concurrent-firstmates.md: the 1.5s budget is tight
+# enough that an ordinary boot degrades on a busy machine.
+
+# And ZERO of those execs is attributable to a peer: the peer path is file reads.
+for i in $(seq 1 12); do
+  assert_no_grep "peer-$i" "$HELPLOG" "no exec may be made on behalf of peer-$i"
+done
 
 pass "m4 boot budget holds under hostile helpers"

@@ -507,3 +507,65 @@ helper were ever added; the shared deadline does.
 
 Both numbers are overridable for testing: `FM_BOOT_TOTAL_BUDGET` (default `1.5`) and
 `FM_BOOT_HELPER_TIMEOUT` (default `0.6`).
+
+---
+
+## END-GOAL condition 2: what is proven, and what is not (added 2026-08-28)
+
+END-GOAL condition 2 reads:
+
+> Boot injects the fleet picture in **under a second**, with no synchronous network sweep,
+> and degrades to an explicit marker rather than silently reporting an empty fleet.
+
+END-GOAL also says all five conditions must be **machine-checked, not asserted**. Two of
+condition 2's three clauses are. The third is not, and this section says so rather than
+letting a gate's prose imply otherwise.
+
+### Machine-checked
+
+- **No synchronous network sweep.** Gate `m4-boot-budget-hostile`, normal path: the boot runs
+  with `curl`, `wget`, `nc` and `ssh` shimmed to log and fail, and the log must stay empty.
+  Reinforced structurally: at most two helper execs for the whole boot however many peers
+  exist, and none attributable to a peer - the peer path is file reads, so it cannot reach the
+  network by construction.
+- **Degrades to an explicit marker rather than silently reporting an empty fleet.** Gate
+  `m5-digest-never-silent`, which covers a raising section, an absent home, an unreadable
+  `state/`, an unreadable wake queue, an unreadable status file, and a malformed budget - and
+  which also asserts that ordinary absence still reads as plain absence, so the marker keeps
+  its meaning.
+
+### NOT machine-checked: the "under a second" figure
+
+It is measured, and it is reported on every gate run, but it is not a pass/fail condition.
+
+Measured on the development host, same code throughout:
+
+| condition | boot latency |
+|---|---|
+| normal path, live primary home | **0.23s** |
+| normal path, gate fixture | 0.39-1.06s |
+| hostile path (every helper wedged), ambient load ~150 | 0.55-1.11s |
+| hostile path, load ~205 | 1.41-4.49s |
+| hostile path, 8-way CPU saturation (40 samples) | p50 1.178s, p90 2.385s, max 2.761s |
+
+The reason it is not gated: elapsed wall clock here is dominated by CPU availability, which no
+budget logic can bound. The same unchanged emitter measures 0.55s and 4.5s depending only on
+what else the machine is doing. A sub-second assertion would therefore be a claim about the
+host, not about this code, and gating it produced exactly the flakiness that took three
+verification rounds to diagnose - a gate that fails ~30% of the time teaches everyone to
+ignore it, which is worse than no gate.
+
+What `m4` asserts instead are the properties that *determine* latency and are immune to load:
+the helper deadline is enforced, the two helpers run concurrently rather than serially, the
+peer path costs zero execs, and no network call is made. If those hold, the boot is fast
+whenever the machine has capacity; if the machine has no capacity, nothing in this repository
+can make it fast.
+
+### A related finding worth recording
+
+On a host at load ~130, the **normal** boot can spend its entire 1.5s budget on interpreter
+startup and skip both helpers, rendering watcher state and steering as `UNAVAILABLE`. That is
+the degradation contract working correctly and it is never silent - but it means the design's
+1.5s budget is tight enough that an ordinary boot degrades on a busy machine. Raising it
+would trade injected detail against the declared 10s hook timeout. That trade is the
+captain's to make and is deliberately not made here.
