@@ -89,11 +89,16 @@ assert_grep "working: second line" "$STATUS" "the later line must be recorded to
 
 # One line in, one line out: an embedded newline must not forge extra records,
 # since each line is a separate wake for firstmate.
-FM_HOME="$HOME_DIR" bash "$STATUS_SH" task-1 "blocked: one$(printf '\n')forged: two" \
+FM_HOME="$HOME_DIR" bash "$STATUS_SH" task-1 "blocked: one"$'\n'"forged: two" \
   || fail "a message containing a newline must still be accepted"
 [ "$(wc -l < "$STATUS")" -eq 3 ] \
   || fail "an embedded newline must not forge extra status records (got $(wc -l < "$STATUS") lines)"
-assert_no_grep "forged: two" "$STATUS" "a forged second record must not appear as its own line"
+# The text is flattened onto the one line, not deleted - what must not happen is
+# it starting a record of its own, since firstmate reads each line as a report.
+grep -q '^forged: two' "$STATUS" \
+  && fail "a forged second record must not begin its own line"
+assert_grep "blocked: one forged: two" "$STATUS" \
+  "the newline must be flattened into the single reported line, not dropped"
 
 # --- FM_HOME resolution, the same way the rest of bin/ does it ---------------
 OTHER="$TMP/other"

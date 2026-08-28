@@ -64,7 +64,7 @@
 #
 #   FM_BOOT_TOTAL_BUDGET   1.5s hard ceiling for the whole hook (6x headroom
 #                          under the declared "timeout": 10 convention)
-#   FM_BOOT_HELPER_TIMEOUT 0.6s per helper exec - still 8.5x the slowest
+#   FM_BOOT_HELPER_TIMEOUT 0.45s per helper exec - still 6x the slowest
 #                          measured helper (0.07s)
 #
 # Per-helper caps alone would not bound the total, so helpers also run under a
@@ -77,8 +77,11 @@
 # the BASH WRAPPER, before the interpreter exists. Starting it inside python
 # hides ~0.3s of bash, stdin and interpreter startup from the arithmetic, which
 # is enough to overrun a 1.5s ceiling in about a quarter of hostile runs while
-# the gate still passes most of the time. Measured worst of 15 wedged-helper
-# runs with the start where it belongs: 1.38s.
+# the gate still passes most of the time.
+#
+# What actually bounds the total is RENDER_RESERVE - see its comment below for
+# the inequality. Measured worst of 20 wedged-helper runs under 8-way CPU load:
+# 1.28s against the 1.5s ceiling.
 #
 # The peer path costs ZERO execs, by construction: reading 12 peer files is
 # 0.66ms, while 12 subprocess execs is 373ms and can wedge indefinitely. Peers
@@ -100,7 +103,7 @@
 #   FM_BOOT_FLEET_DIR       shared fleet view (default ~/.local/state/firstmate/fleet)
 #   FM_BOOTSTRAP_BIN        helper dir; the stub seam gate m4 uses
 #   FM_BOOT_TOTAL_BUDGET    seconds, default 1.5
-#   FM_BOOT_HELPER_TIMEOUT  seconds, default 0.6
+#   FM_BOOT_HELPER_TIMEOUT  seconds, default 0.45
 #   FM_CTX_INJECT_CAP       output ceiling in chars, default 10000
 #   FM_BOOT_FORCE_FAIL      TEST SEAM. Comma-separated section names (or "all")
 #                           forced to raise, so gate m5 can prove an unexpected
@@ -177,7 +180,7 @@ def env_num(name, default, cast):
 
 
 TOTAL_BUDGET = env_num("FM_BOOT_TOTAL_BUDGET", 1.5, float)
-HELPER_TIMEOUT = env_num("FM_BOOT_HELPER_TIMEOUT", 0.6, float)
+HELPER_TIMEOUT = env_num("FM_BOOT_HELPER_TIMEOUT", 0.45, float)
 INJECT_CAP = env_num("FM_CTX_INJECT_CAP", 10000, int)
 FLEET_DIR = os.environ.get("FM_BOOT_FLEET_DIR") or os.path.join(
     os.path.expanduser("~"), ".local", "state", "firstmate", "fleet")
@@ -189,12 +192,27 @@ FLEET_DIR = os.environ.get("FM_BOOT_FLEET_DIR") or os.path.join(
 PEER_ID_MAX = 40
 PEER_WATCHER_MAX = 24
 
-# Wall-clock held back from the helper phase. It covers more than rendering: a
-# timed-out helper still costs a kill and a wait, and that overhead lands after
-# the deadline arithmetic has already granted the slice. Measured worst case with
-# both helpers wedged is ~0.1s of overshoot beyond the granted slices, so this is
-# sized to absorb it and still leave real margin under the ceiling.
-RENDER_RESERVE = 0.3
+# Wall-clock held back from the helper phase, and the single number the ceiling
+# actually rests on.
+#
+# The bound, stated so it can be checked rather than trusted:
+#
+#   total <= startup + granted_helper_time + post_deadline_cost
+#   granted <= max(0, TOTAL_BUDGET - startup - RENDER_RESERVE)
+#   => total <= TOTAL_BUDGET - RENDER_RESERVE + post_deadline_cost
+#
+# So the ceiling holds if and only if RENDER_RESERVE exceeds everything that
+# happens AFTER the last deadline check: killing and reaping a wedged helper,
+# rendering, serialising, and interpreter teardown. Startup cancels out - a cold
+# start simply leaves less for helpers, and a very cold one skips them entirely.
+#
+# 0.3 was too tight. It held locally (worst of 15 wedged runs: 1.378s) and
+# breached on a loaded machine, where an independent verifier measured 1.512s
+# and 1.587s against the 1.5s ceiling on roughly 40% of runs. Post-deadline cost
+# is what stretches under load, so the reserve has to cover its loaded value,
+# not its idle one. 0.45 does, with the per-helper cap dropped to match so two
+# helpers cannot consume the whole grant on a fast machine either.
+RENDER_RESERVE = 0.45
 # A helper granted less than this is not worth starting.
 MIN_HELPER_SLICE = 0.05
 # A peer file older than this renders as stale. Six watcher polls at 15s.

@@ -28,16 +28,19 @@ test_fm_home_parameterization() {
   FM_HOME="$home_one" "$ROOT/bin/fm-brief.sh" task-a app >/dev/null || fail "brief scaffold failed under FM_HOME"
   brief="$home_one/data/task-a/brief.md"
   [ -f "$brief" ] || fail "brief was not written under FM_HOME/data"
-  grep -F ">> '$home_one/state/task-a.status'" "$brief" >/dev/null || fail "brief did not shell-quote FM_HOME state path"
+  grep -F "'$home_one/state/task-a.status'" "$brief" >/dev/null || fail "brief did not shell-quote FM_HOME state path"
+  grep -F "fm-status.sh' 'task-a'" "$brief" >/dev/null || fail "brief did not teach the fm-status.sh verb for this home"
 
   FM_HOME="$home_one" "$ROOT/bin/fm-brief.sh" task-b app --scout >/dev/null || fail "scout brief scaffold failed under FM_HOME"
   brief="$home_one/data/task-b/brief.md"
-  grep -F ">> '$home_one/state/task-b.status'" "$brief" >/dev/null || fail "scout brief did not shell-quote FM_HOME state path"
+  grep -F "'$home_one/state/task-b.status'" "$brief" >/dev/null || fail "scout brief did not shell-quote FM_HOME state path"
+  grep -F "fm-status.sh' 'task-b'" "$brief" >/dev/null || fail "scout brief did not teach the fm-status.sh verb for this home"
 
   FM_HOME="$home_one" FM_SECONDMATE_CHARTER='ops domain' "$ROOT/bin/fm-brief.sh" task-c --secondmate app >/dev/null \
     || fail "secondmate brief scaffold failed under FM_HOME"
   brief="$home_one/data/task-c/brief.md"
-  grep -F ">> '$home_one/state/task-c.status'" "$brief" >/dev/null || fail "secondmate brief did not shell-quote FM_HOME state path"
+  grep -F "'$home_one/state/task-c.status'" "$brief" >/dev/null || fail "secondmate brief did not shell-quote FM_HOME state path"
+  grep -F "fm-status.sh' 'task-c'" "$brief" >/dev/null || fail "secondmate brief did not teach the fm-status.sh verb for this home"
 
   printf 'project=x\n' > "$home_one/state/task-a.meta"
   # quarterdeck: this assertion tests FM_HOME parameterization, not verification,

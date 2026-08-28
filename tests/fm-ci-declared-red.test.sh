@@ -175,4 +175,37 @@ assert_contains "$outF" "bb-declared-red RAN" \
 assert_not_contains "$outF" "SKIP" \
   "a partial parse must announce no skips at all"
 
+# --- case G: exit 2 is a prerequisite skip, not a failure -------------------
+#
+# This repo already uses exit 2 for "a prerequisite tool is missing" -
+# tests/fm-loop-l2.test.sh needs the loop-audit CLI, tests/fm-boot-m0.test.sh
+# needs the ledger CLI, and CI installs neither. Treating that as a failure made
+# those tests fail the job for a reason that says nothing about the code. It is
+# a skip, and like every other skip here it must be announced.
+G="$TMP/g"; fixture "$G" no
+cat > "$G/tests/dd-prereq.test.sh" <<'SH'
+#!/usr/bin/env bash
+echo "some-cli not on PATH - install it to run this suite" >&2
+exit 2
+SH
+chmod +x "$G/tests/dd-prereq.test.sh"
+outG=$(run_suite "$G"); codeG=$?
+expect_code 0 "$codeG" "a missing prerequisite (exit 2) must not fail the suite"
+assert_contains "$outG" "prerequisite missing" \
+  "an exit-2 skip must be announced as a prerequisite skip"
+assert_contains "$outG" "dd-prereq.test.sh" "the skip line must name the test"
+assert_contains "$outG" "some-cli not on PATH" \
+  "the test's own explanation must be shown, so the skip is diagnosable"
+
+# A genuine failure is still a failure - exit 1 must not be swept up with it.
+cat > "$G/tests/ee-real-failure.test.sh" <<'SH'
+#!/usr/bin/env bash
+echo "a real assertion failed"
+exit 1
+SH
+chmod +x "$G/tests/ee-real-failure.test.sh"
+outG2=$(run_suite "$G"); codeG2=$?
+[ "$codeG2" -ne 0 ] || fail "exit 1 must still fail the suite"
+assert_contains "$outG2" "a real assertion failed" "a real failure must still surface"
+
 pass "ci suite runner skips only declared-red gates"

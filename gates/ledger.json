@@ -467,6 +467,23 @@
       "regression": false,
       "created": "2026-08-27T00:00:00Z",
       "last_verified": "2026-08-28T06:48:43.748Z"
+    },
+    {
+      "id": "gate-status-verb",
+      "title": "Status reporting is a verb a crewmate whose redirect is refused can still use",
+      "observable": "Under a policy that refuses any command redirecting into the firstmate home - the modelled form of deny Edit(~/firstmate/**), which the harness applies to Bash - the old `echo \"...\" >> <home>/state/<id>.status` form is refused while `bash bin/fm-status.sh <id> \"<msg>\"` is permitted, and running the permitted form actually appends the line. The verb resolves the home via FM_HOME/FM_STATE_OVERRIDE like the rest of bin/, appends rather than truncates, writes exactly one line per call so an embedded newline cannot forge extra wakes, and refuses an empty message or a traversing id. Every brief fm-brief.sh generates - ship, scout and secondmate - teaches the verb and none teaches the redirect form.",
+      "origin_mode": "build",
+      "spec_ref": "docs/specs/2026-08-27-n-concurrent-firstmates.md",
+      "blocked_by": [],
+      "test_ref": "bash tests/fm-status-verb.test.sh",
+      "baseline_ref": null,
+      "first_observed_red": "2026-08-28T15:11:29.000Z",
+      "mutation_verified": null,
+      "status": "red",
+      "vacuous": false,
+      "regression": false,
+      "created": "2026-08-28T00:00:00Z",
+      "last_verified": null
     }
   ]
 }
