@@ -35,3 +35,4 @@
 | m4-boot-budget-hostile | frozen | Boot stays inside its wall-clock budget with every helper wedged |
 | m5-digest-never-silent | frozen | A section that fails to build says so; failure is never silent |
 | gate-ci-declared-red | frozen | CI skips a test only when its gate is red AND declared accepted |
+| gate-status-verb | frozen | Status reporting is a verb a crewmate whose redirect is refused can still use |
