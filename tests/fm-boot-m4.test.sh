@@ -147,6 +147,11 @@ for _ in range(runs):
         print("RC %d" % r.returncode)
         sys.exit(0)
     print("  boot %.3fs" % dt, file=sys.stderr)
+    # The verdict is already decided once one boot blows the bound; running the
+    # rest only makes a failing gate slow. Keeps the mutation arm ~20s instead
+    # of ~100s, with no change to a passing run.
+    if dt >= 15.0:
+        break
 open(lastout, "w").write(r.stdout)
 times.sort()
 print("WORST %.3f MEDIAN %.3f" % (times[-1], times[len(times) // 2]))
