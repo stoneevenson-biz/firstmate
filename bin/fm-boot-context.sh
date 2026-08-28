@@ -477,17 +477,30 @@ def reap(proc):
     to its own timeout per helper; the output is unwanted, and SIGKILL to the
     group guarantees exit, so a short wait suffices.
     """
-    try:
-        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-    except Exception:
+    # Target the group by the child's OWN pid. start_new_session makes the child
+    # its own group leader, so pgid == pid, and using that directly removes a
+    # race that os.getpgid() has: between fork and setsid the child still sits
+    # in OUR group, so getpgid can return it and the kill would land on this
+    # process instead of the helper. killpg(proc.pid) simply fails harmlessly if
+    # the group does not exist yet.
+    #
+    # Then kill the direct child, wait, and sweep the group once more - the
+    # second sweep catches a group that formed just after the first attempt,
+    # which is the window that let roughly one boot in fifty orphan a process.
+    for attempt in (1, 2):
         try:
-            proc.kill()
+            os.killpg(proc.pid, signal.SIGKILL)
         except Exception:
             pass
-    try:
-        proc.wait(timeout=0.05)
-    except Exception:
-        pass
+        if attempt == 1:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            try:
+                proc.wait(timeout=0.05)
+            except Exception:
+                pass
     for pipe in (proc.stdout, proc.stderr):
         try:
             pipe.close()
