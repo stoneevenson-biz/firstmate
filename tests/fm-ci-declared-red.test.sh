@@ -38,27 +38,27 @@ TMP=$(fm_test_tmproot fm-ci-declared-red)
 # fixture <dir> <include-undeclared-red>
 # A miniature repo: a gates/ dir and a tests/ dir holding three suites.
 fixture() {
-  local root=$1 with_undeclared=$2
-  mkdir -p "$root/gates" "$root/tests"
+  local dir=$1 with_undeclared=$2
+  mkdir -p "$dir/gates" "$dir/tests"
 
-  cat > "$root/tests/aa-passing.test.sh" <<'SH'
+  cat > "$dir/tests/aa-passing.test.sh" <<'SH'
 #!/usr/bin/env bash
 echo "ok - aa-passing ran"
 SH
-  cat > "$root/tests/bb-declared-red.test.sh" <<'SH'
+  cat > "$dir/tests/bb-declared-red.test.sh" <<'SH'
 #!/usr/bin/env bash
 echo "bb-declared-red RAN - it should not have"
 exit 1
 SH
-  cat > "$root/tests/cc-undeclared-red.test.sh" <<'SH'
+  cat > "$dir/tests/cc-undeclared-red.test.sh" <<'SH'
 #!/usr/bin/env bash
 echo "cc-undeclared-red ran"
 exit 1
 SH
-  chmod +x "$root/tests"/*.test.sh
-  [ "$with_undeclared" = yes ] || rm -f "$root/tests/cc-undeclared-red.test.sh"
+  chmod +x "$dir/tests"/*.test.sh
+  [ "$with_undeclared" = yes ] || rm -f "$dir/tests/cc-undeclared-red.test.sh"
 
-  cat > "$root/gates/ledger.json" <<'JSON'
+  cat > "$dir/gates/ledger.json" <<'JSON'
 {
   "version": 1,
   "gates": [
@@ -69,7 +69,7 @@ SH
 }
 JSON
 
-  cat > "$root/gates/accepted-red.md" <<'MD'
+  cat > "$dir/gates/accepted-red.md" <<'MD'
 # Accepted red gates
 
 - fx-declared-red - a fixture gate, declared red on purpose so the runner may skip it.

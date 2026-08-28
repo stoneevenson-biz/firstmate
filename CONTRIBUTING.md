@@ -60,6 +60,21 @@ Facts about the harness that are cheaper to read here than to rediscover:
 - **`spec_ref` must be a tracked path.** `data/` is gitignored, so a gate citing a design doc there is unreadable from any other clone. Promote the design to `docs/specs/` first and cite that.
 - **Adding a gate is a hand edit.** There is no `ledger add`; append the entry to the array in `gates/ledger.json`.
 
+### A gate that is red on purpose
+
+Some gates are red and should stay that way for a while: an accepted baseline, or one whose other half lives in another repo.
+CI runs the whole suite, so such a gate would fail the build forever, and the wrong fix is to make its test pass - that is exactly the false green the ledger exists to prevent.
+
+Instead, add the gate id to `gates/accepted-red.md` with a reason and a route back to green.
+`tests/run-all.sh` then skips that gate's test, and announces every skip by name in the log.
+
+The skip is deliberately narrow, and both conditions must hold: the gate is `red` in `gates/ledger.json` **and** its id is declared in `gates/accepted-red.md`.
+Skipping on status alone would mask a regression the moment a working gate went red - the failure would disappear from CI exactly when it mattered most.
+Skipping on the declaration alone would let a stale entry silence a test that had since been fixed.
+If either file is missing or unreadable, nothing is skipped at all and the runner says so; the safe direction is running a test that might fail, never silently not running one.
+
+This is gated by `gate-ci-declared-red`, so the narrowness is machine-checked rather than trusted.
+
 ## Development
 
 Tracked changes to firstmate itself - `AGENTS.md`, `README.md`, `CONTRIBUTING.md`, `.tasks.toml`, `.github/workflows/`, `bin/`, and agent skill files - ship through the `no-mistakes` pipeline on a feature branch and require an explicit merge approval.
@@ -73,7 +88,7 @@ Check and test the toolbelt before pushing:
 ```sh
 bash -n bin/*.sh                          # syntax-check the toolbelt
 shellcheck bin/*.sh tests/*.sh            # lint the toolbelt and behavior tests; CI enforces this
-for test_script in tests/*.test.sh; do "$test_script"; done   # behavior tests, matching CI
+tests/run-all.sh                          # behavior tests, matching CI (skips declared-red gates, out loud)
 tests/fm-wake-queue.test.sh               # durable wake queue losslessness, catch-up, double-drain, and duplicate-collapse tests
 tests/fm-watcher-lock.test.sh             # watcher singleton, lock-race, watch-arm liveness, and guard-warning tests
 tests/fm-daemon.test.sh                   # sub-supervisor classifier, /afk presence-gating, max-defer, composer, and fm-send submit tests
