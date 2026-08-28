@@ -176,6 +176,20 @@ test_a_herdr_crewmate_is_never_rerouted_to_tmux() {
 # `session:window` is documented as a tmux address, so a raw target with no meta
 # behind it means tmux. Ambient resolution here would answer a tmux address with
 # herdr verbs and quietly return nothing.
+# A colon-bearing argument is an explicit target and is checked BEFORE the
+# fm-<id> name shape, exactly as the pre-seam resolve() had it. Reversing that
+# order would make a session literally named `fm-something` get looked up as a
+# task id and fail, instead of addressing `fm-something:window`.
+test_an_explicit_target_wins_over_the_name_shape() {
+  reset
+  printf 'colon target content\n' > "$PANE"
+  local out
+  out=$(run "$PEEK" "fm-sess:win" 20)
+  assert_contains "$out" "colon target content" "a colon-bearing target was not treated as an explicit address"
+  assert_not_contains "$out" "no metadata" "a colon-bearing target was looked up as a task id"
+  pass "routing: an explicit <scope>:<window> wins over the fm-<id> name shape"
+}
+
 test_a_raw_target_is_a_tmux_address() {
   reset
   printf 'raw pane content\n' > "$PANE"
@@ -194,4 +208,5 @@ test_peek_reads_a_herdr_crewmate
 test_a_tmux_crewmate_is_still_addressed_with_tmux
 test_a_pre_seam_meta_is_treated_as_tmux
 test_a_herdr_crewmate_is_never_rerouted_to_tmux
+test_an_explicit_target_wins_over_the_name_shape
 test_a_raw_target_is_a_tmux_address
