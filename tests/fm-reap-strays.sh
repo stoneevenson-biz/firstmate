@@ -5,6 +5,9 @@
 #   tests/fm-reap-strays.sh snapshot            print the strays alive right now
 #   tests/fm-reap-strays.sh reap <snapshot>     kill only strays NOT in <snapshot>
 #   tests/fm-reap-strays.sh count               print how many strays are alive
+#   tests/fm-reap-strays.sh tmpdirs             count stale test temp dirs
+#   tests/fm-reap-strays.sh reap-tmpdirs [mins] remove test temp dirs older than
+#                                               <mins> (default 60)
 #
 # WHY THIS EXISTS
 #
@@ -44,7 +47,23 @@ STRAY_ARGV='sleep 999'
 
 usage() {
   echo "usage: $(basename "$0") snapshot | count | reap <snapshot-file>" >&2
+  echo "       $(basename "$0") tmpdirs | reap-tmpdirs [older-than-minutes]" >&2
   exit 2
+}
+
+# Stale temp dirs are the other half of the debris. tests/lib.sh registered them
+# inside a command-substitution subshell, so nothing was ever removed and 2,308
+# had accumulated before the registration was repaired. The repair stops new
+# ones; this clears the backlog.
+#
+# Narrow, again: only directories DIRECTLY under TMPDIR, only ones whose name
+# matches the mktemp template these suites use (fm-<something>.XXXXXX), only
+# ones owned by the invoking user, and only ones older than the age guard - so
+# a suite running right now, here or in another worktree, is never disturbed.
+list_tmpdirs() {
+  local mins=${1:-60} tmp=${TMPDIR:-/tmp}
+  find "$tmp" -maxdepth 1 -type d -user "$(id -u)" \
+    -name 'fm-*.??????' -mmin "+$mins" -print 2>/dev/null
 }
 
 # Print "pid" per line for every process that looks like our stub and is
@@ -93,6 +112,20 @@ EOF
     if [ "$killed" -gt 0 ]; then
       echo "reaped $killed stray '$STRAY_ARGV' process(es) left by this run" >&2
     fi
+    ;;
+  tmpdirs)
+    list_tmpdirs "${2:-60}" | wc -l | tr -d ' '
+    ;;
+  reap-tmpdirs)
+    mins=${2:-60}
+    removed=0
+    while read -r d; do
+      [ -n "$d" ] || continue
+      rm -rf "$d" && removed=$((removed + 1))
+    done <<EOF
+$(list_tmpdirs "$mins")
+EOF
+    echo "removed $removed test temp dir(s) older than ${mins}m" >&2
     ;;
   *)
     usage
