@@ -106,7 +106,32 @@ PYDIR=$(dirname "$(command -v python3)")
 # process name only, so it cannot distinguish `sleep 999` from any other sleep,
 # and `pgrep -f` substring-matches, which would also match this very pipeline.
 # shellcheck disable=SC2009
-leaked_sleepers() { ps -eo args | grep -c '^sleep 999$'; }
+leaked_sleepers() { bash "$ROOT/tests/fm-reap-strays.sh" count; }
+
+# Snapshot the strays alive BEFORE this run, and reap on EVERY exit path.
+#
+# Cleanup used to happen only on the happy path: a run that failed an earlier
+# assertion left through `fail` and abandoned whatever it had spawned. Failing
+# runs are precisely when strays accumulate, and they were the runs least likely
+# to tidy up - which is how 194 orphans once piled up and dragged the machine's
+# load to 186, slowing the very boots this gate was timing.
+#
+# The trap runs regardless of outcome. The reaper only kills processes absent
+# from the snapshot, so it can only ever remove this run's own debris; anything
+# that was already alive is protected by construction. tests/lib.sh documents
+# this exact pattern - define an EXIT trap, and call fm_test_cleanup from inside
+# it so the registered temp dirs are still removed.
+STRAY_SNAPSHOT=$(mktemp "${TMPDIR:-/tmp}/fm-boot-m4-strays.XXXXXX")
+bash "$ROOT/tests/fm-reap-strays.sh" snapshot > "$STRAY_SNAPSHOT"
+m4_cleanup() {
+  local rc=$?
+  bash "$ROOT/tests/fm-reap-strays.sh" reap "$STRAY_SNAPSHOT" || true
+  rm -f "$STRAY_SNAPSHOT"
+  fm_test_cleanup
+  return "$rc"
+}
+trap m4_cleanup EXIT
+
 sleepers_before=$(leaked_sleepers)
 
 # 1. inside the budget - measured over REPEATED runs, judged on the WORST.
