@@ -1,0 +1,541 @@
+#!/usr/bin/env bash
+# fm-boot-context.sh - the strictly READ-ONLY firstmate boot-context emitter.
+#
+# A SessionStart hook. Reads this home's state/ and data/, reads the shared
+# fleet view, and prints one additionalContext block so a firstmate session
+# knows what the fleet is doing without spending a single tool call on it.
+#
+# ---------------------------------------------------------------------------
+# WHY THIS SCRIPT EXISTS SEPARATELY FROM fm-captain-bootstrap.sh
+# ---------------------------------------------------------------------------
+# bin/fm-captain-bootstrap.sh was registered as a global SessionStart hook and
+# was removed, with cause: it mutates durable files on every session start. It
+# shutil.move()s the pending handoff into an archive and os.remove()s the resume
+# directive, both belonging to the context-watchdog subsystem, whose writer
+# (fm-ctx-statusline.sh) is itself unregistered and therefore dead. A hook that
+# moves and deletes files on behalf of a dead subsystem has no business in the
+# boot path, and the ban on it is correct on its facts.
+#
+# This script is the answer to that objection rather than an argument with it.
+# It reads. It writes nothing, moves nothing, deletes nothing, creates nothing,
+# and takes no lock - not even on the paths the rehydrate machinery owns. The
+# rehydrate block stays out of the hot path until its writer is revived as its
+# own task. That is what makes registering THIS script legal on the merits.
+#
+# The read-only property is not a promise, it is gate m2: a boot is run with a
+# full before/after manifest of the home (path, size, mtime, ctime, inode,
+# mode) and the manifest must be identical, and the same boot must still emit
+# valid output with the whole tree held read-only via chmod a-w.
+#
+# ---------------------------------------------------------------------------
+# THE TWO TIERS
+# ---------------------------------------------------------------------------
+# The old captain block was 10,188 chars (~2,550 tokens) - already over the
+# 10,000-char additionalContext cap, and paid in full by every session that
+# activated it, whether or not it was steering anything. Two tiers instead:
+#
+#   Tier 1  Universal. Identity, and one line per fleet instance. ~540 chars at
+#           4 peers, ~1,000 at 12. A PEER IS NEVER ELIDED - the whole point is
+#           that a session can answer "what is the fleet doing" with zero tool
+#           calls, and dropping a peer breaks that. Per-task DETAIL may be
+#           elided, because drilling into one task always cost a call anyway.
+#
+#   Tier 2  Only for the session that is actually steering: spawn lifecycle,
+#           projects, secondmates, backlog, and the reconciliation digest.
+#           Capped, with explicit "... (+N more)" markers.
+#
+# Steering is decided by the session lock, which needs no new signal: at boot
+# the lock is either free or stale (this session is the one about to take it),
+# or held by a live harness. If the holder is this process's own ancestor - a
+# resume, a compact, a /clear in the steering session - it is still steering.
+# Anything else is an incidental session and gets Tier 1 only. If the ancestry
+# probe cannot run, the answer is "not steering": a steering session then pays
+# one tool call, whereas the opposite default would charge every incidental
+# session the full block.
+#
+# ---------------------------------------------------------------------------
+# THE BUDGET
+# ---------------------------------------------------------------------------
+# A hook that overruns its declared timeout injects NOTHING, so the real hazard
+# is not slowness, it is a boot that silently lost all of its context. The
+# design set a 1.5s total ceiling and a 2s-per-helper timeout for two helpers,
+# which is 4s and cannot satisfy its own gate; the tracked spec's Erratum
+# reconciles it. The total is authoritative:
+#
+#   FM_BOOT_TOTAL_BUDGET   1.5s hard ceiling for the whole hook (6x headroom
+#                          under the declared "timeout": 10 convention)
+#   FM_BOOT_HELPER_TIMEOUT 0.6s per helper exec - still 8.5x the slowest
+#                          measured helper (0.07s)
+#
+# Per-helper caps alone would not bound the total, so helpers also run under a
+# SHARED DEADLINE: each is granted min(per-helper cap, budget left before the
+# ceiling), and one whose budget is exhausted is skipped and rendered as a
+# degradation marker instead of run. Adding a helper can therefore never breach
+# the ceiling.
+#
+# The peer path costs ZERO execs, by construction: reading 12 peer files is
+# 0.66ms, while 12 subprocess execs is 373ms and can wedge indefinitely. Peers
+# are files, and files are read.
+#
+# ---------------------------------------------------------------------------
+# FAILURE IS NEVER SILENT
+# ---------------------------------------------------------------------------
+# Every section builds inside its own guard. A section that raises is replaced
+# by an explicit "UNAVAILABLE (reason)" marker naming the section - never
+# dropped. The predecessor wrapped the whole digest in a bare `except: pass`,
+# so a boot that lost all of its fleet context was indistinguishable from a
+# healthy one. Gate m5 freezes the replacement.
+#
+# ---------------------------------------------------------------------------
+# ENVIRONMENT
+# ---------------------------------------------------------------------------
+#   FM_HOME                 the firstmate home to report on (default ~/firstmate)
+#   FM_BOOT_FLEET_DIR       shared fleet view (default ~/.local/state/firstmate/fleet)
+#   FM_BOOTSTRAP_BIN        helper dir; the stub seam gate m4 uses
+#   FM_BOOT_TOTAL_BUDGET    seconds, default 1.5
+#   FM_BOOT_HELPER_TIMEOUT  seconds, default 0.6
+#   FM_CTX_INJECT_CAP       output ceiling in chars, default 10000
+#   FM_BOOT_FORCE_FAIL      TEST SEAM. Comma-separated section names (or "all")
+#                           forced to raise, so gate m5 can prove an unexpected
+#                           exception is still visible. Never set in production.
+#   FIRSTMATE_ROLE          captain|crew, as today. Role resolution is unchanged
+#                           by this script: the activation-contract inversion is
+#                           a separate, later change, and the tiering above is
+#                           what makes that change affordable when it lands.
+set -u
+
+FM="${FM_HOME:-$HOME/firstmate}"
+FM_BIN="${FM_BOOTSTRAP_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+
+# The hook payload arrives on stdin; the python program arrives on python's
+# stdin via the heredoc, so the payload is handed over in the environment.
+FM_HOOK_JSON="$(cat)" FM_BOOT_FM="$FM" FM_BOOTSTRAP_BIN="$FM_BIN" python3 - <<'PY'
+import os, sys, json, glob, time, subprocess
+
+START = time.time()
+
+fm = os.environ["FM_BOOT_FM"]
+bindir = os.environ.get("FM_BOOTSTRAP_BIN", "")
+state = os.path.join(fm, "state")
+data = os.path.join(fm, "data")
+
+TOTAL_BUDGET = float(os.environ.get("FM_BOOT_TOTAL_BUDGET", "1.5"))
+HELPER_TIMEOUT = float(os.environ.get("FM_BOOT_HELPER_TIMEOUT", "0.6"))
+INJECT_CAP = int(os.environ.get("FM_CTX_INJECT_CAP", "10000"))
+FLEET_DIR = os.environ.get("FM_BOOT_FLEET_DIR") or os.path.join(
+    os.path.expanduser("~"), ".local", "state", "firstmate", "fleet")
+
+# Wall-clock left for rendering and printing once the helper phase is done.
+RENDER_RESERVE = 0.2
+# A helper granted less than this is not worth starting.
+MIN_HELPER_SLICE = 0.05
+# A peer file older than this renders as stale. Six watcher polls at 15s.
+PEER_STALE_AFTER = 90
+# Tier 2's share of the output cap. Tier 1 is never charged against it.
+TIER2_CAP = 6000
+
+DISCLAIMER = "Snapshot at boot - run bin/fm-wake-drain.sh before acting."
+
+
+# --- the test seam ----------------------------------------------------------
+
+class FmBootForcedFault(Exception):
+    """Raised only by FM_BOOT_FORCE_FAIL, to prove failures stay visible."""
+
+
+_FORCED = {s.strip() for s in (os.environ.get("FM_BOOT_FORCE_FAIL") or "").split(",") if s.strip()}
+
+
+def check_forced(section):
+    if section in _FORCED or "all" in _FORCED:
+        raise FmBootForcedFault("forced fault in section '%s'" % section)
+
+
+# --- budget -----------------------------------------------------------------
+
+def remaining():
+    """Seconds left before the ceiling, holding back the render reserve."""
+    return TOTAL_BUDGET - (time.time() - START) - RENDER_RESERVE
+
+
+# --- read-only primitives ---------------------------------------------------
+#
+# Every filesystem access in this script goes through these two. Neither
+# creates, truncates, moves, or removes anything, and there is deliberately no
+# makedirs anywhere: a missing dir is reported, never created.
+
+def read(path, limit=None):
+    with open(path) as f:
+        return f.read(limit) if limit else f.read()
+
+
+def read_or(path, default="", limit=None):
+    try:
+        return read(path, limit)
+    except Exception:
+        return default
+
+
+def helper(script, args, label):
+    """One bounded, sanctioned exec. Returns its first line verbatim.
+
+    The helper's own line is relayed as-is rather than re-derived here, so
+    there is exactly one definition of what "the watcher is healthy" means.
+    Every failure mode - missing, wedged, silent, crashed - returns an explicit
+    marker; none returns something that could pass for a healthy reading.
+    """
+    slice_ = min(HELPER_TIMEOUT, remaining())
+    if slice_ < MIN_HELPER_SLICE:
+        return "UNAVAILABLE (%s: skipped, boot budget exhausted)" % label
+    path = os.path.join(bindir, script)
+    try:
+        env = dict(os.environ)
+        env["FM_HOME"] = fm
+        # Helpers that source fm-wake-lib.sh create the state dir at source
+        # time. Nothing reached from here may create anything, so opt out.
+        env["FM_WAKE_LIB_READONLY"] = "1"
+        r = subprocess.run([path] + args, capture_output=True, text=True,
+                           timeout=slice_, env=env)
+    except subprocess.TimeoutExpired:
+        return "UNAVAILABLE (%s: no answer within %.2fs)" % (label, slice_)
+    except Exception as e:
+        return "UNAVAILABLE (%s: %s)" % (label, type(e).__name__)
+    for line in (r.stdout or "").splitlines():
+        if line.strip():
+            return line.strip()
+    return "UNAVAILABLE (%s: no output)" % label
+
+
+def section(name, build, *args):
+    """Build one section, or an explicit marker saying why it could not be.
+
+    This is the whole of the never-silent contract: a section is either its
+    content or a marker naming itself and its reason. There is no path on which
+    a section simply disappears.
+    """
+    try:
+        check_forced(name)
+        return build(*args)
+    except Exception as e:
+        return "## %s - UNAVAILABLE (%s: %s)" % (
+            name, type(e).__name__, str(e)[:120] or "no detail")
+
+
+# --- own-home facts ---------------------------------------------------------
+
+def meta_of(path):
+    meta = {}
+    for line in read_or(path).splitlines():
+        if "=" in line:
+            k, _, v = line.partition("=")
+            meta.setdefault(k.strip(), v.strip())
+    return meta
+
+
+def own_tasks():
+    """(task-id, meta, last-status-line) for every task this home is running."""
+    out = []
+    for mp in sorted(glob.glob(os.path.join(state, "*.meta"))):
+        tid = os.path.basename(mp)[: -len(".meta")]
+        lines = [l for l in read_or(os.path.join(state, tid + ".status")).splitlines()
+                 if l.strip()]
+        out.append((tid, meta_of(mp), lines[-1] if lines else "(no status yet)"))
+    return out
+
+
+def needs_attention(tasks):
+    n = 0
+    for _tid, _meta, last in tasks:
+        head = last.split(":", 1)[0].strip().lower()
+        if head in ("needs-decision", "blocked", "failed"):
+            n += 1
+    return n
+
+
+def wake_queue():
+    """Lock-free read of the wake queue.
+
+    Never touches .wake-queue.lock: contending with the live watcher from
+    inside a boot hook is worse than a slightly stale read. Torn-tail rule - a
+    record counts only if the file ends in a newline and the line splits into
+    at least five tab fields; a failing final line is excluded and flagged.
+    """
+    try:
+        with open(os.path.join(state, ".wake-queue"), "rb") as f:
+            raw = f.read()
+    except Exception:
+        return 0, [], False
+    if not raw:
+        return 0, [], False
+    text = raw.decode("utf-8", "replace")
+    rows = [r for r in text.split("\n") if r != ""]
+    torn = False
+    if rows and (not text.endswith("\n") or len(rows[-1].split("\t")) < 5):
+        rows.pop()
+        torn = True
+    valid = [r for r in rows if len(r.split("\t")) >= 5]
+    return len(valid), valid, torn
+
+
+# --- steering ---------------------------------------------------------------
+
+def ancestors():
+    """This process's ancestor pids, from one ps call, under the shared deadline.
+
+    One `ps -eo pid=,ppid=` beats walking the chain with one exec per level,
+    and it is bounded by the same deadline as every other exec here. On any
+    failure the caller falls back to "not steering", which is the cheap answer.
+    """
+    slice_ = min(HELPER_TIMEOUT, remaining())
+    if slice_ < MIN_HELPER_SLICE:
+        return set()
+    r = subprocess.run(["ps", "-eo", "pid=,ppid="], capture_output=True,
+                       text=True, timeout=slice_)
+    parent = {}
+    for line in (r.stdout or "").splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+            parent[int(parts[0])] = int(parts[1])
+    seen, pid = set(), os.getpid()
+    while pid in parent and pid > 1 and pid not in seen:
+        seen.add(pid)
+        pid = parent[pid]
+    seen.add(pid)
+    return seen
+
+
+def is_steering(lock_line):
+    """True when this session is the one steering this home.
+
+    Free or stale lock: this session is about to take it. Held by a live
+    harness: steering only if that pid is in our own ancestry (a resume,
+    compact, or /clear inside the steering session).
+    """
+    if lock_line.startswith("UNAVAILABLE"):
+        return False
+    if "free" in lock_line or "stale" in lock_line:
+        return True
+    digits = "".join(c if c.isdigit() else " " for c in lock_line).split()
+    if not digits:
+        return False
+    holder = int(digits[-1])
+    try:
+        return holder in ancestors()
+    except Exception:
+        return False
+
+
+# --- Tier 1: the fleet ------------------------------------------------------
+
+def peer_line(path):
+    """One line per peer. Never raises: a peer can only cost itself a marker."""
+    name = os.path.basename(path)[: -len(".json")]
+    try:
+        age = time.time() - os.path.getmtime(path)
+        d = json.loads(read(path))
+        pid_ = str(d.get("id") or name)
+        inflight = int(d.get("in_flight") or 0)
+        decisions = int(d.get("needs_decision") or 0)
+        watcher = str(d.get("watcher") or "unknown")
+        if age > PEER_STALE_AFTER:
+            watcher = "stale %s" % human_age(age)
+        return "- %-14s [%d in flight, %d need a decision] watcher %s" % (
+            pid_, inflight, decisions, watcher)
+    except Exception:
+        # Exactly one marker line. The peer is shown, never dropped: a missing
+        # peer would silently shrink the fleet, which is the one thing Tier 1
+        # must never do.
+        return "- %-14s [unreadable]" % name
+
+
+def human_age(seconds):
+    seconds = int(seconds)
+    if seconds < 120:
+        return "%ds" % seconds
+    if seconds < 7200:
+        return "%dm" % (seconds // 60)
+    return "%dh" % (seconds // 3600)
+
+
+def build_fleet(own_summary):
+    peers = []
+    if os.path.isdir(FLEET_DIR):
+        peers = sorted(glob.glob(os.path.join(FLEET_DIR, "*.json")))
+    lines = [own_summary] + [peer_line(p) for p in peers]
+    head = "## Fleet (%d instance%s)" % (len(lines), "" if len(lines) == 1 else "s")
+    tail = ["To act on another instance's work, ask it - do not reach into its home.",
+            DISCLAIMER]
+    if not peers:
+        tail.insert(0, "(no shared fleet view yet - only this home is reported)")
+    return "\n".join([head] + lines + tail)
+
+
+# --- Tier 2: the steering detail --------------------------------------------
+
+def project_lines():
+    """Generated one-liners, not a verbatim dump.
+
+    The verbatim data/projects.md was 4,108 chars - 40% of the whole block, for
+    information that is one line per project once the prose is trimmed.
+    """
+    out = []
+    for line in read_or(os.path.join(data, "projects.md")).splitlines():
+        line = line.strip()
+        if not line.startswith("- "):
+            continue
+        out.append(line[:110] + (" ..." if len(line) > 110 else ""))
+    return out
+
+
+def build_digest(tasks, watcher_line, lock_line):
+    depth, records, torn = wake_queue()
+    lines = ["## Reconciliation digest (boot-time snapshot)",
+             "Wake queue: %s" % ("empty" if depth == 0
+                                 else "%d queued (most recent last)" % depth)]
+    lines += ["  " + r for r in records[-5:]]
+    if depth > 5:
+        lines.append("  ... (+%d more)" % (depth - 5))
+    if torn:
+        lines.append("  (tail possibly torn)")
+    lines.append("Watcher: %s" % watcher_line)
+    lines.append("Session lock: %s" % lock_line)
+    lines.append("In-flight tasks: %s" % (len(tasks) or "none"))
+    for tid, meta, last in tasks:
+        lines.append("- %s window=%s kind=%s mode=%s - %s" % (
+            tid, meta.get("window", "?"), meta.get("kind", "?"),
+            meta.get("mode", "?"), last))
+    lines.append("afk: %s" % ("yes" if os.path.exists(os.path.join(state, ".afk")) else "no"))
+    return "\n".join(lines)
+
+
+def build_tier2(tasks, watcher_line, lock_line):
+    projects = project_lines()
+    secondmates = [l for l in read_or(os.path.join(data, "secondmates.md")).splitlines()
+                   if l.strip().startswith("- ")]
+    backlog = read_or(os.path.join(data, "backlog.md"), limit=1200).strip()
+
+    parts = ["""## Spawn lifecycle (you are steering this home)
+1. Register the project: a git repo at %s/projects/<name> plus one line in data/projects.md.
+2. Brief:    bin/fm-brief.sh <id> <repo> [--scout | --secondmate <proj>...]
+3. Vet:      bin/fm-intake.sh <id> <project-dir>      (ship briefs; spawn refuses without a proceed)
+4. Spawn:    bin/fm-spawn.sh <id> <project-dir> [harness] [--scout|--secondmate]
+5. Supervise: bin/fm-watch-arm.sh - peek bin/fm-peek.sh - steer bin/fm-send.sh
+6. Verify:   bin/fm-verify.sh <id>  before accepting any done: claim
+7. Teardown: bin/fm-teardown.sh <id>  only after the merge is confirmed""" % fm]
+
+    parts.append(cap_list("## Registered projects", projects))
+    parts.append(cap_list("## Secondmates", secondmates, empty="(none registered)"))
+    if backlog:
+        parts.append("## Recent backlog\n" + backlog)
+    parts.append(section("digest", build_digest, tasks, watcher_line, lock_line))
+    return "\n\n".join(parts)
+
+
+def cap_list(header, items, empty="(none)", budget=1500):
+    """Render a list under a char budget, counting anything dropped out loud.
+
+    Per-task and per-project DETAIL may be elided this way. Peers may not - see
+    build_fleet, which has no cap at all.
+    """
+    if not items:
+        return header + "\n" + empty
+    kept, used = [], 0
+    for it in items:
+        if used + len(it) + 1 > budget:
+            break
+        kept.append(it)
+        used += len(it) + 1
+    hidden = len(items) - len(kept)
+    if hidden:
+        kept.append("... (+%d more)" % hidden)
+    return header + "\n" + "\n".join(kept)
+
+
+# --- assemble ---------------------------------------------------------------
+
+def role():
+    """Unchanged from fm-captain-bootstrap.sh; this script does not move it."""
+    hook = {}
+    raw = os.environ.get("FM_HOOK_JSON", "")
+    try:
+        hook = json.loads(raw) if raw.strip() else {}
+    except Exception:
+        hook = {}
+    cwd = hook.get("cwd") or os.environ.get("PWD", "")
+    forced = (os.environ.get("FIRSTMATE_ROLE") or "").strip().lower()
+    if forced in ("captain", "crew"):
+        return forced
+    return os.environ.get("FM_CTX_ROLE") or (
+        "captain" if cwd in (os.environ.get("HOME", ""), fm) else "crew")
+
+
+def main():
+    if role() != "captain":
+        return
+
+    tasks = []
+    try:
+        tasks = own_tasks()
+    except Exception:
+        tasks = []
+
+    # The two sanctioned execs, in the order that matters: the lock line is
+    # needed both for Tier 1 and to decide whether Tier 2 is owed at all.
+    lock_line = helper("fm-lock.sh", ["status"], "session lock")
+    watcher_line = helper("fm-watch-arm.sh", ["--status"], "watcher")
+
+    steering = is_steering(lock_line)
+
+    watcher_word = "unknown"
+    if watcher_line.startswith("UNAVAILABLE"):
+        watcher_word = "UNAVAILABLE"
+    elif "healthy" in watcher_line:
+        watcher_word = "healthy"
+    elif "stale" in watcher_line:
+        watcher_word = "stale"
+    elif "none" in watcher_line:
+        watcher_word = "none"
+
+    own_summary = "- %-14s [%d in flight, %d need a decision] watcher %s  (this home)" % (
+        os.path.basename(fm.rstrip("/")) or "primary",
+        len(tasks), needs_attention(tasks), watcher_word)
+
+    blocks = ["""# firstmate - fleet (injected at boot; no tool calls needed)
+You are a firstmate. Home: %s (%s). Manual: %s/AGENTS.md""" % (
+        fm, "steering" if steering else "observing", fm)]
+
+    # Tier 1. Never elided, never capped.
+    blocks.append(section("fleet", build_fleet, own_summary))
+
+    # Tier 2. Only for the session that is actually steering.
+    if steering:
+        tier2 = section("steering detail", build_tier2, tasks, watcher_line, lock_line)
+        room = INJECT_CAP - len("\n\n".join(blocks)) - 200
+        room = min(room, TIER2_CAP)
+        if len(tier2) > room > 0:
+            tier2 = tier2[:room] + "\n... (+%d chars more - read the files directly)" % (
+                len(tier2) - room)
+        if room > 0:
+            blocks.append(tier2)
+    else:
+        blocks.append("Another session is steering this home; "
+                      "this one is observing. Ask it rather than acting.")
+
+    out = "\n\n".join(blocks)
+    print(json.dumps({"hookSpecificOutput": {
+        "hookEventName": "SessionStart", "additionalContext": out}}))
+
+
+try:
+    main()
+except Exception as e:
+    # Even a wholly failed build emits, and says why. A boot that lost its
+    # context must never be indistinguishable from a healthy one.
+    print(json.dumps({"hookSpecificOutput": {
+        "hookEventName": "SessionStart",
+        "additionalContext": "# firstmate - boot context UNAVAILABLE (%s: %s)\n"
+                             "Boot context could not be built. Run bin/fm-wake-drain.sh "
+                             "and read state/ directly before acting." % (
+                                 type(e).__name__, str(e)[:160])}}))
+    sys.exit(0)
+PY

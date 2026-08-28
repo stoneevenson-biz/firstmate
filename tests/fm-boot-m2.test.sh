@@ -119,4 +119,26 @@ assert_contains "$ro_ctx" "## Fleet" \
   || fail "the read-only boot changed the tree:"$'\n'"$(
     diff <(printf '%s\n' "$ro_before") <(printf '%s\n' "$ro_after") | head -40)"
 
+# --- arm C: a home with no state/ dir must not gain one ----------------------
+# Read-only means read-only even where a directory is missing. This is not
+# hypothetical: fm-lock.sh used to `mkdir -p "$STATE"` before dispatching, so
+# relaying `fm-lock.sh status` created the very directory it was reporting on.
+# A writable home is used deliberately - under chmod a-w the mkdir would fail
+# rather than be shown not to happen.
+BARE="$TMP/bare"
+mkdir -p "$BARE"
+bare_out=$(fm_boot_hook_json | env \
+  FM_HOME="$BARE" \
+  FM_BOOT_FLEET_DIR="$FLEET" \
+  FM_CTX_WINDOW=probe-session \
+  FIRSTMATE_ROLE=captain \
+  bash "$FM_BOOT_EMITTER") || fail "the emitter must exit 0 on a home with no state/"
+assert_absent "$BARE/state" \
+  "a boot must not create state/ - a reporting path that makes directories is not read-only"
+assert_absent "$BARE/data" "a boot must not create data/"
+[ "$(find "$BARE" -mindepth 1 | wc -l)" -eq 0 ] \
+  || fail "a boot must leave a bare home completely empty, but it now holds: $(find "$BARE" -mindepth 1)"
+bare_ctx=$(fm_boot_context "$bare_out")
+[ -n "$bare_ctx" ] || fail "even a bare home must produce a context block"
+
 pass "m2 boot-context emitter is read-only"
