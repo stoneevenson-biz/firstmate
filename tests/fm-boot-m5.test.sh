@@ -43,6 +43,16 @@ if [ "${LEDGER_MUTATE:-}" = 1 ]; then
   UNDER_TEST="$ROOT/bin/fm-captain-bootstrap.sh"
 fi
 
+# A generous budget, deliberately. This gate's subject is that failure is never
+# silent, not that the budget holds - m4 owns that. Left on the shipped budget,
+# a loaded machine can exhaust it before the lock helper runs, the emitter
+# correctly degrades to Tier 1, and every assertion here about the digest fails
+# for a reason that has nothing to do with silence. That is how this gate froze
+# VACUOUS: under the ledger harness the normal arm failed, so the mutation check
+# could not bite. A gate must control everything except the one thing it tests.
+export FM_BOOT_TOTAL_BUDGET=30
+export FM_BOOT_HELPER_TIMEOUT=10
+
 run_with_fault() {
   fm_boot_hook_json | env \
     FM_HOME="$HOME_DIR" \

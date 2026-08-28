@@ -873,6 +873,9 @@ def main():
     watcher_line = relayed["watcher"]
 
     steering = is_steering(lock_line)
+    steering_word = ("steering" if steering
+                     else "steering unknown" if lock_line.startswith("UNAVAILABLE")
+                     else "observing")
 
     watcher_word = "unknown"
     if watcher_line.startswith("UNAVAILABLE"):
@@ -902,7 +905,7 @@ def main():
 
     blocks = ["""# firstmate - fleet (injected at boot; no tool calls needed)
 You are a firstmate. Home: %s (%s). Manual: %s/AGENTS.md""" % (
-        fm, "steering" if steering else "observing", fm)]
+        fm, steering_word, fm)]
 
     # A misconfigured budget still boots, but never quietly.
     if CONFIG_NOTES:
@@ -922,6 +925,14 @@ You are a firstmate. Home: %s (%s). Manual: %s/AGENTS.md""" % (
                 len(tier2) - room)
         if room > 0:
             blocks.append(tier2)
+    elif lock_line.startswith("UNAVAILABLE"):
+        # We could not read the lock, so we do not KNOW who is steering. Saying
+        # another session is would be a confident falsehood of exactly the kind
+        # this file exists to prevent - and it is reachable, because a loaded
+        # machine can exhaust the helper budget and skip the lock read entirely.
+        blocks.append("## steering - UNAVAILABLE (%s) - could not determine whether "
+                      "this session is steering; re-read the lock before acting."
+                      % lock_line)
     else:
         blocks.append("Another session is steering this home; "
                       "this one is observing. Ask it rather than acting.")
