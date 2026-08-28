@@ -145,7 +145,14 @@ fm_mux_fake_tmux() {  # <dir>
 printf '%s\n' "$*" >> "$CALLS"
 case "$1" in
   capture-pane) cat "${PANE_FILE:-/dev/null}" 2>/dev/null ;;
-  display-message) printf '%s\n' "${TMUX_CWD:-${TMUX_SESSION:-firstmate}}" ;;
+  display-message)
+    # Two different reads share this verb: the session name (#S) and the pane's
+    # cwd (#{pane_current_path}). Answering both with one value would make the
+    # treehouse-get wait resolve instantly to a bogus worktree.
+    case "$*" in
+      *pane_current_path*) printf '%s\n' "${TMUX_CWD:-}" ;;
+      *) printf '%s\n' "${TMUX_SESSION:-firstmate}" ;;
+    esac ;;
   list-windows) printf '%s\n' "${TMUX_WINDOWS:-}" ;;
   has-session) exit "${TMUX_HAS_SESSION:-0}" ;;
   send-keys)

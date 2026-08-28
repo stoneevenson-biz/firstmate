@@ -37,7 +37,13 @@ PROJ=$(make_repo "$TMP_ROOT/archify")
 git -C "$PROJ" worktree add -q --detach "$TMP_ROOT/wt" >/dev/null 2>&1
 WT=$(cd "$TMP_ROOT/wt" && pwd -P)
 
+# BOTH multiplexers are faked. Faking only herdr is not enough: the FM_MUX=tmux
+# case below would then drive the REAL tmux server and leave a window in the
+# captain's live firstmate session - which is exactly what happened once during
+# this work, and what the duplicate-window guard then refused on the next run.
+# A spawn test must be unable to reach any live multiplexer.
 FB=$(fm_mux_fake_herdr "$TMP_ROOT")
+fm_mux_fake_tmux "$TMP_ROOT" >/dev/null
 fm_fake_exit0 "$FB" treehouse
 CALLS="$TMP_ROOT/calls"; export CALLS
 
@@ -60,6 +66,7 @@ run_spawn() {  # <home> <id> [extra args...]
     HERDR_PANE_CWD="$WT" \
     HERDR_TABS="$TMP_ROOT/tabs" \
     HERDR_WS_CREATED="$TMP_ROOT/created" \
+    TMUX_CWD="$WT" TMUX_SESSION=firstmate TMUX="fake,1,0" \
     CALLS="$CALLS" \
     PATH="$FB:$PATH" \
     "$ROOT/bin/fm-spawn.sh" "$id" "$PROJ" codex "$@" 2>&1
