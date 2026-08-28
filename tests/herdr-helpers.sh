@@ -113,6 +113,14 @@ case "$1 $2" in
       echo '{"error":{"code":"agent_not_found","message":"agent target not found"}}'; exit 1; }
     printf '{"id":"cli:agent:get","result":{"agent":{"agent_status":"%s"},"type":"agent_info"}}\n' "${AGENT_STATE:-idle}" ;;
   "agent prompt")
+    # An arbitrary failure the pattern list does not know about - a dropped
+    # socket, a CLI parse error, a changed error envelope. The point is that the
+    # EXIT STATUS is what makes it a failure, not the words.
+    if [ -n "${HERDR_PROMPT_OUT:-}" ] || [ -n "${HERDR_PROMPT_RC:-}" ]; then
+      [ -z "${HERDR_PROMPT_OUT:-}" ] || printf '%s
+' "$HERDR_PROMPT_OUT" >&2
+      exit "${HERDR_PROMPT_RC:-0}"
+    fi
     [ "${HERDR_BLOCKED:-0}" = 1 ] && {
       echo '{"error":{"code":"agent_blocked","message":"agent is blocked"}}'; exit 1; }
     # herdr accepts the submission and THEN waits for a state change; when none

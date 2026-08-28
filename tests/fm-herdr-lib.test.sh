@@ -113,6 +113,56 @@ test_read_returns_pane_text() {
   pass "read: returns the pane's text"
 }
 
+# THE DEFECT THIS FREEZES (Quarterdeck reject, attempt 1). fm_herdr_prompt ran
+# `herdr agent prompt ... || true`, discarding the exit status, then matched
+# stdout against a short list of known error strings. Anything unmatched fell
+# through to `*) return 0` - the function's own contract for "delivered AND
+# ACKNOWLEDGED". A stub exiting 7 with `socket closed: connection reset by peer`
+# reproduced RC=0, and fm-send exited 0 with no warning for a steer that was
+# never delivered.
+#
+# That is the worst failure this seam can have. The acknowledgment is the whole
+# reason herdr replaced blind keystrokes; reporting a network drop as a
+# confirmed steer is worse than tmux ever was, because tmux at least never
+# claimed to know. The exit STATUS is authoritative; the message only refines
+# which kind of failure it was.
+test_a_nonzero_exit_is_never_reported_as_acknowledged() {
+  local rc=0
+  HERDR_PROMPT_RC=7 HERDR_PROMPT_OUT='socket closed: connection reset by peer'     fm_herdr_prompt w9:p2 'git reset --hard origin/main' >/dev/null 2>&1 || rc=$?
+  if [ "$rc" = 0 ]; then
+    fail "herdr failed with exit 7 and the steer was reported as delivered AND acknowledged"
+  fi
+  if [ "$rc" = 4 ]; then
+    fail "a hard failure was reported as delivered-but-unconfirmed; nothing was delivered"
+  fi
+  expect_code 1 "$rc" "a hard delivery failure did not report failure"
+  pass "prompt: a nonzero herdr exit is a failure, whatever the message says"
+}
+
+# The mirror case: a zero exit that still carries an error envelope. Trusting
+# only the status would swap one blind spot for another.
+test_an_error_envelope_is_a_failure_even_on_exit_zero() {
+  local rc=0
+  HERDR_PROMPT_RC=0 HERDR_PROMPT_OUT='{"error":{"code":"bad_request","message":"nope"}}'     fm_herdr_prompt w9:p2 'hello' >/dev/null 2>&1 || rc=$?
+  expect_code 1 "$rc" "an error envelope on a zero exit was reported as success"
+  pass "prompt: an error envelope fails even when the process exited zero"
+}
+
+# A pane with no detected agent must NOT have the steer executed in it. herdr's
+# `pane run` submits a SHELL COMMAND LINE, so forwarding a raw steer there means
+# a crewmate instruction like `git reset --hard origin/main` runs as a command
+# in the worktree. The honest answer is that there is no agent to steer.
+test_an_undetected_agent_never_executes_the_steer_as_a_shell_command() {
+  reset_calls
+  local rc=0
+  HERDR_NO_AGENT=1 fm_herdr_prompt w9:p2 'git reset --hard origin/main' >/dev/null 2>&1 || rc=$?
+  if [ "$rc" = 0 ] || [ "$rc" = 4 ]; then
+    fail "a pane with no agent reported the steer as delivered (rc=$rc)"
+  fi
+  assert_no_grep "pane run" "$CALLS"     "the steer was forwarded to 'pane run' and would have EXECUTED as a shell command"
+  pass "prompt: with no agent detected, nothing is executed and the steer is refused"
+}
+
 # A failed create must be reported, not papered over with a target that does not
 # exist - that is how firstmate records a meta for a pane holding nothing.
 test_a_failed_create_is_reported() {
@@ -129,6 +179,9 @@ test_new_tab_is_scoped_and_returns_the_pane
 test_prompt_is_one_acknowledged_call
 test_blocked_agent_returns_its_own_code
 test_a_stall_is_its_own_code
+test_a_nonzero_exit_is_never_reported_as_acknowledged
+test_an_error_envelope_is_a_failure_even_on_exit_zero
+test_an_undetected_agent_never_executes_the_steer_as_a_shell_command
 test_is_busy_reads_a_real_state
 test_read_returns_pane_text
 test_a_failed_create_is_reported

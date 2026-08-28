@@ -123,21 +123,37 @@ test_an_unconfirmed_delivery_is_not_reported_as_a_failure() {
   pass "send: an unconfirmed delivery warns and is assumed sent, never re-sent"
 }
 
-# An UNDETECTED agent is also an unacknowledged delivery. herdr classifies an
-# agent a beat after launch, so a steer sent in that window falls back to blind
-# shell delivery - which is the tmux-grade guarantee, not the herdr one. It must
-# report code 4 like any other unconfirmed delivery: reporting 0 would make a
-# blind steer indistinguishable from a confirmed one, erasing the exact
-# distinction this driver exists to provide.
-test_an_undetected_agent_is_reported_as_unacknowledged() {
+# AN UNDETECTED AGENT IS NOT A DELIVERY AT ALL. This case previously blessed a
+# hazard: on agent_not_found the steer was forwarded to `herdr pane run`, whose
+# job is running SHELL COMMAND LINES. A crewmate instruction like
+# `git reset --hard origin/main` would therefore EXECUTE in the worktree, and
+# fm-send reported it as merely unacknowledged - exit 0, a warning, work
+# destroyed. Blind delivery into a TUI composer and blind delivery into a shell
+# are not the same risk, and the seam was treating them as one.
+#
+# The honest answer is that there is no agent to steer: refuse, say so, and let
+# the supervisor peek or relaunch.
+test_an_undetected_agent_is_refused_not_executed() {
   reset
   local out rc=0
-  out=$(HERDR_NO_AGENT=1 run "$SEND" fm-herdrcrew 'do the thing') || rc=$?
-  expect_code 0 "$rc" "a blind fallback delivery was reported as a failed steer"
-  assert_contains "$out" "no detected agent" "the warning does not say why delivery was blind"
-  assert_contains "$out" "did not acknowledge" "a blind delivery was reported as if it were acknowledged"
-  assert_grep "pane run" "$CALLS" "the steer was not delivered at all"
-  pass "send: an undetected agent gets a blind delivery, reported as unacknowledged"
+  out=$(HERDR_NO_AGENT=1 run "$SEND" fm-herdrcrew 'git reset --hard origin/main') || rc=$?
+  if [ "$rc" = 0 ]; then fail "a steer into a pane with no agent was reported as delivered"; fi
+  assert_contains "$out" "no agent" "the refusal does not say why nothing was delivered"
+  assert_no_grep "pane run" "$CALLS" \
+    "the steer was forwarded to 'pane run' and would have EXECUTED as a shell command"
+  pass "send: a pane with no detected agent is refused, never shell-executed"
+}
+
+# A hard herdr failure - a dropped socket, a CLI error, an envelope the pattern
+# list has never seen - must never surface as a delivered steer.
+test_a_hard_herdr_failure_is_reported_as_failure() {
+  reset
+  local out rc=0
+  out=$(HERDR_PROMPT_RC=7 HERDR_PROMPT_OUT='socket closed: connection reset by peer' \
+        run "$SEND" fm-herdrcrew 'do the thing') || rc=$?
+  if [ "$rc" = 0 ]; then fail "a failed steer exited 0; firstmate would believe it landed"; fi
+  assert_contains "$out" "not submitted" "the failure does not say the steer did not land"
+  pass "send: a hard herdr failure exits non-zero and says the steer did not land"
 }
 
 # --- fm-peek: reads back through the same driver ----------------------------
@@ -221,7 +237,8 @@ test_send_to_a_herdr_crewmate_is_acknowledged
 test_send_never_drops_the_acknowledgment
 test_send_to_a_blocked_agent_fails_loudly
 test_an_unconfirmed_delivery_is_not_reported_as_a_failure
-test_an_undetected_agent_is_reported_as_unacknowledged
+test_an_undetected_agent_is_refused_not_executed
+test_a_hard_herdr_failure_is_reported_as_failure
 test_peek_reads_a_herdr_crewmate
 test_a_tmux_crewmate_is_still_addressed_with_tmux
 test_a_pre_seam_meta_is_treated_as_tmux
