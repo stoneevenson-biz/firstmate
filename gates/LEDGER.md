@@ -28,10 +28,10 @@
 | gate-i5-intake-lens-degrade | green | Intake with no Fugu key + no codex degrades the lens to none loudly; intake still completes |
 | gate-l1-drain-instrumented | green | Wake drain appends a run-log JSON line and stamps STATE.md; FM_LOOP_LOG=0 disables; log failure never breaks the drain |
 | gate-l2-loop-audit-level | red | loop-audit scores the repo at level L2 or better (score >= 58) |
-| g-boot-digest | green | Boot-time reconciliation digest in captain context; fm-watch-arm --status read-only |
-| m0-ledger-shape | green | Gate harness loads: gates/ledger.json is an array, and a broken ledger fails loudly |
+| g-boot-digest | frozen | Boot-time reconciliation digest in captain context; fm-watch-arm --status read-only |
+| m0-ledger-shape | frozen | Gate harness loads: gates/ledger.json is an array, and a broken ledger fails loudly |
 | m1-hook-registered | red | bin/fm-boot-context.sh is registered as a real SessionStart hook |
-| m2-boot-emitter-is-read-only | green | A full boot through bin/fm-boot-context.sh performs zero writes |
-| m4-boot-budget-hostile | green | Boot stays inside its wall-clock budget with every helper wedged |
-| m5-digest-never-silent | green | A section that fails to build says so; failure is never silent |
-| gate-ci-declared-red | green | CI skips a test only when its gate is red AND declared accepted |
+| m2-boot-emitter-is-read-only | frozen | A full boot through bin/fm-boot-context.sh performs zero writes |
+| m4-boot-budget-hostile | frozen | Boot stays inside its wall-clock budget with every helper wedged |
+| m5-digest-never-silent | frozen | A section that fails to build says so; failure is never silent |
+| gate-ci-declared-red | frozen | CI skips a test only when its gate is red AND declared accepted |
