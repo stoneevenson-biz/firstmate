@@ -77,26 +77,40 @@ done
 # tmux or git is recorded rather than performed.
 PYDIR=$(dirname "$(command -v python3)")
 
-start=$(python3 -c 'import time; print(time.time())')
-out=$(fm_boot_hook_json | env \
-  PATH="$LOGBIN:$PYDIR:/usr/bin:/bin" \
-  FM_HOME="$HOME_DIR" \
-  FM_BOOT_FLEET_DIR="$FLEET" \
-  FM_BOOTSTRAP_BIN="$HANGING" \
-  ${BUDGET_ENV[@]+"${BUDGET_ENV[@]}"} \
-  FM_CTX_WINDOW=probe-session \
-  FIRSTMATE_ROLE=captain \
-  bash "$FM_BOOT_EMITTER"); code=$?
-elapsed=$(python3 -c "import sys; print('%.3f' % (__import__('time').time() - float(sys.argv[1])))" "$start")
+hostile_boot() {
+  fm_boot_hook_json | env \
+    PATH="$LOGBIN:$PYDIR:/usr/bin:/bin" \
+    FM_HOME="$HOME_DIR" \
+    FM_BOOT_FLEET_DIR="$FLEET" \
+    FM_BOOTSTRAP_BIN="$HANGING" \
+    ${BUDGET_ENV[@]+"${BUDGET_ENV[@]}"} \
+    FM_CTX_WINDOW=probe-session \
+    FIRSTMATE_ROLE=captain \
+    bash "$FM_BOOT_EMITTER"
+}
 
-expect_code 0 "$code" "the emitter must exit 0 even with every helper wedged"
+# 1. inside the budget - measured over REPEATED runs, judged on the WORST.
+#
+# A single sample is not evidence about a ceiling. The first version of this
+# gate took one, and hid a real defect: the budget clock started inside python,
+# so it never counted interpreter startup, and the ceiling was breached in about
+# 28% of runs while the gate passed most of the time. A gate that is 72% green
+# is worse than a red one, because it launders a defect as flake. The worst of
+# N runs is the honest statistic, and it makes the gate deterministic.
+RUNS=${FM_BOOT_M4_RUNS:-5}
+worst=0
+out=""
+code=0
+for _ in $(seq 1 "$RUNS"); do
+  start=$(python3 -c 'import time; print(time.time())')
+  out=$(hostile_boot); code=$?
+  elapsed=$(python3 -c "import sys; print('%.3f' % (__import__('time').time() - float(sys.argv[1])))" "$start")
+  expect_code 0 "$code" "the emitter must exit 0 even with every helper wedged"
+  worst=$(python3 -c "import sys; print('%.3f' % max(float(sys.argv[1]), float(sys.argv[2])))" "$worst" "$elapsed")
+done
 
-# 1. inside the budget
-python3 -c "
-import sys
-e = float(sys.argv[1])
-sys.exit(0 if e < 1.5 else 1)
-" "$elapsed" || fail "boot must finish inside the 1.5s ceiling with every helper wedged (took ${elapsed}s)"
+python3 -c "import sys; sys.exit(0 if float(sys.argv[1]) < 1.5 else 1)" "$worst" \
+  || fail "every boot must finish inside the 1.5s ceiling with every helper wedged (worst of $RUNS runs: ${worst}s)"
 
 # 2. valid envelope
 ctx=$(fm_boot_context "$out")
@@ -134,5 +148,47 @@ if [ -s "$EXECLOG" ]; then
     fi
   done
 fi
+
+# 7. one hostile peer must not be able to spend the whole output budget.
+#
+# Tier 1 is deliberately uncapped so that assertion 5 can hold, which means a
+# single unbounded field in a peer file is enough to breach the injection cap
+# without eliding anything. A 20,000-char id did exactly that. Fields are
+# bounded; peers are not.
+BIGFLEET="$TMP/bigfleet"
+fm_boot_make_fleet "$BIGFLEET" 3
+python3 - "$BIGFLEET/peer-3.json" <<'PY'
+import json, sys
+json.dump({"id": "x" * 20000, "in_flight": 1, "needs_decision": 0,
+           "watcher": "y" * 20000}, open(sys.argv[1], "w"))
+PY
+big=$(fm_boot_hook_json | env \
+  FM_HOME="$HOME_DIR" FM_BOOT_FLEET_DIR="$BIGFLEET" \
+  FM_CTX_WINDOW=probe-session FIRSTMATE_ROLE=captain \
+  bash "$FM_BOOT_EMITTER") || fail "a hostile peer field must not break the boot"
+big_ctx=$(fm_boot_context "$big")
+[ "${#big_ctx}" -lt 10000 ] \
+  || fail "one peer with an unbounded field must not breach the 10,000-char cap (got ${#big_ctx})"
+assert_contains "$big_ctx" "peer-1" "the other peers must still be listed"
+assert_contains "$big_ctx" "peer-2" "the other peers must still be listed"
+
+# 8. where the two rules genuinely collide, the choice is stated.
+#
+# At a fleet size far outside the design envelope, "a peer is never elided" and
+# "stay under the injection cap" cannot both hold. The peer rule wins - a
+# session that cannot see a peer has lost the thing this block exists for -
+# but the block must say so rather than quietly overrun.
+HUGE="$TMP/huge"
+fm_boot_make_fleet "$HUGE" 200
+huge=$(fm_boot_hook_json | env \
+  FM_HOME="$HOME_DIR" FM_BOOT_FLEET_DIR="$HUGE" \
+  FM_CTX_WINDOW=probe-session FIRSTMATE_ROLE=captain \
+  bash "$FM_BOOT_EMITTER") || fail "an oversized fleet must not break the boot"
+huge_ctx=$(fm_boot_context "$huge")
+listed=$(printf '%s\n' "$huge_ctx" | grep -c '^- peer-')
+[ "$listed" -eq 200 ] \
+  || fail "all 200 peers must be listed even past the cap (listed: $listed)"
+assert_contains "$huge_ctx" "injection cap - UNAVAILABLE" \
+  "overrunning the cap to keep every peer must be stated, never silent"
 
 pass "m4 boot budget holds under hostile helpers"

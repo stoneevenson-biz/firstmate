@@ -86,4 +86,38 @@ ctx3=$(fm_boot_context "$out3")
 assert_contains "$ctx3" "UNAVAILABLE" \
   "even a total failure must emit a marker rather than an empty or absent block"
 
+# --- a malformed budget must degrade, not detonate --------------------------
+#
+# The budget values are parsed at import time, outside the guard around the
+# build, so a bare float() there takes the whole hook down with a traceback and
+# zero stdout - a boot that lost all its context while looking like nothing ran.
+# An empty-valued env var is an entirely ordinary thing for a hook config to
+# produce, so this is a live failure mode and not a contrived one.
+for bad in "" "abc" "-"; do
+  bad_out=$(fm_boot_hook_json | env \
+    FM_HOME="$HOME_DIR" \
+    FM_BOOT_FLEET_DIR="$FLEET" \
+    FM_BOOT_TOTAL_BUDGET="$bad" \
+    FM_CTX_WINDOW=probe-session \
+    FIRSTMATE_ROLE=captain \
+    bash "$UNDER_TEST"); bad_code=$?
+  expect_code 0 "$bad_code" "a malformed budget ('$bad') must not take the hook down"
+  bad_ctx=$(fm_boot_context "$bad_out")
+  [ -n "$bad_ctx" ] || fail "a malformed budget ('$bad') must still inject a block"
+  assert_contains "$bad_ctx" "## Fleet" \
+    "a malformed budget ('$bad') must still render the fleet, on the default budget"
+done
+
+# A non-numeric value is a real misconfiguration and must be visible, not just
+# tolerated. An empty value is ordinary absence, so it defaults silently.
+noisy=$(fm_boot_hook_json | env \
+  FM_HOME="$HOME_DIR" FM_BOOT_FLEET_DIR="$FLEET" \
+  FM_BOOT_TOTAL_BUDGET=abc FM_CTX_WINDOW=probe-session FIRSTMATE_ROLE=captain \
+  bash "$UNDER_TEST")
+noisy_ctx=$(fm_boot_context "$noisy")
+assert_contains "$noisy_ctx" "UNAVAILABLE" \
+  "a non-numeric budget must leave a visible marker, not be silently ignored"
+assert_contains "$noisy_ctx" "FM_BOOT_TOTAL_BUDGET" \
+  "the marker must name the setting that was wrong"
+
 pass "m5 boot context never fails silently"

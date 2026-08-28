@@ -73,6 +73,13 @@
 # degradation marker instead of run. Adding a helper can therefore never breach
 # the ceiling.
 #
+# The deadline is only as honest as its start time, and the start is taken in
+# the BASH WRAPPER, before the interpreter exists. Starting it inside python
+# hides ~0.3s of bash, stdin and interpreter startup from the arithmetic, which
+# is enough to overrun a 1.5s ceiling in about a quarter of hostile runs while
+# the gate still passes most of the time. Measured worst of 15 wedged-helper
+# runs with the start where it belongs: 1.38s.
+#
 # The peer path costs ZERO execs, by construction: reading 12 peer files is
 # 0.66ms, while 12 subprocess execs is 373ms and can wedge indefinitely. Peers
 # are files, and files are read.
@@ -107,26 +114,87 @@ set -u
 FM="${FM_HOME:-$HOME/firstmate}"
 FM_BIN="${FM_BOOTSTRAP_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 
+# Start the clock HERE, in the wrapper, not inside python. The ceiling is a
+# wall-clock promise about the whole hook, and bash startup plus reading stdin
+# plus starting a python interpreter is a real 0.25-0.35s of it (more on a cold
+# page cache). A clock started after the interpreter is up cannot see that time,
+# so the budget would silently overspend by exactly the amount it failed to
+# measure - which is how this ceiling got breached in ~28% of hostile runs
+# before the start moved out here.
+#
+# $EPOCHREALTIME is a bash 5 builtin, so the common path costs nothing at all.
+# Some locales render it with a comma, hence the substitution. On bash 3.2 it is
+# unset and we pay one interpreter start to get an honest number, which is still
+# better than mis-measuring the budget.
+FM_BOOT_START="${EPOCHREALTIME:-}"
+FM_BOOT_START="${FM_BOOT_START/,/.}"
+if [ -z "$FM_BOOT_START" ]; then
+  FM_BOOT_START="$(python3 -c 'import time; print(time.time())' 2>/dev/null || echo 0)"
+fi
+
 # The hook payload arrives on stdin; the python program arrives on python's
 # stdin via the heredoc, so the payload is handed over in the environment.
-FM_HOOK_JSON="$(cat)" FM_BOOT_FM="$FM" FM_BOOTSTRAP_BIN="$FM_BIN" python3 - <<'PY'
+FM_HOOK_JSON="$(cat)" FM_BOOT_FM="$FM" FM_BOOTSTRAP_BIN="$FM_BIN" \
+FM_BOOT_START="$FM_BOOT_START" python3 - <<'PY'
 import os, sys, json, glob, time, subprocess
 
-START = time.time()
+# The wrapper's start time, so the ceiling covers interpreter startup too. A
+# missing or unusable value falls back to now, which only ever makes the budget
+# more generous - never less - so a broken clock cannot cause a hard failure.
+try:
+    START = float(os.environ.get("FM_BOOT_START") or 0) or time.time()
+except Exception:
+    START = time.time()
+if START > time.time() or START < time.time() - 60:
+    START = time.time()
 
 fm = os.environ["FM_BOOT_FM"]
 bindir = os.environ.get("FM_BOOTSTRAP_BIN", "")
 state = os.path.join(fm, "state")
 data = os.path.join(fm, "data")
 
-TOTAL_BUDGET = float(os.environ.get("FM_BOOT_TOTAL_BUDGET", "1.5"))
-HELPER_TIMEOUT = float(os.environ.get("FM_BOOT_HELPER_TIMEOUT", "0.6"))
-INJECT_CAP = int(os.environ.get("FM_CTX_INJECT_CAP", "10000"))
+# Config notes raised while parsing the environment, surfaced in the output.
+CONFIG_NOTES = []
+
+
+def env_num(name, default, cast):
+    """Parse a numeric env var, or keep the default and say so out loud.
+
+    These are parsed at import time, outside the try/except around main(), so a
+    bare float() here would take the whole hook down with a traceback and zero
+    stdout - a boot that lost all its context while looking like nothing ran.
+    That is precisely the failure this file exists to prevent, so a malformed or
+    empty value degrades to the default and leaves a visible note instead.
+    """
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return cast(raw)
+    except Exception:
+        CONFIG_NOTES.append("%s=%r is not a number; using %s" % (name, raw, default))
+        return default
+
+
+TOTAL_BUDGET = env_num("FM_BOOT_TOTAL_BUDGET", 1.5, float)
+HELPER_TIMEOUT = env_num("FM_BOOT_HELPER_TIMEOUT", 0.6, float)
+INJECT_CAP = env_num("FM_CTX_INJECT_CAP", 10000, int)
 FLEET_DIR = os.environ.get("FM_BOOT_FLEET_DIR") or os.path.join(
     os.path.expanduser("~"), ".local", "state", "firstmate", "fleet")
 
-# Wall-clock left for rendering and printing once the helper phase is done.
-RENDER_RESERVE = 0.2
+# A hostile or merely long field in a peer file must not be able to blow the
+# injection cap. Tier 1 is deliberately uncapped so that no peer is ever elided;
+# bounding each FIELD keeps that promise without letting one peer spend the
+# whole budget.
+PEER_ID_MAX = 40
+PEER_WATCHER_MAX = 24
+
+# Wall-clock held back from the helper phase. It covers more than rendering: a
+# timed-out helper still costs a kill and a wait, and that overhead lands after
+# the deadline arithmetic has already granted the slice. Measured worst case with
+# both helpers wedged is ~0.1s of overshoot beyond the granted slices, so this is
+# sized to absorb it and still leave real margin under the ceiling.
+RENDER_RESERVE = 0.3
 # A helper granted less than this is not worth starting.
 MIN_HELPER_SLICE = 0.05
 # A peer file older than this renders as stale. Six watcher polls at 15s.
@@ -333,10 +401,10 @@ def peer_line(path):
     try:
         age = time.time() - os.path.getmtime(path)
         d = json.loads(read(path))
-        pid_ = str(d.get("id") or name)
+        pid_ = clip(str(d.get("id") or name), PEER_ID_MAX)
         inflight = int(d.get("in_flight") or 0)
         decisions = int(d.get("needs_decision") or 0)
-        watcher = str(d.get("watcher") or "unknown")
+        watcher = clip(str(d.get("watcher") or "unknown"), PEER_WATCHER_MAX)
         if age > PEER_STALE_AFTER:
             watcher = "stale %s" % human_age(age)
         return "- %-14s [%d in flight, %d need a decision] watcher %s" % (
@@ -345,7 +413,13 @@ def peer_line(path):
         # Exactly one marker line. The peer is shown, never dropped: a missing
         # peer would silently shrink the fleet, which is the one thing Tier 1
         # must never do.
-        return "- %-14s [unreadable]" % name
+        return "- %-14s [unreadable]" % clip(name, PEER_ID_MAX)
+
+
+def clip(text, limit):
+    """Bound one rendered field. Peers are never elided; fields are."""
+    text = " ".join(str(text).split())
+    return text if len(text) <= limit else text[: limit - 3] + "..."
 
 
 def human_age(seconds):
@@ -504,6 +578,10 @@ def main():
 You are a firstmate. Home: %s (%s). Manual: %s/AGENTS.md""" % (
         fm, "steering" if steering else "observing", fm)]
 
+    # A misconfigured budget still boots, but never quietly.
+    if CONFIG_NOTES:
+        blocks.append("## boot config - UNAVAILABLE (%s)" % "; ".join(CONFIG_NOTES))
+
     # Tier 1. Never elided, never capped.
     blocks.append(section("fleet", build_fleet, own_summary))
 
@@ -522,6 +600,21 @@ You are a firstmate. Home: %s (%s). Manual: %s/AGENTS.md""" % (
                       "this one is observing. Ask it rather than acting.")
 
     out = "\n\n".join(blocks)
+
+    # Two rules collide once the fleet is absurdly large: a peer is NEVER
+    # elided, and the block stays under the injection cap. Below ~145 peers
+    # there is no conflict at all - 12 peers costs ~1,000 chars, and Tier 2 is
+    # dropped long before Tier 1 is at risk. Past that they genuinely cannot
+    # both hold, and the peer rule wins: a session that cannot see a peer has
+    # lost the one thing this block exists to give it, whereas an oversized
+    # block is a degraded read, not a blind one. What must not happen is
+    # choosing silently, so the choice is stated in the output.
+    if len(out) > INJECT_CAP:
+        instances = sum(1 for line in out.splitlines() if line.startswith("- "))
+        out += ("\n\n## injection cap - UNAVAILABLE (a fleet of %d needs %d chars against a "
+                "cap of %d; every instance is listed anyway - a peer is never elided)" % (
+                    instances, len(out), INJECT_CAP))
+
     print(json.dumps({"hookSpecificOutput": {
         "hookEventName": "SessionStart", "additionalContext": out}}))
 
