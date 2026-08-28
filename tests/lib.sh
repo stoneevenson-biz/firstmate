@@ -31,6 +31,18 @@ FM_TEST_LIB_SOURCED=1
 # shellcheck disable=SC2034
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# --- multiplexer driver -----------------------------------------------------
+#
+# Every suite here drives a FAKE multiplexer. Since the seam now defaults to
+# herdr whenever a herdr server is REACHABLE (the captain's standing rule), an
+# unpinned test run on a developer machine with herdr up would leave the fakes
+# untouched and go create real tabs in his real workspaces. Pin the driver to
+# tmux so a suite's fakes are actually the thing under test, and so no test can
+# reach the live fleet. Suites exercising the herdr driver set FM_MUX themselves
+# after sourcing this file; the live gates set it per case.
+: "${FM_MUX:=tmux}"
+export FM_MUX
+
 # --- reporters --------------------------------------------------------------
 
 fail() {

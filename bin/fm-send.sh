@@ -2,10 +2,25 @@
 # Send one line of literal text to a crewmate window, then Enter.
 # Usage: fm-send.sh <window> <text...>
 #   <window> may be a bare firstmate window name (fm-xyz), resolved through
-#   this home's state/<id>.meta, or explicit session:window.
+#   this home's state/<id>.meta, or an explicit opaque multiplexer target
+#   (session:window under tmux, a pane id under herdr). A RAW target carries no
+#   meta, so it is read as a tmux session:window unless FM_MUX says otherwise.
 # Special keys instead of text: fm-send.sh <window> --key Escape   (or Enter, C-c, ...)
 #
-# Text submission is verified: the line is typed ONCE, then Enter is sent and
+# Delivery goes through the multiplexer seam (bin/fm-mux-lib.sh), and through
+# the driver that MINTED the target - recorded as mux= in the task's meta by
+# fm-spawn - never whichever driver happens to resolve at this moment.
+#
+# The two drivers reach the same guarantee by different roads, and the gap
+# between them is the whole reason the seam exists:
+#   tmux   has no acknowledgment channel, so the text is typed once and Enter is
+#          retried until the composer clears (the verified-submit dance below).
+#   herdr  classifies agent lifecycle natively and `agent prompt --wait` returns
+#          only once the agent has actually consumed the prompt. One acknowledged
+#          call replaces the whole dance - and a blocked agent sitting at an
+#          approval dialog is REFUSED rather than typed over.
+#
+# The tmux path's verified submission, unchanged: the line is typed ONCE, then Enter is sent and
 # retried (Enter only, never retyped) until the composer clears. If a swallowed
 # Enter is positively confirmed (the text is still sitting in the composer after
 # all retries), fm-send exits NON-ZERO so the caller knows the steer did not land
@@ -27,32 +42,35 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 
 # shellcheck source=bin/fm-tmux-lib.sh
 . "$SCRIPT_DIR/fm-tmux-lib.sh"
+# shellcheck source=bin/fm-mux-lib.sh
+. "$SCRIPT_DIR/fm-mux-lib.sh"
 
 "$SCRIPT_DIR/fm-guard.sh" || true
 
-resolve() {
-  case "$1" in
-    *:*) echo "$1" ;;
-    fm-*)
-      meta="$STATE/${1#fm-}.meta"
-      if [ ! -f "$meta" ]; then
-        echo "error: no metadata for $1 in $STATE; pass session:window to target a window outside this firstmate home" >&2
-        exit 1
-      fi
-      window=$(grep '^window=' "$meta" 2>/dev/null | tail -1 | cut -d= -f2- || true)
-      [ -n "$window" ] || { echo "error: no window recorded in $meta" >&2; exit 1; }
-      echo "$window"
-      ;;
-    *) tmux list-windows -a -F '#{session_name}:#{window_name}' | grep -m1 ":$1\$" \
-         || { echo "error: no window named $1" >&2; exit 1; } ;;
-  esac
-}
-
-T=$(resolve "$1")
+fm_mux_resolve "$1" "$STATE" || exit 1
+T=$FM_MUX_TARGET
+DRV=$(fm_mux_driver)
 shift
 
 if [ "${1:-}" = "--key" ]; then
-  tmux send-keys -t "$T" "$2"
+  fm_mux_send_key "$T" "$2"
+elif [ "$DRV" != tmux ]; then
+  # Acknowledged delivery. There is nothing to verify afterwards and nothing to
+  # settle for: the call does not return until the agent has taken the prompt,
+  # so the failure modes the tmux path has to infer are reported here directly.
+  rc=0
+  fm_mux_send "$T" "$*" || rc=$?
+  case "$rc" in
+    0) : ;;
+    3) echo "error: $T is at an approval dialog; the steer was refused, not delivered" >&2; exit 1 ;;
+    4)
+      # Delivered, but the acknowledgment never came. Same lenient rule the tmux
+      # path uses: only a POSITIVELY CONFIRMED swallow is an error. Reporting
+      # failure here would make the caller re-send a steer that already landed.
+      echo "warning: $T took the steer but did not acknowledge it; assuming delivered, not re-sending" >&2
+      ;;
+    *) echo "error: text not submitted to $T ($DRV delivery failed)" >&2; exit 1 ;;
+  esac
 else
   # Slash commands open a completion popup in some TUIs (verified on codex);
   # submitting too fast selects nothing. Give popups time to settle.

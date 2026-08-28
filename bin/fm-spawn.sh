@@ -14,6 +14,18 @@
 #   default-branch commit when safe; skipped syncs warn and launch unchanged.
 #   Ship/scout spawns refuse to launch after treehouse get unless the resolved pane
 #   path is a real git worktree root distinct from the primary project checkout.
+#   --name <work> supplies the WORK half of the pane name; the project is
+#   prefixed automatically, giving <project>-<work> under 28 chars
+#   (afs-resource-registry, mac-config-cutover-guard). Absent, the work half is
+#   derived from the task id with its random suffix stripped. The id is NOT the
+#   name - it lives in state/<id>.meta, which is where an id belongs.
+#
+# PANES ARE CREATED THROUGH THE MULTIPLEXER SEAM (bin/fm-mux-lib.sh), not by
+# calling tmux directly. The captain's standing rule is that agents are spawned
+# in herdr, so with no FM_MUX set a reachable herdr server gets the crewmate as
+# a named tab in that project's workspace; FM_MUX=tmux is the explicit fallback
+# for headless and non-herdr contexts and reproduces the old behaviour. When
+# herdr is unreachable the seam degrades to tmux and says so on stderr.
 # Batch dispatch: pass one or more `id=repo` pairs instead of a single <id> <project>, e.g.
 #     fm-spawn.sh fix-a-k3=projects/foo add-b-q7=projects/bar [--scout]
 #   Each pair re-execs this script in single-task mode, so the single path stays the only
@@ -27,7 +39,7 @@
 #     __PIEXT__    absolute path to state/<task-id>.pi-ext.ts (pi turn-end extension,
 #                  written by this script; outside the worktree to avoid pi's trust gate)
 # Per-harness turn-end hooks are installed automatically; some live outside the worktree.
-# On success prints: spawned <id> harness=<name> kind=<ship|scout|secondmate> mode=<mode> yolo=<on|off> window=<session:window> worktree=<path>
+# On success prints: spawned <id> harness=<name> kind=<ship|scout|secondmate> mode=<mode> yolo=<on|off> mux=<driver> name=<work> window=<target> worktree=<path>
 # mode/yolo are resolved per-project from data/projects.md for ship/scout tasks;
 # secondmate spawns record mode=secondmate, yolo=off, home=, and projects=.
 set -eu
@@ -43,18 +55,26 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 . "$SCRIPT_DIR/fm-ff-lib.sh"
 # shellcheck source=bin/fm-tmux-lib.sh
 . "$SCRIPT_DIR/fm-tmux-lib.sh"
+# shellcheck source=bin/fm-mux-lib.sh
+. "$SCRIPT_DIR/fm-mux-lib.sh"
 # Skip the watcher guard when re-exec'd for one pair of a batch (FM_SPAWN_NO_GUARD is
 # set by the batch loop below), so the guard runs once for the batch, not once per pair.
 [ -n "${FM_SPAWN_NO_GUARD:-}" ] || "$FM_ROOT/bin/fm-guard.sh" || true
 KIND=ship
+WORK_NAME=
 POS=()
+want_name=0
 for a in "$@"; do
+  if [ "$want_name" = 1 ]; then WORK_NAME=$a; want_name=0; continue; fi
   case "$a" in
     --scout) KIND=scout ;;
     --secondmate) KIND=secondmate ;;
+    --name) want_name=1 ;;
+    --name=*) WORK_NAME=${a#--name=} ;;
     *) POS+=("$a") ;;
   esac
 done
+[ "$want_name" = 0 ] || { echo "error: --name needs a value" >&2; exit 2; }
 
 # Batch dispatch (see header): when the first positional is an `id=repo` pair, treat every
 # positional as one and spawn each by re-execing this script in single-task mode. We use
@@ -65,6 +85,10 @@ done
 idpart=${POS[0]:-}
 idpart=${idpart%%=*}
 if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in */*) false ;; *) true ;; esac; then
+  if [ -n "$WORK_NAME" ]; then
+    echo "error: --name applies to one pane; batch dispatch derives each pane's name from its own task id" >&2
+    exit 2
+  fi
   rc=0
   for pair in "${POS[@]}"; do
     case "$pair" in
@@ -351,36 +375,64 @@ if [ "$KIND" = ship ]; then
   fm_intake_require_proceed "$STATE" "$ID" fm-spawn
 fi
 
-# Same session when firstmate already runs inside tmux; dedicated session otherwise.
-if [ -n "${TMUX:-}" ]; then
-  SES=$(tmux display-message -p '#S')
-else
-  tmux has-session -t firstmate 2>/dev/null || tmux new-session -d -s firstmate
-  SES=firstmate
+# --- the multiplexer seam ---------------------------------------------------
+#
+# Everything below addresses panes through bin/fm-mux-lib.sh rather than tmux
+# directly, so the captain's standing rule - agents are spawned in herdr - is
+# the default without the rest of this script knowing which multiplexer it is
+# talking to. The seam resolves the driver and announces a fallback loudly.
+MUX=$(fm_mux_driver)
+
+# The scope is a tmux session or a herdr workspace - opaque either way. Under
+# herdr it is resolved EXPLICITLY from the project name, never from whichever
+# workspace happens to be focused, and created when absent (AGENTS.md: one
+# workspace per project).
+SCOPE_LABEL=$(basename "$PROJ_ABS")
+
+# The pane is named <project>-<work>, never for the task id: herdr addresses
+# agents by name, so `afs-resources-r7` is not merely untidy, it is unreadable
+# at a glance. Absent an explicit --name, the work half is derived from the id
+# by dropping its random suffix (`fix-login-k3` -> `fix-login`). The id itself
+# stays in state/<id>.meta, which is where an id belongs.
+if [ -z "$WORK_NAME" ]; then
+  WORK_NAME=$(printf '%s' "$ID" | sed -E 's/-[a-z0-9]{1,3}$//')
 fi
+PANE_NAME=$(fm_mux_pane_name "$SCOPE_LABEL" "$WORK_NAME")
+[ -n "$PANE_NAME" ] || PANE_NAME=$(fm_mux_pane_name "$SCOPE_LABEL" "$ID")
+if ! fm_mux_name_valid "$PANE_NAME"; then
+  echo "error: '$SCOPE_LABEL' + '$WORK_NAME' does not reduce to a usable pane name; pass --name <kebab-work-name>" >&2
+  exit 2
+fi
+SCOPE=$(fm_mux_scope "$SCOPE_LABEL" "$PROJ_ABS") || {
+  echo "error: could not resolve a $MUX scope for '$SCOPE_LABEL'" >&2; exit 1; }
 
 W="fm-$ID"
-T="$SES:$W"
-if tmux list-windows -t "$SES" -F '#{window_name}' | grep -qx "$W"; then
-  echo "error: window $T already exists" >&2
+if fm_mux_window_exists "$SCOPE" "$W" "$PANE_NAME"; then
+  echo "error: a $MUX window for $ID already exists in $SCOPE ($W / $PANE_NAME)" >&2
   exit 1
 fi
 
-tmux new-window -d -t "$SES:" -n "$W" -c "$PROJ_ABS"
+T=$(fm_mux_new_window "$SCOPE" "$W" "$PROJ_ABS" "$PANE_NAME") || {
+  echo "error: could not create a $MUX window for $ID in $SCOPE" >&2; exit 1; }
+[ -n "$T" ] || { echo "error: $MUX returned no target for $ID" >&2; exit 1; }
+
 if [ "$KIND" != secondmate ]; then
-  tmux send-keys -t "$T" 'treehouse get' Enter
+  fm_mux_run "$T" 'treehouse get'
 
   # Wait for the treehouse subshell: the pane's cwd moves from the project to the worktree.
+  # Compare against the resolved project path too - herdr reports a realpath, so
+  # a symlinked project dir would otherwise read as "already moved" instantly.
+  PROJ_REAL=$(cd "$PROJ_ABS" 2>/dev/null && pwd -P) || PROJ_REAL=$PROJ_ABS
   for _ in $(seq 1 60); do
-    p=$(tmux display-message -p -t "$T" '#{pane_current_path}' 2>/dev/null || true)
-    if [ -n "$p" ] && [ "$p" != "$PROJ_ABS" ]; then
+    p=$(fm_mux_cwd "$T" 2>/dev/null || true)
+    if [ -n "$p" ] && [ "$p" != "$PROJ_ABS" ] && [ "$p" != "$PROJ_REAL" ]; then
       WT="$p"
       break
     fi
     sleep 1
   done
   if [ -z "$WT" ]; then
-    echo "error: treehouse get did not enter a worktree within 60s; inspect window $T" >&2
+    echo "error: treehouse get did not enter a worktree within 60s; inspect $MUX pane $T" >&2
     exit 1
   fi
 
@@ -484,6 +536,13 @@ mkdir -p "$STATE"
   echo "worktree=$WT"
   echo "project=$PROJ_ABS"
   echo "harness=$HARNESS"
+  # The multiplexer that MINTED this target, and the pane name it is shown and
+  # addressed by. window= is opaque - `session:window` under tmux, a pane id
+  # under herdr - so every later steer or peek must use the driver recorded
+  # here, not whatever driver happens to resolve at that moment. Without it a
+  # crewmate spawned into herdr becomes unsteerable the moment the server blips.
+  echo "mux=$MUX"
+  echo "name=$PANE_NAME"
   echo "kind=$KIND"
   echo "mode=$MODE"
   echo "yolo=$YOLO"
@@ -516,22 +575,31 @@ else
 fi
 # Never type a launch command into a shell that has not proven it is ready.
 # Inferring readiness from a cwd change is what left two secondmates as dead
-# bare shells on 2026-08-26 (see fm_tmux_wait_shell_ready).
-if [ "${FM_SKIP_SHELL_READY:-0}" != 1 ] && ! fm_tmux_wait_shell_ready "$T"; then
+# bare shells on 2026-08-26 (see fm_tmux_wait_shell_ready). Both drivers demand
+# the same positive proof: a marker echoed back on a line of its own.
+if [ "${FM_SKIP_SHELL_READY:-0}" != 1 ] && ! fm_mux_wait_ready "$T"; then
   echo "error: pane $T never reached a ready shell prompt; refusing to launch" >&2
   echo "  typing the launch command into a busy shell is what leaves a dead, un-launched pane" >&2
   exit 1
 fi
-tmux send-keys -t "$T" -l "$LAUNCH"
-sleep 0.3
-tmux send-keys -t "$T" Enter
+fm_mux_run_launch "$T" "$LAUNCH"
 
 # The launch either started an agent or landed in the shell as text. Say which.
 sleep "${FM_LAUNCH_VERIFY_SLEEP:-1.5}"
-if fm_tmux_launch_failed "$T"; then
+if fm_mux_launch_failed "$T"; then
   echo "error: launch did not start an agent in $T - the pane shows a shell error" >&2
   echo "  the command was typed as text instead of starting the harness; pane left for inspection" >&2
   exit 1
+fi
+
+# Name the pane for the work now the agent is up. The tab label is the half the
+# captain reads and it is checked; the agent address is applied on the same call
+# and may lag by a beat while herdr classifies the pane, which is not fatal - a
+# later steer resolves the pane id from meta either way.
+if ! fm_mux_label "$T" "$PANE_NAME"; then
+  case $? in
+    2) echo "warning: $MUX would not name pane $T '$PANE_NAME'; it will show unlabelled" >&2 ;;
+  esac
 fi
 
 # A secondmate watches its OWN tree's context: start a context-watch scoped to its
@@ -551,4 +619,4 @@ if [ "$KIND" = secondmate ] && [ "${FM_SECONDMATE_NO_WATCH:-}" != 1 ]; then
   fi
 fi
 
-echo "spawned $ID harness=$HARNESS kind=$KIND mode=$MODE yolo=$YOLO window=$T worktree=$WT"
+echo "spawned $ID harness=$HARNESS kind=$KIND mode=$MODE yolo=$YOLO mux=$MUX name=$PANE_NAME window=$T worktree=$WT"

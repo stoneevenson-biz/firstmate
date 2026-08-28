@@ -33,7 +33,8 @@ SH
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$CALLS"
 case "$1 $2" in
-  "tab create")   printf 'created tab w9:t7\n' ;;
+  "session list") printf 'name status\ndefault %s\n' "${HERDR_SERVER:-running}" ;;
+  "tab create")   printf '{"result":{"root_pane":{"pane_id":"w9:p7","tab_id":"w9:t7"},"tab":{"tab_id":"w9:t7"}}}\n' ;;
   "agent prompt") [ "${HERDR_BLOCKED:-0}" = 1 ] && { echo "error: agent_blocked" >&2; exit 1; }; exit "${HERDR_RC:-0}" ;;
   "agent read")   cat "${PANE_FILE:-/dev/null}" 2>/dev/null ;;
   "agent get")    printf 'name: crew\nstatus: %s\n' "${AGENT_STATE:-idle}" ;;
@@ -54,23 +55,22 @@ reset_calls() { : > "$CALLS"; }
 test_explicit_fm_mux_wins() {
   local got
   got=$(FM_MUX=tmux HERDR_ENV=1 fm_mux_driver)
-  if [ "$got" = tmux ]; then
-    pass "FM_MUX=tmux overrides an in-herdr environment"
-  else
-    fail "FM_MUX ignored: got '$got'"
-  fi
+  [ "$got" = tmux ] && pass "FM_MUX=tmux overrides an in-herdr environment" \
+                    || fail "FM_MUX ignored: got '$got'"
 }
 
-# Absent an explicit choice, only a genuine in-herdr environment selects herdr.
-test_autodetect_requires_herdr_env() {
+# Absent an explicit choice the driver is herdr, because the captain's standing
+# rule is that agents are spawned in herdr. The predicate is REACHABILITY, not
+# HERDR_ENV: that variable is unset in firstmate's own process while a server is
+# running and the captain is watching it, so keying off it put every crewmate in
+# an invisible tmux session. Selection is gated in full by tests/fm-mux-h1.
+test_autodetect_follows_reachability_not_herdr_env() {
   local a b
-  a=$(FM_MUX="" HERDR_ENV=1 fm_mux_driver)
-  b=$(FM_MUX="" HERDR_ENV="" fm_mux_driver)
-  if [ "$a" = herdr ] && [ "$b" = tmux ]; then
-    pass "autodetect: herdr inside herdr, tmux otherwise"
-  else
-    fail "autodetect wrong: in-herdr='$a' outside='$b'"
-  fi
+  a=$(FM_MUX="" HERDR_ENV="" HERDR_SERVER=running fm_mux_driver 2>/dev/null)
+  b=$(FM_MUX="" HERDR_ENV=1 HERDR_SERVER=stopped fm_mux_driver 2>/dev/null)
+  if [ "$a" != herdr ]; then fail "a reachable server with HERDR_ENV unset gave '$a', want herdr"; fi
+  if [ "$b" != tmux ];  then fail "an unreachable server with HERDR_ENV=1 gave '$b', want tmux"; fi
+  pass "autodetect: keys off a reachable server, not HERDR_ENV"
 }
 
 # An unknown driver must fail loudly rather than silently doing nothing.
@@ -89,9 +89,11 @@ test_unknown_driver_refuses() {
 test_new_window_returns_opaque_target() {
   local t h
   t=$(FM_MUX=tmux  fm_mux_new_window firstmate fm-x /tmp)
-  h=$(FM_MUX=herdr fm_mux_new_window firstmate fm-x /tmp)
+  h=$(FM_MUX=herdr fm_mux_new_window w9 fm-x /tmp proj-work)
   [ "$t" = "firstmate:fm-x" ] || fail "tmux target wrong: '$t'"
-  [ "$h" = "w9:t7" ]          || fail "herdr target wrong: '$h'"
+  # herdr mints the PANE id: that is what agent prompt/read/rename address, and
+  # what a later steer must be able to pass back verbatim.
+  [ "$h" = "w9:p7" ]          || fail "herdr target wrong: '$h'"
   pass "each driver mints its own opaque target"
 }
 
@@ -104,8 +106,8 @@ test_send_delivers_and_submits() {
   grep -q -- "-l hello" "$CALLS" || fail "tmux send did not type the text"
   grep -q "Enter"       "$CALLS" || fail "tmux send did not submit"
   reset_calls
-  FM_MUX=herdr fm_mux_send w9:t7 "hello"
-  grep -q "agent prompt w9:t7 hello --wait" "$CALLS" \
+  FM_MUX=herdr fm_mux_send w9:p7 "hello"
+  grep -q "agent prompt w9:p7 hello --wait" "$CALLS" \
     || fail "herdr send did not use the acknowledged prompt path"
   pass "both drivers deliver AND submit; herdr does it in one acknowledged call"
 }
@@ -114,12 +116,9 @@ test_send_delivers_and_submits() {
 # agent_blocked; typing into an approval dialog is how a prompt gets eaten.
 test_blocked_agent_is_refused_distinctly() {
   local rc
-  HERDR_BLOCKED=1 FM_MUX=herdr fm_mux_send w9:t7 "hello" 2>/dev/null; rc=$?
-  if [ "$rc" = 3 ]; then
-    pass "blocked agent returns a distinct code, not a generic failure"
-  else
-    fail "blocked agent returned $rc, expected 3"
-  fi
+  HERDR_BLOCKED=1 FM_MUX=herdr fm_mux_send w9:p7 "hello" 2>/dev/null; rc=$?
+  [ "$rc" = 3 ] && pass "blocked agent returns a distinct code, not a generic failure" \
+                || fail "blocked agent returned $rc, expected 3"
 }
 
 # is_busy is where the drivers genuinely differ: tmux pattern-matches rendered
@@ -130,8 +129,8 @@ test_is_busy_agrees_across_drivers() {
   FM_MUX=tmux fm_mux_is_busy firstmate:fm-x || fail "tmux: missed a busy pane"
   printf 'all done\n' > "$PANE_FILE"
   FM_MUX=tmux fm_mux_is_busy firstmate:fm-x && fail "tmux: called an idle pane busy"
-  AGENT_STATE=working FM_MUX=herdr fm_mux_is_busy w9:t7 || fail "herdr: missed working"
-  AGENT_STATE=idle    FM_MUX=herdr fm_mux_is_busy w9:t7 && fail "herdr: called idle busy"
+  AGENT_STATE=working FM_MUX=herdr fm_mux_is_busy w9:p7 || fail "herdr: missed working"
+  AGENT_STATE=idle    FM_MUX=herdr fm_mux_is_busy w9:p7 && fail "herdr: called idle busy"
   pass "is_busy agrees across drivers (regex vs real state)"
 }
 
@@ -139,7 +138,7 @@ test_read_returns_pane_text_under_both() {
   PANE_FILE="$TMP_ROOT/pane2.txt"; export PANE_FILE
   printf 'line-one\nline-two\n' > "$PANE_FILE"
   FM_MUX=tmux  fm_mux_read firstmate:fm-x | grep -q line-two || fail "tmux read lost content"
-  FM_MUX=herdr fm_mux_read w9:t7          | grep -q line-two || fail "herdr read lost content"
+  FM_MUX=herdr fm_mux_read w9:p7          | grep -q line-two || fail "herdr read lost content"
   pass "read returns pane text under both drivers"
 }
 
@@ -155,7 +154,7 @@ test_new_window_failure_is_reported() {
 }
 
 test_explicit_fm_mux_wins
-test_autodetect_requires_herdr_env
+test_autodetect_follows_reachability_not_herdr_env
 test_unknown_driver_refuses
 test_new_window_returns_opaque_target
 test_send_delivers_and_submits
