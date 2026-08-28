@@ -32,6 +32,14 @@ FM_TEST_ALLOW_LIVE_HERDR=1
 . "$ROOT/bin/fm-herdr.sh"
 
 
+# A live gate that quietly skips is indistinguishable from a proven one once the
+# result reaches a ledger. FM_TEST_REQUIRE_LIVE=1 makes the skip a FAILURE, so a
+# verifier can demand real proof rather than accepting a green that means
+# "nothing ran here". CI has no herdr server and does not set it.
+if [ "${FM_TEST_REQUIRE_LIVE:-0}" = 1 ] && ! fm_herdr_up; then
+  printf 'not ok - FM_TEST_REQUIRE_LIVE=1 but no herdr server is reachable; this gate cannot be proven here\n' >&2
+  exit 1
+fi
 if ! fm_herdr_up; then
   printf 'SKIP - GATE h5 needs a live herdr server; none is reachable here.\n' >&2
   printf '  The herdr direction is NOT proven by this run. Run it on a machine\n' >&2
@@ -158,6 +166,9 @@ test_live_a_slashed_name_is_rejected_by_herdr() {
 # harness is available; set FM_HERDR_LIVE_AGENT=0 to skip it deliberately.
 test_live_send_is_actually_consumed() {
   if [ "${FM_HERDR_LIVE_AGENT:-1}" = 0 ] || ! command -v claude >/dev/null 2>&1; then
+    if [ "${FM_TEST_REQUIRE_LIVE:-0}" = 1 ]; then
+      fail "FM_TEST_REQUIRE_LIVE=1 but no agent harness is available; the acknowledged send cannot be proven here"
+    fi
     printf 'SKIP - the acknowledged-send case needs a real agent harness in the pane\n' >&2
     return 0
   fi

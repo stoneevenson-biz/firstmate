@@ -121,11 +121,17 @@ test_the_drain_keeps_read_send_and_close_reachable() {
     *"fm_tmux_submit_core"*) : ;;
     *) fail "fm-send can no longer submit to a tmux pane; steering a draining crewmate would break" ;;
   esac
-  # Close is teardown's, and it was deliberately never migrated - which is what
-  # keeps it working for the drain.
-  case "$(grep -vE '^[[:space:]]*#' "$ROOT/bin/fm-teardown.sh")" in
+  # Close now routes through fm_herdr_close_pane, which keeps the tmux branch for
+  # a draining window. Assert the branch still EXISTS where it moved to, and that
+  # teardown actually reaches it - checking only that teardown mentions
+  # `tmux kill-window` was what let a herdr tab leak while the gate stayed green.
+  case "$(grep -vE '^[[:space:]]*#' "$ROOT/bin/fm-herdr.sh")" in
     *"tmux kill-window"*) : ;;
-    *) fail "teardown can no longer close a tmux window; draining work would be stranded" ;;
+    *) fail "the drain lost its tmux close; draining work would be stranded" ;;
+  esac
+  case "$(grep -vE '^[[:space:]]*#' "$ROOT/bin/fm-teardown.sh")" in
+    *"fm_herdr_close_pane"*) : ;;
+    *) fail "teardown does not close through the surface; a herdr tab would leak" ;;
   esac
   pass "drain: read, send and close all remain reachable for a draining window"
 }

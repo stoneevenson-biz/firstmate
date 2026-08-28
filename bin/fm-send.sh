@@ -56,6 +56,11 @@ elif [ "$FM_HERDR_DRAIN" = 0 ]; then
   case "$rc" in
     0) : ;;
     3) echo "error: $T is at an approval dialog; the steer was refused, not delivered" >&2; exit 1 ;;
+    5)
+      # No agent in that pane. Nothing was delivered and, deliberately, nothing
+      # was executed: forwarding a steer to a shell would run it.
+      echo "error: no agent in $T; the steer was NOT delivered (and NOT executed)" >&2
+      exit 1 ;;
     4)
       # Delivered, but the acknowledgment never came. Same lenient rule the
       # drain path uses: only a POSITIVELY CONFIRMED swallow is an error.

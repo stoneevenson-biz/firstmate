@@ -35,3 +35,4 @@
 | gate-h5-herdr-live-roundtrip | green | LIVE herdr: workspace, tab, shell readiness, run/read, naming accepted by the binary, acknowledged send, close |
 | gate-h6-drain-open-nothing-new-on-tmux | green | Cutover: nothing new is created on tmux, and the drain stays open for pre-cutover panes |
 | gate-h7-drain-live-roundtrip | green | LIVE drain: a real pre-cutover tmux pane is still readable, steerable and closable |
+| gate-h8-teardown-closes-the-pane | green | Teardown closes the pane on the surface that created it, and reports a close it could not do |

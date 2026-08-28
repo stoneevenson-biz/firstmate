@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Tear down a finished task: return the treehouse worktree or retire a
-# secondmate home, kill the tmux window, clear volatile state, refresh/prune
+# secondmate home, close the pane on the surface that created it (herdr, or tmux
+# for a window still draining), clear volatile state, refresh/prune
 # the project's clone for PR-based ship tasks, then print a backlog-refresh
 # reminder.
 # REFUSES if the worktree holds work not on any remote, because treehouse return
@@ -32,6 +33,10 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 SECONDMATE_REG="$DATA/secondmates.md"
 SUB_HOME_MARKER=".fm-secondmate-home"
+# Closing a pane goes through the surface that created it (herdr for anything
+# spawned after the cutover, tmux for a window still draining).
+# shellcheck source=bin/fm-herdr.sh
+. "$SCRIPT_DIR/fm-herdr.sh"
 # shellcheck source=bin/fm-tasks-axi-lib.sh
 . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
 "$FM_ROOT/bin/fm-guard.sh" || true
@@ -48,6 +53,9 @@ PR_URL=$(grep '^pr=' "$META" | tail -1 | cut -d= -f2- || true)
 
 KIND=$(grep '^kind=' "$META" | cut -d= -f2- || true)
 [ -n "$KIND" ] || KIND=ship
+# Which surface created this pane. Absent means a window that predates the
+# herdr cutover and is still being drained (bin/fm-herdr.sh, "the drain").
+MUX=$(grep '^mux=' "$META" | tail -1 | cut -d= -f2- || true)
 MODE=$(grep '^mode=' "$META" | cut -d= -f2- || true)
 [ -n "$MODE" ] || MODE=no-mistakes
 
@@ -361,7 +369,9 @@ cleanup_firstmate_home_children() {
     child_kind=$(meta_value "$child_meta" kind)
     [ -n "$child_kind" ] || child_kind=ship
     if [ -n "$child_t" ]; then
-      tmux kill-window -t "$child_t" 2>/dev/null || true
+      # Same routing for a child: its own meta says which surface made it.
+      fm_herdr_close_pane "$child_t" "$(meta_value "$child_meta" mux)" \
+        || echo "warning: could not close child pane $child_t ($child_id)" >&2
     fi
     if [ "$child_kind" = secondmate ]; then
       child_home=$(meta_value "$child_meta" home)
@@ -473,7 +483,10 @@ if [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
   ( cd "$PROJ" && treehouse return --force "$WT" )
 fi
 
-tmux kill-window -t "$T" 2>/dev/null || true
+# Close the pane on the surface that created it, and say so if it could not be
+# closed. Reporting "teardown complete" over a leaked tab is the defect this
+# replaces (Quarterdeck reject, attempt 1).
+fm_herdr_close_pane "$T" "$MUX" || echo "warning: teardown could not close $T for $ID; check for a leftover pane" >&2
 if [ "$KIND" = secondmate ]; then
   [ -n "$HOME_PATH" ] || HOME_PATH=$WT
   remove_firstmate_home "$HOME_PATH" "secondmate home" "$ID"

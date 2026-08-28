@@ -231,6 +231,7 @@ fm_herdr_run() {  # <pane> <shell-command>
 #   0  delivered AND acknowledged — the agent consumed it
 #   3  refused: the agent is blocked at an approval dialog, nothing was sent
 #   4  delivered but NOT acknowledged
+#   5  no agent detected in that pane: nothing delivered, nothing executed
 #   1  failed
 #
 # WHY 4 IS NOT 1. herdr accepts the submission first and only then waits for a
@@ -240,32 +241,53 @@ fm_herdr_run() {  # <pane> <shell-command>
 # worse of the two available errors: firstmate would re-send a steer that
 # already landed and the crewmate would be told twice.
 fm_herdr_prompt() {  # <pane> <text>
-  local pane=$1 text=$2 out
-  out=$(herdr agent prompt "$pane" "$text" --wait --timeout "${FM_HERDR_SEND_TIMEOUT_MS:-15000}" 2>&1) || true
+  local pane=$1 text=$2 out rc=0
+  out=$(herdr agent prompt "$pane" "$text" --wait --timeout "${FM_HERDR_SEND_TIMEOUT_MS:-15000}" 2>&1) || rc=$?
+
+  # The specific outcomes first: each says something the caller can act on that
+  # a bare exit status cannot.
   case "$out" in
     *agent_blocked*)
-      echo "fm-herdr: $pane is at an approval dialog; not overwriting it" >&2; return 3 ;;
+      echo "fm-herdr: $pane is at an approval dialog; not overwriting it" >&2
+      return 3 ;;
     *agent_prompt_stalled*|*'"code":"timeout"'*)
       echo "fm-herdr: $pane took the prompt but never changed state; delivery is unconfirmed, NOT re-sent" >&2
       return 4 ;;
     *agent_not_found*)
-      # herdr has not classified an agent in this pane — plausible in the beat
-      # right after a launch. Deliver through the shell so the steer still
-      # lands, but report 4, not 0: this is unacknowledged delivery, and 0 means
-      # acknowledged. Returning 0 would make a blind steer indistinguishable
-      # from a confirmed one, erasing the distinction herdr exists to provide.
-      echo "fm-herdr: no detected agent in $pane; delivering unacknowledged via the shell" >&2
-      fm_herdr_run "$pane" "$text" || return 1
-      return 4 ;;
-    *'{"error"'*)
-      # Anchored to the top-level error ENVELOPE, not a bare "error" substring:
-      # a future success payload carrying a field named e.g. last_error must not
-      # be read as a steer that failed to land.
-      echo "fm-herdr: prompt failed: $out" >&2; return 1 ;;
-    '' )
-      echo "fm-herdr: prompt produced no response for $pane" >&2; return 1 ;;
-    *) return 0 ;;
+      # herdr has not classified an agent in this pane. NOTHING is delivered.
+      #
+      # This used to fall back to `herdr pane run`, whose job is running SHELL
+      # COMMAND LINES - so a steer like `git reset --hard origin/main` executed
+      # in the worktree, and the caller was told it was merely unacknowledged.
+      # Blind delivery into a TUI composer and blind delivery into a shell are
+      # not the same risk. The honest answer is that there is no agent here.
+      echo "fm-herdr: no agent detected in $pane; the steer was NOT delivered." >&2
+      echo "  Nothing was executed - a pane holding a shell would have RUN the steer." >&2
+      echo "  Peek the pane: the agent may have exited or may still be starting." >&2
+      return 5 ;;
   esac
+
+  # THE EXIT STATUS IS AUTHORITATIVE. A dropped socket, a CLI parse error, an
+  # error envelope this list has never seen - none of them print anything the
+  # patterns above match, and all of them mean the steer did not land. Trusting
+  # the message alone is how a network failure got reported as an acknowledged
+  # delivery (Quarterdeck reject, attempt 1): `|| true` erased the status and an
+  # unmatched message fell through to success.
+  if [ "$rc" -ne 0 ]; then
+    echo "fm-herdr: prompt failed for $pane (herdr exited $rc): $out" >&2
+    return 1
+  fi
+  # And the mirror: a zero exit that still carries an error envelope. Trusting
+  # only the status would swap one blind spot for the other.
+  case "$out" in
+    *'{"error"'*)
+      echo "fm-herdr: prompt failed for $pane: $out" >&2
+      return 1 ;;
+    '')
+      echo "fm-herdr: prompt produced no response for $pane" >&2
+      return 1 ;;
+  esac
+  return 0
 }
 
 fm_herdr_send_key() {  # <pane> <key>
@@ -323,7 +345,9 @@ fm_herdr_launch_failed() {  # <pane>
 # the exact defect this naming exists to remove, so it is never assumed. The
 # agent rename is best effort by timing alone — herdr classifies an agent a beat
 # after launch — and a spawn must not die waiting for it.
-# Returns: 0 both named, 1 tab named but no agent yet, 2 the tab rename failed.
+# Returns: 0 both named; 1 tab named but herdr has not classified an agent yet;
+# 2 a real refusal - the tab rename failed, or the agent rename was refused for
+# any reason other than the agent not existing yet.
 fm_herdr_label() {  # <pane> <name>
   local pane=$1 name=$2 tab out
   if ! fm_herdr_name_valid "$name"; then
@@ -339,7 +363,20 @@ fm_herdr_label() {  # <pane> <name>
     echo "fm-herdr: tab rename failed for $tab: $out" >&2
     return 2
   fi
-  herdr agent rename "$pane" "$name" >/dev/null 2>&1 || return 1
+  # The agent rename can legitimately be early: herdr classifies an agent a beat
+  # after launch, so agent_not_found here means "not yet", not "refused". Any
+  # OTHER failure - a duplicate name, a permission error, a server problem -
+  # leaves the pane without the address it is supposed to be steered by, and
+  # must be reported. Returning 1 for all of them told the caller every failure
+  # was harmless startup lag.
+  if ! out=$(herdr agent rename "$pane" "$name" 2>&1); then
+    case "$out" in
+      *agent_not_found*) return 1 ;;
+      *)
+        echo "fm-herdr: agent rename refused for $pane -> '$name': $out" >&2
+        return 2 ;;
+    esac
+  fi
   return 0
 }
 
@@ -348,6 +385,32 @@ fm_herdr_close() {  # <pane>
   tab=$(fm_herdr_field "$(herdr pane get "$1" 2>/dev/null)" tab_id)
   if [ -n "$tab" ]; then herdr tab close "$tab" >/dev/null 2>&1 && return 0; fi
   herdr tab close "$1" >/dev/null 2>&1 || herdr pane close "$1" >/dev/null 2>&1
+}
+
+# Close the pane a meta recorded, on the surface that CREATED it.
+#
+# THE DEFECT THIS EXISTS FOR (Quarterdeck reject, attempt 1). fm-teardown.sh
+# passed the meta's window= - a herdr pane id for every post-cutover crewmate -
+# straight to `tmux kill-window`, swallowed the failure with `|| true`, deleted
+# the meta and printed "teardown complete". The tab leaked, untracked and
+# possibly still running an agent, while firstmate believed it was cleaned up.
+#
+# `<mux>` is the meta's mux= value: herdr for a post-cutover pane, empty or
+# anything else for a tmux window still being drained. A close that cannot
+# happen is REPORTED - swallowing it is what let the leak go unnoticed.
+fm_herdr_close_pane() {  # <target> <mux>
+  local target=$1 mux=${2:-}
+  [ -n "$target" ] || return 0
+  if [ "$mux" = herdr ]; then
+    if fm_herdr_close "$target"; then return 0; fi
+    echo "fm-herdr: could not close herdr pane $target; the tab may still be open" >&2
+    return 1
+  fi
+  # DRAIN ONLY - a window that predates the cutover. Delete this branch when
+  # fm_herdr_drain_pending reports nothing left in any home.
+  if tmux kill-window -t "$target" 2>/dev/null; then return 0; fi
+  echo "fm-herdr: could not close tmux window $target; it may still be open" >&2
+  return 1
 }
 
 # --- resolution, and the drain ----------------------------------------------

@@ -89,6 +89,9 @@ test_fm_teardown_closes_through_the_surface() {
 # --- LIVE: the tab is really gone -------------------------------------------
 
 test_live_a_real_herdr_tab_is_really_closed() {
+  if [ "${FM_TEST_REQUIRE_LIVE:-0}" = 1 ]; then
+    fail "FM_TEST_REQUIRE_LIVE=1 but no herdr server is reachable; this gate cannot be proven here"
+  fi
   if ! fm_herdr_up; then
     printf 'SKIP - the live half of h8 needs a herdr server; the routing cases above still ran.\n' >&2
     return 0

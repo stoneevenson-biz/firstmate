@@ -160,8 +160,9 @@ Reconcile reality with your records before doing anything else:
    If it refuses because another live session holds the lock, tell the captain another active session is already managing the work and operate read-only until resolved.
 2. Drain queued wakes with `bin/fm-wake-drain.sh` and keep the printed records as the first work queue for this recovery turn.
 3. Read `data/backlog.md`, `data/secondmates.md` if present, every `state/*.meta`, and every `state/*.status`.
-4. Use the `window=` values from this home's `state/*.meta` files as the live direct-report set, then check those tmux panes.
-   Do not sweep every `fm-*` tmux window across all sessions during recovery; another firstmate home's child panes may share that namespace and are not this home's orphans.
+4. Use the `window=` values from this home's `state/*.meta` files as the live direct-report set, then check those panes.
+   A meta's `mux=` says which surface to check it on: `mux=herdr` is a herdr pane id (`herdr pane get`, `bin/fm-peek.sh`), and a meta with no `mux=` line predates the herdr cutover and is a tmux window still being drained (section 8).
+   Do not sweep every `fm-*` tmux window across all sessions during recovery; another firstmate home's child panes may share that namespace and are not this home's orphans, and post-cutover crewmates are not in tmux at all.
 5. If a recorded direct-report window is missing, reconcile it through its meta as described below.
 6. For meta with no window, reconcile by kind.
    For ordinary crewmates, check `treehouse status` in that project, salvage or report.
@@ -175,7 +176,7 @@ Reconcile reality with your records before doing anything else:
 10. Handle drained wakes, then follow the section 8 watcher checklist; if `state/.afk` exists, the daemon owns the watcher.
 
 A firstmate restart must be a non-event.
-All truth lives in tmux, state files, data/backlog.md, data/secondmates.md, persistent secondmate homes, and treehouse; your conversation memory is a cache.
+All truth lives in the panes themselves - herdr for anything spawned after the cutover, tmux for windows still draining - plus state files, data/backlog.md, data/secondmates.md, persistent secondmate homes, and treehouse; your conversation memory is a cache.
 
 ## 6. Project management
 

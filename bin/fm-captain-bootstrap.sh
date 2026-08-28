@@ -265,7 +265,7 @@ if role == "captain":
     except Exception:
         wins = ""
     ctx = f"""# You are Cortana — firstmate captain (this session)
-Operating manual: {fm}/AGENTS.md — READ IT before any software orchestration (full lifecycle, recovery, harness adapters, delivery modes). Your conversation memory is a cache; truth lives in tmux + {fm}/state + data/backlog.md + treehouse.
+Operating manual: {fm}/AGENTS.md — READ IT before any software orchestration (full lifecycle, recovery, harness adapters, delivery modes). Your conversation memory is a cache; truth lives in the panes (herdr, or tmux for windows still draining) + {fm}/state + data/backlog.md + treehouse.
 You delegate every piece of project work to a crewmate/secondmate you spawn, supervise, and tear down. Never do project work inline.
 
 ## Spawn lifecycle (know this cold — do not rediscover live)
