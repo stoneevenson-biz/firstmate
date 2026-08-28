@@ -604,11 +604,15 @@ fi
 # captain reads and it is checked; the agent address is applied on the same call
 # and may lag by a beat while herdr classifies the pane, which is not fatal - a
 # later steer resolves the pane id from meta either way.
-if ! fm_mux_label "$T" "$PANE_NAME"; then
-  case $? in
-    2) echo "warning: $MUX would not name pane $T '$PANE_NAME'; it will show unlabelled" >&2 ;;
-  esac
-fi
+# Capture the status directly: inside `if ! cmd; then`, $? is the negation's
+# status (always 0), so a `case $?` there could never see rc=2 and the one
+# warning this block exists to emit would never print.
+label_rc=0
+fm_mux_label "$T" "$PANE_NAME" || label_rc=$?
+case "$label_rc" in
+  0|1) : ;;  # 0 = named; 1 = tab named, agent not detected yet (herdr lags a beat)
+  *)   echo "warning: $MUX would not name pane $T '$PANE_NAME'; it will show unlabelled" >&2 ;;
+esac
 
 # A secondmate watches its OWN tree's context: start a context-watch scoped to its
 # home as a presence-gated background child. fm-context-watch --scope self-singletons

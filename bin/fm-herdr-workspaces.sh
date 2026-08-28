@@ -73,8 +73,16 @@ if [ "${1:-}" = "--name" ]; then
   # no-op rename.
   fm_mux_name_valid "$name" \
     || die "'$name' is not a name herdr will accept as an address (want ^[a-z][a-z0-9_-]{0,31}$ - a slash is rejected)"
-  fm_mux_herdr_label "$target" "$name" || die "herdr did not accept '$name' for $target"
-  printf 'named %s -> %s\n' "$target" "$name"
+  label_rc=0
+  fm_mux_herdr_label "$target" "$name" || label_rc=$?
+  case "$label_rc" in
+    0) printf 'named %s -> %s\n' "$target" "$name" ;;
+    # rc=1 is not a refusal: the tab carries the name and herdr has simply not
+    # classified an agent in the pane yet. Saying "did not accept" here would
+    # report a failure that did not happen.
+    1) printf 'named %s -> %s (tab only; no agent detected in the pane yet)\n' "$target" "$name" ;;
+    *) die "herdr did not accept '$name' for $target" ;;
+  esac
   exit 0
 fi
 

@@ -59,18 +59,17 @@ test_explicit_fm_mux_wins() {
                     || fail "FM_MUX ignored: got '$got'"
 }
 
-# Absent an explicit choice the driver is herdr, because the captain's standing
-# rule is that agents are spawned in herdr. The predicate is REACHABILITY, not
-# HERDR_ENV: that variable is unset in firstmate's own process while a server is
-# running and the captain is watching it, so keying off it put every crewmate in
-# an invisible tmux session. Selection is gated in full by tests/fm-mux-h1.
-test_autodetect_follows_reachability_not_herdr_env() {
+# Absent an explicit choice the driver is herdr - always, with nothing consulted.
+# Agents run in herdr and headless is never selected automatically (see
+# data/captain.md, "Where agents run"), so neither a stopped server nor
+# HERDR_ENV may change the answer. Selection is gated in full by tests/fm-mux-h1.
+test_default_is_herdr_and_nothing_else_decides() {
   local a b
   a=$(FM_MUX="" HERDR_ENV="" HERDR_SERVER=running fm_mux_driver 2>/dev/null)
   b=$(FM_MUX="" HERDR_ENV=1 HERDR_SERVER=stopped fm_mux_driver 2>/dev/null)
-  if [ "$a" != herdr ]; then fail "a reachable server with HERDR_ENV unset gave '$a', want herdr"; fi
-  if [ "$b" != tmux ];  then fail "an unreachable server with HERDR_ENV=1 gave '$b', want tmux"; fi
-  pass "autodetect: keys off a reachable server, not HERDR_ENV"
+  if [ "$a" != herdr ]; then fail "a reachable server gave '$a', want herdr"; fi
+  if [ "$b" != herdr ]; then fail "an unreachable server auto-selected '$b'; headless is never automatic"; fi
+  pass "default: herdr, with neither reachability nor HERDR_ENV able to change it"
 }
 
 # An unknown driver must fail loudly rather than silently doing nothing.
@@ -154,7 +153,7 @@ test_new_window_failure_is_reported() {
 }
 
 test_explicit_fm_mux_wins
-test_autodetect_follows_reachability_not_herdr_env
+test_default_is_herdr_and_nothing_else_decides
 test_unknown_driver_refuses
 test_new_window_returns_opaque_target
 test_send_delivers_and_submits

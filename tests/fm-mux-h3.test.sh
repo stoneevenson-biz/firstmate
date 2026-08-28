@@ -61,7 +61,7 @@ run_spawn() {  # <home> <id> [extra args...]
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
     FM_SPAWN_NO_GUARD=1 FM_LAUNCH_VERIFY_SLEEP=0 \
-    HERDR_SERVER="${HERDR_SERVER:-running}" \
+    HERDR_SERVER="${HERDR_SERVER:-running}" HERDR_NO_TAB="${HERDR_NO_TAB:-0}" \
     HERDR_WORKSPACES="wJ=config,wM=archify" \
     HERDR_PANE_CWD="$WT" \
     HERDR_TABS="$TMP_ROOT/tabs" \
@@ -171,6 +171,23 @@ test_the_task_id_lives_in_the_meta_not_the_name() {
   pass "naming: the id lives in state/<id>.meta; the tab carries the work"
 }
 
+# A pane herdr refuses to name must be REPORTED. The tab label is the gated half
+# of naming - an unnamed tab is the defect this work exists to remove - so the
+# warning has to actually reach the operator. It previously could not: the check
+# read `$?` inside `if ! cmd; then`, where it is the negation's status and
+# always 0, so the rc=2 branch was unreachable dead code.
+test_a_refused_pane_name_is_reported() {
+  reset
+  local home out
+  home="$TMP_ROOT/home-badname"; mkdir -p "$home/data"
+  # HERDR_NO_TAB makes `pane get` return no tab_id, so fm_mux_label cannot find
+  # a tab to rename and returns 2 - herdr refusing the name.
+  out=$(HERDR_NO_TAB=1 run_spawn "$home" unnamed-x4 --name unnamed)
+  assert_contains "$out" "would not name pane" "a refused pane name was silently swallowed"
+  assert_contains "$out" "show unlabelled" "the warning does not say what the captain will see"
+  pass "naming: a pane herdr refuses to name is reported, not silently unlabelled"
+}
+
 # --- an unreachable herdr STOPS the spawn ------------------------------------
 
 # THE GATE THAT PROVES THE RULE (data/captain.md, "Where agents run"). With no
@@ -227,6 +244,7 @@ test_the_name_is_one_herdr_accepts
 test_name_defaults_from_the_task_id_without_its_suffix
 test_meta_records_the_target_and_its_driver
 test_the_task_id_lives_in_the_meta_not_the_name
+test_a_refused_pane_name_is_reported
 test_unreachable_herdr_fails_the_spawn
 test_unreachable_herdr_creates_nothing
 test_fm_mux_tmux_still_creates_a_tmux_window

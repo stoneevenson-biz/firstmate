@@ -88,8 +88,15 @@ case "$1 $2" in
     printf '{"id":"cli:tab:rename","result":{"type":"ok"}}\n' ;;
   "tab close")   printf '{"id":"cli:tab:close","result":{"type":"ok"}}\n' ;;
   "pane get")
-    printf '{"id":"cli:pane:get","result":{"pane":{"cwd":"%s","foreground_cwd":"%s","pane_id":"%s","tab_id":"wT:t9"},"type":"pane_info"}}\n' \
-      "${HERDR_PANE_CWD:-/proj}" "${HERDR_PANE_CWD:-/proj}" "$3" ;;
+    # HERDR_NO_TAB drops tab_id, the shape a caller sees when herdr cannot give
+    # a tab to rename - which is how a pane ends up unnamed.
+    if [ "${HERDR_NO_TAB:-0}" = 1 ]; then
+      printf '{"id":"cli:pane:get","result":{"pane":{"cwd":"%s","foreground_cwd":"%s","pane_id":"%s"},"type":"pane_info"}}\n' \
+        "${HERDR_PANE_CWD:-/proj}" "${HERDR_PANE_CWD:-/proj}" "$3"
+    else
+      printf '{"id":"cli:pane:get","result":{"pane":{"cwd":"%s","foreground_cwd":"%s","pane_id":"%s","tab_id":"wT:t9"},"type":"pane_info"}}\n' \
+        "${HERDR_PANE_CWD:-/proj}" "${HERDR_PANE_CWD:-/proj}" "$3"
+    fi ;;
   "pane run")
     # A shell that actually runs what it is given: the readiness probe depends
     # on the marker coming back on a line of its own, exactly as under tmux.

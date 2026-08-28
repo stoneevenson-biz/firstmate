@@ -314,6 +314,13 @@ fm_mux_tmux_close() {  # <target>
 # dependency, so fields are pulled with targeted sed; records are split on `{`
 # first so a per-record grep cannot straddle two objects.
 
+# ASSUMPTION, worth naming: splitting on `{` isolates each JSON object and the
+# first match wins. That is exact for the flat sibling arrays this reads
+# (workspace list, tab list) and for single-object reads (pane get). It is only
+# safe on `tab create` - whose response nests root_pane.tab_id beside tab.tab_id
+# - because those two ids are identical in every shape herdr emits. If a future
+# herdr ever let them diverge this would silently take the first; the extraction
+# that matters there asks for pane_id, which appears exactly once.
 fm_mux_herdr_field() {  # <json> <key>   -> first matching "key":"value"
   printf '%s' "$1" | tr '{' '\n' | sed -n "s/.*\"$2\":\"\\([^\"]*\\)\".*/\\1/p" | head -1
 }
@@ -424,12 +431,19 @@ fm_mux_herdr_send() {  # <target> <text>
       echo "fm-mux(herdr): $target took the prompt but never changed state; delivery is unconfirmed, NOT re-sent" >&2
       return 4 ;;
     *agent_not_found*)
-      # herdr has not detected an agent in this pane. Fall back to blind shell
-      # delivery so the steer still lands, but say so: this delivery is the
-      # tmux-grade unacknowledged one, and a caller reading the log must know.
+      # herdr has not detected an agent in this pane - plausible in the beat
+      # right after a launch. Fall back to blind shell delivery so the steer
+      # still lands, but report it as code 4, NOT 0: this is the tmux-grade
+      # unacknowledged delivery, and code 0 means acknowledged. Returning 0 here
+      # would make a blind steer indistinguishable from a confirmed one, which
+      # is the very distinction this driver exists to provide.
       echo "fm-mux(herdr): no detected agent in $target; delivering unacknowledged via the shell" >&2
-      fm_mux_herdr_run "$target" "$text" ;;
-    *'"error"'*)
+      fm_mux_herdr_run "$target" "$text" || return 1
+      return 4 ;;
+    *'{"error"'*)
+      # Anchored to the top-level error ENVELOPE, not a bare "error" substring:
+      # a future success payload carrying any field literally named error (say
+      # "last_error":null) must not be read as a steer that failed to land.
       echo "fm-mux(herdr): prompt failed: $out" >&2; return 1 ;;
     '' )
       echo "fm-mux(herdr): prompt produced no response for $target" >&2; return 1 ;;
