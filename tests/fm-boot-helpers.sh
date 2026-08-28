@@ -115,9 +115,18 @@ JSON
 fm_boot_hanging_bin() {
   local dir=$1/hanging-bin helper
   mkdir -p "$dir"
+  # Each stub records the instant it started before hanging. Two start times a
+  # few milliseconds apart prove the helpers ran CONCURRENTLY; run serially the
+  # second would start one whole timeout after the first. That is a structural
+  # observation rather than a wall-clock threshold, so it holds identically on
+  # an idle machine and a saturated one.
+  #
+  # `sleep 999` is spawned as a CHILD deliberately, not exec'd: an orphan-prone
+  # grandchild is the harder case, and gate m4 asserts the emitter reaps it.
   for helper in fm-watch-arm.sh fm-lock.sh; do
-    cat > "$dir/$helper" <<'SH'
+    cat > "$dir/$helper" <<SH
 #!/usr/bin/env bash
+python3 -c 'import time; print(time.time())' >> "$1/helper-starts.txt"
 sleep 999
 SH
     chmod +x "$dir/$helper"
