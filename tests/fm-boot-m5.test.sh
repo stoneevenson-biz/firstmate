@@ -122,4 +122,106 @@ assert_contains "$noisy_ctx" "UNAVAILABLE" \
 assert_contains "$noisy_ctx" "FM_BOOT_TOTAL_BUDGET" \
   "the marker must name the setting that was wrong"
 
+# --- UNREADABLE IS NOT EMPTY ------------------------------------------------
+#
+# The failure this section freezes, found by an independent verifier against an
+# earlier version of this branch: a boot against a home that did not exist
+# printed a fully confident, marker-free block - "0 in flight", "Wake queue:
+# empty", "In-flight tasks: none". Byte-identical to a genuinely idle, healthy
+# home.
+#
+# That is the single most consequential lie this block can tell. Recovery keys
+# off exactly those lines: they say there is nothing to reconcile. And it was
+# reachable through an ordinary FM_HOME misconfiguration, which the
+# N-concurrent-firstmates design makes routine.
+#
+# The earlier m5 missed it because its observable was scoped to section
+# builders that RAISE, and none of these paths raise - read_or, wake_queue and
+# own_tasks each caught the error and returned the empty value, which is
+# indistinguishable from the healthy one.
+#
+# Two kinds of not-knowing, which must not be conflated:
+#   STRUCTURAL - the home or state/ cannot be listed, so the COUNT is unknown
+#   DETAIL     - state/ lists fine, one status file will not read; the count is
+#                real and must survive, only that detail is marked
+unreadable_boot() {
+  fm_boot_hook_json | env \
+    FM_HOME="$1" \
+    FM_BOOT_FLEET_DIR="$FLEET" \
+    FM_CTX_WINDOW=probe-session \
+    FIRSTMATE_ROLE=captain \
+    bash "$UNDER_TEST"
+}
+
+# The exact phrases a healthy idle home would print. None may appear when the
+# thing they describe could not be read.
+assert_no_false_calm() {
+  local ctx=$1 label=$2
+  assert_contains "$ctx" "UNAVAILABLE" \
+    "$label: must carry an explicit marker, not a confident empty block"
+  assert_not_contains "$ctx" "0 in flight, 0 need a decision" \
+    "$label: must not count to zero off state it could not read"
+  assert_not_contains "$ctx" "Wake queue: empty" \
+    "$label: must not report an empty queue it could not read"
+  assert_not_contains "$ctx" "In-flight tasks: none" \
+    "$label: must not report no in-flight tasks it could not read"
+}
+
+# 1. a home that does not exist at all
+GONE="$TMP/no-such-home"
+gone_out=$(unreadable_boot "$GONE") || fail "an absent home must not break the hook"
+gone_ctx=$(fm_boot_context "$gone_out")
+assert_no_false_calm "$gone_ctx" "absent home"
+assert_contains "$gone_ctx" "home is absent" "the marker must say the home is absent"
+
+# 2. state/ present but unreadable
+BLIND="$TMP/blind"
+fm_boot_make_home "$BLIND" 3
+chmod 000 "$BLIND/state"
+blind_out=$(unreadable_boot "$BLIND"); blind_code=$?
+blind_ctx=$(fm_boot_context "$blind_out")
+chmod 755 "$BLIND/state"
+expect_code 0 "$blind_code" "an unreadable state/ must not break the hook"
+assert_no_false_calm "$blind_ctx" "unreadable state/"
+
+# 3. the wake queue alone is unreadable - the counts are still real
+QBLIND="$TMP/qblind"
+fm_boot_make_home "$QBLIND" 3
+chmod 000 "$QBLIND/state/.wake-queue"
+q_out=$(unreadable_boot "$QBLIND"); q_code=$?
+q_ctx=$(fm_boot_context "$q_out")
+chmod 644 "$QBLIND/state/.wake-queue"
+expect_code 0 "$q_code" "an unreadable wake queue must not break the hook"
+assert_contains "$q_ctx" "UNAVAILABLE" "an unreadable wake queue must be marked"
+assert_not_contains "$q_ctx" "Wake queue: empty" \
+  "an unreadable wake queue must never render as empty"
+assert_contains "$q_ctx" "In-flight tasks: 3" \
+  "a readable state/ must still report its real task count"
+
+# 4. one status file unreadable - marked, but the count survives
+DBLIND="$TMP/dblind"
+fm_boot_make_home "$DBLIND" 3
+chmod 000 "$DBLIND/state/task-2.status"
+d_out=$(unreadable_boot "$DBLIND"); d_code=$?
+d_ctx=$(fm_boot_context "$d_out")
+chmod 644 "$DBLIND/state/task-2.status"
+expect_code 0 "$d_code" "an unreadable status file must not break the hook"
+assert_contains "$d_ctx" "UNAVAILABLE" "an unreadable status file must be marked"
+assert_contains "$d_ctx" "task-2.status" "the marker must name the file it could not read"
+assert_contains "$d_ctx" "3 in flight" \
+  "a detail we could not read must not discard a count we do have"
+
+# 5. an ABSENT wake queue is genuinely an empty queue, and says so plainly.
+# Without this the fix could pass by marking everything, which would make the
+# marker meaningless in the other direction.
+EMPTYQ="$TMP/emptyq"
+fm_boot_make_home "$EMPTYQ" 2
+rm -f "$EMPTYQ/state/.wake-queue"
+e_out=$(unreadable_boot "$EMPTYQ") || fail "a home with no wake queue must boot"
+e_ctx=$(fm_boot_context "$e_out")
+assert_contains "$e_ctx" "Wake queue: empty" \
+  "an absent wake queue is genuinely empty and must say so, not cry UNAVAILABLE"
+assert_not_contains "$e_ctx" "UNAVAILABLE" \
+  "ordinary absence must not raise a marker - or the marker means nothing"
+
 pass "m5 boot context never fails silently"

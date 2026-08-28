@@ -50,7 +50,13 @@ annotate() {
 skippable() {
   [ -f "$LEDGER" ] || { echo "NOLEDGER"; return 0; }
   [ -f "$ACCEPTED" ] || { echo "NOACCEPTED"; return 0; }
-  python3 - "$LEDGER" "$ACCEPTED" <<'PY' 2>/dev/null || echo "BADLEDGER"
+  # The parse result is captured whole and emitted only if python exited
+  # cleanly. Appending a sentinel to the same stream with `|| echo` would mix
+  # it with any rows already printed before the failure, and the exact-match
+  # handling below would then miss the sentinel and skip on a PARTIAL parse -
+  # fail-open, in the one place this runner promises to fail closed.
+  local out
+  if out=$(python3 - "$LEDGER" "$ACCEPTED" <<'PY' 2>/dev/null
 import json, re, sys
 
 ledger_path, accepted_path = sys.argv[1], sys.argv[2]
@@ -67,7 +73,12 @@ ledger = json.load(open(ledger_path))
 gates = ledger["gates"]
 if isinstance(gates, dict):
     gates = list(gates.values())
+if not isinstance(gates, list) or not all(isinstance(g, dict) for g in gates):
+    raise SystemExit("ledger gates are not a list of objects")
 
+# Built whole, then printed. A raise partway through must yield NO rows at all,
+# never a half-list that would look like a complete answer.
+rows = []
 for g in gates:
     gid = g.get("id")
     if g.get("status") != "red" or gid not in declared:
@@ -75,9 +86,15 @@ for g in gates:
     # test_ref is a shell command ("bash tests/x.test.sh"); take the path token.
     for tok in str(g.get("test_ref") or "").split():
         if tok.endswith(".test.sh"):
-            print("%s\t%s\t%s" % (tok, gid, declared[gid]))
+            rows.append("%s\t%s\t%s" % (tok, gid, declared[gid]))
             break
+sys.stdout.write("".join(r + "\n" for r in rows))
 PY
+  ); then
+    printf '%s\n' "$out"
+  else
+    echo "BADLEDGER"
+  fi
 }
 
 SKIP_RAW="$(skippable)"

@@ -108,6 +108,36 @@ for tok in shlex.split(line):
 [ -n "$target" ] || fail "registered command does not name a fm-boot-context.sh path: $cmd"
 [ -x "$target" ] || fail "the registered hook command points at a non-executable path: $target"
 
+# The command must INVOKE the emitter, not merely mention its path. Without
+# this, a no-op such as `test -x ".../fm-boot-context.sh"` satisfies the gate
+# while every real session still boots blind - the same class of false green
+# this gate refuses direct-invocation testing to avoid. The declaration this
+# gate is blocked on specifies `bash "<path>"`, matching the existing hook's
+# convention, so that is the shape required here.
+case "$cmd" in
+  bash\ *"fm-boot-context.sh"*|*/bash\ *"fm-boot-context.sh"*|"$target"|"$target "*)
+    : ;;
+  *)
+    fail "the registered command must INVOKE the emitter, not just name it.
+Expected 'bash \"<path>/fm-boot-context.sh\"' (or the script run directly).
+Got: $cmd" ;;
+esac
+
+# And it must actually emit when invoked the way the hook invokes it: a
+# registration that runs something producing no additionalContext is a hook in
+# name only.
+probe=$(printf '{"source":"startup","cwd":"%s","session_id":"m1-probe"}' "$HOME" \
+  | FIRSTMATE_ROLE=captain bash "$target" 2>/dev/null) \
+  || fail "the registered command exits non-zero when invoked as a SessionStart hook"
+printf '%s' "$probe" | python3 -c '
+import json, sys
+d = json.loads(sys.stdin.read())
+out = d["hookSpecificOutput"]
+assert out["hookEventName"] == "SessionStart", out
+assert out["additionalContext"].strip(), "empty additionalContext"
+' >/dev/null 2>&1 \
+  || fail "the registered command emits no SessionStart additionalContext: $target"
+
 # The declared timeout must be the repo's convention, not the harness default of
 # 600 - an unbounded boot hook is the failure mode this whole slice exists for.
 [ "$timeout" = "10" ] \

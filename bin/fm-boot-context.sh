@@ -228,20 +228,66 @@ def remaining():
 
 # --- read-only primitives ---------------------------------------------------
 #
-# Every filesystem access in this script goes through these two. Neither
-# creates, truncates, moves, or removes anything, and there is deliberately no
-# makedirs anywhere: a missing dir is reported, never created.
+# Every filesystem access in this script goes through these. None creates,
+# truncates, moves, or removes anything, and there is deliberately no makedirs
+# anywhere: a missing dir is reported, never created.
+#
+# THE DISTINCTION THAT MATTERS: "could not read it" is not "it is empty".
+# Collapsing the two is the worst lie this block can tell, because the thing it
+# would be lying about is whether there is anything to reconcile. A boot against
+# a home that is absent, or whose state/ is unreadable, previously rendered
+# "0 in flight / Wake queue: empty / In-flight tasks: none" with no marker at
+# all - byte-identical to a genuinely idle, healthy home. Recovery keys off
+# exactly those lines. So every read here returns its problem alongside its
+# text, and a problem always becomes a visible UNAVAILABLE marker.
+
+# Ceiling on any single file read. An operational file is orders of magnitude
+# smaller; anything larger is a defect or an attack, and reading it whole would
+# spend the boot deadline (a 512MB status file measured at 3.6s) or the memory.
+# Truncation is reported, never silent.
+READ_LIMIT = 256 * 1024
+
 
 def read(path, limit=None):
     with open(path) as f:
-        return f.read(limit) if limit else f.read()
+        return f.read(limit or READ_LIMIT)
+
+
+def read_field(path, default=""):
+    """(text, problem). problem is None when read, or a short reason string.
+
+    An absent file is NOT a problem - callers know whether absence is ordinary
+    (no wake queue means an empty queue) or not. An unreadable file always is.
+    """
+    if not os.path.exists(path):
+        return default, None
+    try:
+        return read(path), None
+    except Exception as e:
+        return default, "%s unreadable (%s)" % (os.path.basename(path), type(e).__name__)
 
 
 def read_or(path, default="", limit=None):
+    """Text only, for reads whose failure the caller reports separately."""
     try:
         return read(path, limit)
     except Exception:
         return default
+
+
+def dir_problem(path, label):
+    """None if the directory is present and listable, else a reason string.
+
+    A missing or unlistable state/ or data/ means we know nothing about this
+    home, which is a completely different statement from "this home is idle".
+    """
+    if not os.path.isdir(path):
+        return "%s is absent (%s)" % (label, path)
+    try:
+        os.listdir(path)
+    except Exception as e:
+        return "%s is unreadable (%s)" % (label, type(e).__name__)
+    return None
 
 
 def helper(script, args, label):
@@ -301,14 +347,27 @@ def meta_of(path):
 
 
 def own_tasks():
-    """(task-id, meta, last-status-line) for every task this home is running."""
-    out = []
+    """(tasks, problems) for every task this home is running.
+
+    An unreadable state/ yields no tasks AND a problem, so the caller can never
+    render "0 in flight" off a directory it could not read.
+    """
+    problem = dir_problem(state, "state/")
+    if problem:
+        return [], [problem]
+    out, problems = [], []
     for mp in sorted(glob.glob(os.path.join(state, "*.meta"))):
         tid = os.path.basename(mp)[: -len(".meta")]
-        lines = [l for l in read_or(os.path.join(state, tid + ".status")).splitlines()
-                 if l.strip()]
-        out.append((tid, meta_of(mp), lines[-1] if lines else "(no status yet)"))
-    return out
+        status_text, status_problem = read_field(os.path.join(state, tid + ".status"))
+        if status_problem:
+            problems.append(status_problem)
+        lines = [l for l in status_text.splitlines() if l.strip()]
+        if status_problem:
+            last = "UNAVAILABLE (%s)" % status_problem
+        else:
+            last = lines[-1] if lines else "(no status yet)"
+        out.append((tid, meta_of(mp), last))
+    return out, problems
 
 
 def needs_attention(tasks):
@@ -327,14 +386,21 @@ def wake_queue():
     inside a boot hook is worse than a slightly stale read. Torn-tail rule - a
     record counts only if the file ends in a newline and the line splits into
     at least five tab fields; a failing final line is excluded and flagged.
+
+    Returns (depth, records, torn, problem). An ABSENT queue file genuinely
+    means an empty queue and carries no problem; an UNREADABLE one is a problem
+    and must never render as "empty".
     """
+    path = os.path.join(state, ".wake-queue")
+    if not os.path.exists(path):
+        return 0, [], False, None
     try:
-        with open(os.path.join(state, ".wake-queue"), "rb") as f:
-            raw = f.read()
-    except Exception:
-        return 0, [], False
+        with open(path, "rb") as f:
+            raw = f.read(READ_LIMIT)
+    except Exception as e:
+        return 0, [], False, ".wake-queue unreadable (%s)" % type(e).__name__
     if not raw:
-        return 0, [], False
+        return 0, [], False, None
     text = raw.decode("utf-8", "replace")
     rows = [r for r in text.split("\n") if r != ""]
     torn = False
@@ -342,7 +408,7 @@ def wake_queue():
         rows.pop()
         torn = True
     valid = [r for r in rows if len(r.split("\t")) >= 5]
-    return len(valid), valid, torn
+    return len(valid), valid, torn, None
 
 
 # --- steering ---------------------------------------------------------------
@@ -447,25 +513,39 @@ def build_fleet(own_summary):
 # --- Tier 2: the steering detail --------------------------------------------
 
 def project_lines():
-    """Generated one-liners, not a verbatim dump.
+    """(lines, problem). Generated one-liners, not a verbatim dump.
 
     The verbatim data/projects.md was 4,108 chars - 40% of the whole block, for
     information that is one line per project once the prose is trimmed.
     """
+    text, problem = read_field(os.path.join(data, "projects.md"))
     out = []
-    for line in read_or(os.path.join(data, "projects.md")).splitlines():
+    for line in text.splitlines():
         line = line.strip()
         if not line.startswith("- "):
             continue
         out.append(line[:110] + (" ..." if len(line) > 110 else ""))
-    return out
+    return out, problem
 
 
-def build_digest(tasks, watcher_line, lock_line):
-    depth, records, torn = wake_queue()
-    lines = ["## Reconciliation digest (boot-time snapshot)",
-             "Wake queue: %s" % ("empty" if depth == 0
-                                 else "%d queued (most recent last)" % depth)]
+def build_digest(tasks, task_problems, watcher_line, lock_line):
+    depth, records, torn, queue_problem = wake_queue()
+    state_problem = dir_problem(state, "state/")
+    lines = ["## Reconciliation digest (boot-time snapshot)"]
+
+    # Every "nothing here" line below is only honest if we could actually look.
+    if state_problem:
+        lines.append("UNAVAILABLE (%s) - this home's live state could not be read, so "
+                     "nothing below is a statement that there is nothing to reconcile."
+                     % state_problem)
+        lines.append(DISCLAIMER)
+        return "\n".join(lines)
+
+    if queue_problem:
+        lines.append("Wake queue: UNAVAILABLE (%s)" % queue_problem)
+    else:
+        lines.append("Wake queue: %s" % ("empty" if depth == 0
+                                         else "%d queued (most recent last)" % depth))
     lines += ["  " + r for r in records[-5:]]
     if depth > 5:
         lines.append("  ... (+%d more)" % (depth - 5))
@@ -473,7 +553,14 @@ def build_digest(tasks, watcher_line, lock_line):
         lines.append("  (tail possibly torn)")
     lines.append("Watcher: %s" % watcher_line)
     lines.append("Session lock: %s" % lock_line)
-    lines.append("In-flight tasks: %s" % (len(tasks) or "none"))
+    # "none" is a claim about the fleet; only make it if every read succeeded.
+    for p in task_problems:
+        lines.append("UNAVAILABLE (%s)" % p)
+    if task_problems:
+        lines.append("In-flight tasks: %d readable (some task state could not be read)"
+                     % len(tasks))
+    else:
+        lines.append("In-flight tasks: %s" % (len(tasks) or "none"))
     for tid, meta, last in tasks:
         lines.append("- %s window=%s kind=%s mode=%s - %s" % (
             tid, meta.get("window", "?"), meta.get("kind", "?"),
@@ -482,11 +569,36 @@ def build_digest(tasks, watcher_line, lock_line):
     return "\n".join(lines)
 
 
-def build_tier2(tasks, watcher_line, lock_line):
-    projects = project_lines()
-    secondmates = [l for l in read_or(os.path.join(data, "secondmates.md")).splitlines()
-                   if l.strip().startswith("- ")]
-    backlog = read_or(os.path.join(data, "backlog.md"), limit=1200).strip()
+def build_tier2(tasks, task_problems, watcher_line, lock_line):
+    problems = []
+    data_problem = dir_problem(data, "data/")
+    if data_problem:
+        problems.append(data_problem)
+
+    projects, projects_problem = project_lines()
+    if projects_problem:
+        problems.append(projects_problem)
+
+    sm_text, sm_problem = read_field(os.path.join(data, "secondmates.md"))
+    if sm_problem:
+        problems.append(sm_problem)
+    secondmates = [l for l in sm_text.splitlines() if l.strip().startswith("- ")]
+
+    # The backlog is truncated for the block, and truncation is stated. Every
+    # other capped path here counts what it dropped; this one used to take the
+    # first 1,200 chars silently, which could cut a record mid-line and leave
+    # the reader believing they had seen the whole queue.
+    BACKLOG_CAP = 1200
+    bl_text, bl_problem = read_field(os.path.join(data, "backlog.md"))
+    if bl_problem:
+        problems.append(bl_problem)
+    if len(bl_text) > BACKLOG_CAP:
+        head = bl_text[:BACKLOG_CAP]
+        head = head[:head.rfind("\n") + 1] if "\n" in head else head
+        backlog = head.rstrip() + ("\n... (+%d chars more - read %s/backlog.md)"
+                                   % (len(bl_text) - len(head), data))
+    else:
+        backlog = bl_text.strip()
 
     parts = ["""## Spawn lifecycle (you are steering this home)
 1. Register the project: a git repo at %s/projects/<name> plus one line in data/projects.md.
@@ -497,11 +609,17 @@ def build_tier2(tasks, watcher_line, lock_line):
 6. Verify:   bin/fm-verify.sh <id>  before accepting any done: claim
 7. Teardown: bin/fm-teardown.sh <id>  only after the merge is confirmed""" % fm]
 
+    # Anything we could not read is named before the sections that would
+    # otherwise render its absence as "(none)".
+    if problems:
+        parts.append("## steering detail - UNAVAILABLE (%s)" % "; ".join(problems))
+
     parts.append(cap_list("## Registered projects", projects))
     parts.append(cap_list("## Secondmates", secondmates, empty="(none registered)"))
     if backlog:
         parts.append("## Recent backlog\n" + backlog)
-    parts.append(section("digest", build_digest, tasks, watcher_line, lock_line))
+    parts.append(section("digest", build_digest, tasks, task_problems,
+                         watcher_line, lock_line))
     return "\n\n".join(parts)
 
 
@@ -547,11 +665,30 @@ def main():
     if role() != "captain":
         return
 
-    tasks = []
+    # Two different kinds of not-knowing, and they must not be conflated.
+    #
+    # STRUCTURAL: the home or its state/ could not be listed at all, so the
+    # in-flight COUNT is unknown. Rendering "0 in flight" here is the most
+    # consequential lie this block can tell - it says there is nothing to
+    # reconcile, which is exactly what recovery keys off.
+    #
+    # DETAIL: state/ listed fine but one status file would not read. The count
+    # is real; only that task's latest line is missing. Mark it, keep the fact.
+    structural_problem = None
+    if not os.path.isdir(fm):
+        structural_problem = "home is absent (%s)" % fm
+    else:
+        structural_problem = dir_problem(state, "state/")
+
+    tasks, task_problems = [], []
     try:
-        tasks = own_tasks()
-    except Exception:
-        tasks = []
+        tasks, task_problems = own_tasks()
+    except Exception as e:
+        structural_problem = structural_problem or (
+            "state/ could not be read (%s)" % type(e).__name__)
+    if structural_problem:
+        task_problems = [structural_problem] + [
+            p for p in task_problems if p != structural_problem]
 
     # The two sanctioned execs, in the order that matters: the lock line is
     # needed both for Tier 1 and to decide whether Tier 2 is owed at all.
@@ -570,9 +707,21 @@ def main():
     elif "none" in watcher_line:
         watcher_word = "none"
 
-    own_summary = "- %-14s [%d in flight, %d need a decision] watcher %s  (this home)" % (
-        os.path.basename(fm.rstrip("/")) or "primary",
-        len(tasks), needs_attention(tasks), watcher_word)
+    own_name = os.path.basename(fm.rstrip("/")) or "primary"
+    if structural_problem:
+        # Counting to zero off a directory we could not read would be the most
+        # consequential lie this block can tell: it says there is nothing to
+        # reconcile, which is exactly what recovery keys off. When the home or
+        # its state/ is unreadable the count is not degraded, it is UNKNOWN.
+        own_summary = "- %-14s [UNAVAILABLE: %s] watcher %s  (this home)" % (
+            own_name, structural_problem, watcher_word)
+    else:
+        # state/ listed fine, so the counts are real. A detail we could not
+        # read degrades the detail and is marked, but does not discard a fact
+        # we actually have.
+        degraded = "" if not task_problems else " (+%d unreadable)" % len(task_problems)
+        own_summary = "- %-14s [%d in flight, %d need a decision%s] watcher %s  (this home)" % (
+            own_name, len(tasks), needs_attention(tasks), degraded, watcher_word)
 
     blocks = ["""# firstmate - fleet (injected at boot; no tool calls needed)
 You are a firstmate. Home: %s (%s). Manual: %s/AGENTS.md""" % (
@@ -587,7 +736,8 @@ You are a firstmate. Home: %s (%s). Manual: %s/AGENTS.md""" % (
 
     # Tier 2. Only for the session that is actually steering.
     if steering:
-        tier2 = section("steering detail", build_tier2, tasks, watcher_line, lock_line)
+        tier2 = section("steering detail", build_tier2, tasks, task_problems,
+                       watcher_line, lock_line)
         room = INJECT_CAP - len("\n\n".join(blocks)) - 200
         room = min(room, TIER2_CAP)
         if len(tier2) > room > 0:

@@ -148,4 +148,31 @@ outE=$(run_suite "$E"); codeE=$?
 assert_contains "$outE" "bb-declared-red RAN" \
   "declaration alone must not skip a test; the gate must also be red"
 
+# --- case F: a PARTIAL parse must skip nothing ------------------------------
+#
+# A real fail-open, not a hypothetical: the sentinel used to be appended to the
+# same stream the parse wrote its rows to, so a ledger that parsed far enough to
+# emit some rows and then failed produced "rows + BADLEDGER". The exact-match
+# handling missed the sentinel, and skipping proceeded on a half-read ledger -
+# in the one place this runner promises to fail closed.
+#
+# A ledger whose gates list is well-formed up to a non-object entry reproduces
+# it: the declared-red row is emitted first, then the parse dies.
+F="$TMP/f"; fixture "$F" yes
+python3 - "$F/gates/ledger.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+# Well-formed entries first, then garbage - so any row-at-a-time parse emits
+# the declared-red row before it hits trouble.
+d["gates"].append("not-an-object")
+open(p, "w").write(json.dumps(d, indent=2))
+PY
+outF=$(run_suite "$F"); codeF=$?
+[ "$codeF" -ne 0 ] || fail "a partially-parseable ledger must not produce a green suite"
+assert_contains "$outF" "bb-declared-red RAN" \
+  "a partial parse must skip NOTHING - a half-read ledger is not a mandate to skip"
+assert_not_contains "$outF" "SKIP" \
+  "a partial parse must announce no skips at all"
+
 pass "ci suite runner skips only declared-red gates"
