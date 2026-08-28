@@ -22,6 +22,10 @@
 # green without touching a multiplexer is worse than one that reports nothing.
 set -u
 
+# This gate needs the REAL binary; tests/lib.sh otherwise shims it away so no
+# suite can touch the captain's live server by accident.
+FM_TEST_ALLOW_LIVE_HERDR=1
+
 # shellcheck source=tests/herdr-helpers.sh
 . "$(dirname "${BASH_SOURCE[0]}")/herdr-helpers.sh"
 # shellcheck source=bin/fm-herdr.sh

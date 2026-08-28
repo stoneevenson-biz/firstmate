@@ -21,6 +21,10 @@
 # destroys its own throwaway session; it never touches the fleet's.
 set -u
 
+# This gate needs the REAL binary; tests/lib.sh otherwise shims it away so no
+# suite can touch the captain's live server by accident.
+FM_TEST_ALLOW_LIVE_HERDR=1
+
 # shellcheck source=tests/herdr-helpers.sh
 . "$(dirname "${BASH_SOURCE[0]}")/herdr-helpers.sh"
 # shellcheck source=bin/fm-herdr.sh
@@ -62,9 +66,15 @@ harness=claude
 kind=ship
 META
 
+# FM_COMPOSER_IDLE_RE is the documented per-harness knob for "what an idle
+# composer looks like" (bin/fm-tmux-lib.sh). This fixture's pane holds a bare
+# SHELL rather than an agent TUI, and a shell prompt ends in % or $ - without
+# telling the detector that, it reads an idle prompt as unsubmitted text and
+# fm-send reports a swallowed Enter for a line that actually landed. Setting it
+# here is exactly what the knob exists for; it changes no production behaviour.
 run() {  # <script> <args...>
   FM_ROOT_OVERRIDE='' FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$HOME_DIR/state" \
-    FM_SEND_SETTLE=0 "$@" 2>&1
+    FM_SEND_SETTLE=0 FM_COMPOSER_IDLE_RE='[%$#]$' "$@" 2>&1
 }
 
 # --- READ: the watcher must not go blind ------------------------------------

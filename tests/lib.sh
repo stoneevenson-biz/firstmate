@@ -31,20 +31,38 @@ FM_TEST_LIB_SOURCED=1
 # shellcheck disable=SC2034
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# --- multiplexer driver -----------------------------------------------------
+# --- keeping tests off the live herdr server --------------------------------
 #
-# Every suite here drives a FAKE multiplexer. The seam defaults to herdr and
-# never auto-selects anything else, so an unpinned test run would aim at the
-# captain's real herdr server and create real tabs in his real workspaces -
-# which is exactly what happened once, leaving a stray workspace behind.
+# herdr is the only surface firstmate spawns onto, so any suite that drives
+# fm-spawn/fm-send/fm-peek without faking `herdr` will reach the CAPTAIN'S REAL
+# SERVER and create real tabs in his real workspaces. That is not hypothetical:
+# it happened twice during this migration, leaving stray `design-home`,
+# `spawn-proj` and `alpha` workspaces behind for someone to notice and clean up.
 #
-# This pin is an EXPLICIT harness choice, the same kind of decision FM_MUX exists
-# for, not the automatic degradation the captain's rule forbids: it is set here,
-# deliberately, so a suite's fakes are the thing under test and no test can reach
-# the live fleet. Suites exercising the herdr driver set FM_MUX themselves after
-# sourcing this file; the live gates set it per case.
-: "${FM_MUX:=tmux}"
-export FM_MUX
+# There is no longer an FM_MUX to pin, and there should not be - headless is not
+# a flag anyone gets to flip. So the net is a PATH shim instead: a `herdr` that
+# refuses loudly. A suite that fakes herdr prepends its own fakebin ahead of this
+# one and never sees it; a suite that forgot gets an obvious, greppable failure
+# rather than silently touching the fleet.
+#
+# The live gates need the real binary. They set FM_TEST_ALLOW_LIVE_HERDR=1 BEFORE
+# sourcing this file, which is deliberate and visible at the top of those files.
+
+if [ "${FM_TEST_ALLOW_LIVE_HERDR:-0}" != 1 ]; then
+  FM_TEST_DENY_BIN=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-deny.XXXXXX")
+  cat > "$FM_TEST_DENY_BIN/herdr" <<'DENY'
+#!/usr/bin/env bash
+echo "fm-test: this suite reached the REAL herdr binary." >&2
+echo "  A test must never touch the captain's live server. Install a fake herdr" >&2
+echo "  on PATH (tests/herdr-helpers.sh: fm_herdr_fake_server), or set" >&2
+echo "  FM_TEST_ALLOW_LIVE_HERDR=1 before sourcing tests/lib.sh if this suite is" >&2
+echo "  a live gate that genuinely needs the real server." >&2
+exit 97
+DENY
+  chmod +x "$FM_TEST_DENY_BIN/herdr"
+  PATH="$FM_TEST_DENY_BIN:$PATH"
+  export PATH
+fi
 
 # --- reporters --------------------------------------------------------------
 

@@ -33,7 +33,9 @@ fm_herdr_fake_server() {  # <dir>
   local fb="$1/fakebin"; mkdir -p "$fb"
   cat > "$fb/herdr" <<'SH'
 #!/usr/bin/env bash
-printf '%s\n' "$*" >> "$CALLS"
+# CALLS is optional: a suite that only needs herdr kept away from the live
+# server does not have to set up call recording to use this fake.
+printf '%s\n' "$*" >> "${CALLS:-/dev/null}"
 ws_json() {
   local out='{"id":"cli:workspace:list","result":{"type":"workspace_list","workspaces":['
   local first=1 pair id label
