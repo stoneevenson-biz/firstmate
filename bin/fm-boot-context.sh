@@ -80,8 +80,26 @@
 # the gate still passes most of the time.
 #
 # What actually bounds the total is RENDER_RESERVE - see its comment below for
-# the inequality. Measured worst of 20 wedged-helper runs under 8-way CPU load:
-# 1.28s against the 1.5s ceiling.
+# the inequality.
+#
+# Two implementation defects, not the ceiling, were what breached it, and both
+# are fixed here rather than by moving the threshold:
+#
+#   1. A LEAK. subprocess killed the helper it started but not what that helper
+#      spawned, so every wedged boot orphaned two processes to init. Five per
+#      gate run, accumulating: 194 live at once, load average 186, and the boots
+#      being timed then took ~2s. The gate was measuring its own side effects
+#      and it read as flakiness - one run passed, six in a row did not. Helpers
+#      now run in their own process group and are killed as a group.
+#   2. EXPENSIVE CLEANUP. Draining the pipes of a killed helper with
+#      communicate() costs up to its timeout per helper - 0.4s at two helpers,
+#      spent after the deadline was already gone, which put cold runs at
+#      1.51-1.62s. The output is not wanted, so the group is killed, reaped, and
+#      its fds closed without draining.
+#
+# Measured after both fixes, on a machine at load ~134: 10 consecutive gate runs
+# green, worst single boot 1.104s against the 1.5s ceiling, zero processes
+# leaked. The ceiling did not need to move.
 #
 # The peer path costs ZERO execs, by construction: reading 12 peer files is
 # 0.66ms, while 12 subprocess execs is 373ms and can wedge indefinitely. Peers
@@ -139,7 +157,7 @@ fi
 # stdin via the heredoc, so the payload is handed over in the environment.
 FM_HOOK_JSON="$(cat)" FM_BOOT_FM="$FM" FM_BOOTSTRAP_BIN="$FM_BIN" \
 FM_BOOT_START="$FM_BOOT_START" python3 - <<'PY'
-import os, sys, json, glob, time, subprocess
+import os, sys, json, glob, time, signal, subprocess
 
 # The wrapper's start time, so the ceiling covers interpreter startup too. A
 # missing or unusable value falls back to now, which only ever makes the budget
@@ -315,24 +333,60 @@ def helper(script, args, label):
     there is exactly one definition of what "the watcher is healthy" means.
     Every failure mode - missing, wedged, silent, crashed - returns an explicit
     marker; none returns something that could pass for a healthy reading.
+
+    A wedged helper is killed as a PROCESS GROUP, not as a single process.
+    Killing only the direct child leaves whatever it spawned running, reparented
+    to init, for as long as that child wants - and a boot hook that leaks a
+    process every time a helper wedges degrades the machine it runs on. Measured
+    before this was fixed: two orphans per hostile boot, 194 of them accumulated
+    across one afternoon of test runs, carrying the load average to 186 and
+    slowing the very boots the budget gate was measuring. The gate was poisoning
+    its own experiment, and the production path had the same leak.
     """
     slice_ = min(HELPER_TIMEOUT, remaining())
     if slice_ < MIN_HELPER_SLICE:
         return "UNAVAILABLE (%s: skipped, boot budget exhausted)" % label
     path = os.path.join(bindir, script)
+    env = dict(os.environ)
+    env["FM_HOME"] = fm
+    # Helpers that source fm-wake-lib.sh create the state dir at source time.
+    # Nothing reached from here may create anything, so opt out.
+    env["FM_WAKE_LIB_READONLY"] = "1"
     try:
-        env = dict(os.environ)
-        env["FM_HOME"] = fm
-        # Helpers that source fm-wake-lib.sh create the state dir at source
-        # time. Nothing reached from here may create anything, so opt out.
-        env["FM_WAKE_LIB_READONLY"] = "1"
-        r = subprocess.run([path] + args, capture_output=True, text=True,
-                           timeout=slice_, env=env)
+        # start_new_session puts the helper in its own process group, which is
+        # what makes killing the whole tree possible below.
+        proc = subprocess.Popen([path] + args, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True, env=env,
+                                start_new_session=True)
+    except Exception as e:
+        return "UNAVAILABLE (%s: %s)" % (label, type(e).__name__)
+    try:
+        out, _ = proc.communicate(timeout=slice_)
     except subprocess.TimeoutExpired:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except Exception:
+            proc.kill()
+        # Reap and release the fds, but do NOT drain the pipes. The output is
+        # not wanted - this returns UNAVAILABLE either way - and draining is
+        # what makes cleanup expensive: communicate() reads until EOF, which
+        # costs up to its own timeout PER wedged helper. At two helpers that was
+        # 0.4s of pure waiting added after the deadline had already been spent,
+        # and it is what pushed cold runs to 1.51-1.62s against a 1.5s ceiling.
+        # SIGKILL to the group guarantees exit, so a short wait suffices.
+        try:
+            proc.wait(timeout=0.05)
+        except Exception:
+            pass
+        for pipe in (proc.stdout, proc.stderr):
+            try:
+                pipe.close()
+            except Exception:
+                pass
         return "UNAVAILABLE (%s: no answer within %.2fs)" % (label, slice_)
     except Exception as e:
         return "UNAVAILABLE (%s: %s)" % (label, type(e).__name__)
-    for line in (r.stdout or "").splitlines():
+    for line in (out or "").splitlines():
         if line.strip():
             return line.strip()
     return "UNAVAILABLE (%s: no output)" % label

@@ -91,6 +91,23 @@ hostile_boot() {
     bash "$FM_BOOT_EMITTER"
 }
 
+# 0. the boot must not leak processes.
+#
+# This assertion exists because its absence invalidated every measurement this
+# gate had ever taken. subprocess kills the helper it started but not what that
+# helper spawned, so each wedged boot orphaned two `sleep 999` processes to
+# init. Five per test run, accumulating across runs: 194 of them were live at
+# once, carrying the load average to 186 - and the boots this gate was timing
+# then took ~2s against a 1.5s ceiling. The gate was failing because of its own
+# side effects, and it read as flakiness. A single run passed; six in a row did
+# not. Any timing assertion below is worthless without this one above it.
+# ps, not pgrep: this must match the FULL argv exactly. `pgrep -x` matches the
+# process name only, so it cannot distinguish `sleep 999` from any other sleep,
+# and `pgrep -f` substring-matches, which would also match this very pipeline.
+# shellcheck disable=SC2009
+leaked_sleepers() { ps -eo args | grep -c '^sleep 999$'; }
+sleepers_before=$(leaked_sleepers)
+
 # 1. inside the budget - measured over REPEATED runs, judged on the WORST.
 #
 # A single sample is not evidence about a ceiling. The first version of this
@@ -110,6 +127,13 @@ for _ in $(seq 1 "$RUNS"); do
   expect_code 0 "$code" "the emitter must exit 0 even with every helper wedged"
   worst=$(python3 -c "import sys; print('%.3f' % max(float(sys.argv[1]), float(sys.argv[2])))" "$worst" "$elapsed")
 done
+
+# Checked before the timing verdict, because a leak invalidates the timing.
+sleepers_after=$(leaked_sleepers)
+leaked=$((sleepers_after - sleepers_before))
+[ "$leaked" -le 0 ] || fail "a wedged helper must be killed as a process group, not left \
+running: $RUNS boots orphaned $leaked processes. That is a production leak, and it also \
+poisons this gate - the orphans load the machine and the next run's timing measures them."
 
 python3 -c "import sys; sys.exit(0 if float(sys.argv[1]) < 1.5 else 1)" "$worst" \
   || fail "every boot must finish inside the 1.5s ceiling with every helper wedged (worst of $RUNS runs: ${worst}s)"
