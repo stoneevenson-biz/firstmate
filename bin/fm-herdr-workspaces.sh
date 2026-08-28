@@ -6,46 +6,74 @@
 #   * every project gets its OWN workspace, labelled with the project name
 #   * every agent pane is NAMED FOR THE WORK IT IS DOING, not for a task id
 #
-# A task id like `afs-resources-r7` tells you nothing at a glance. `afs/resource
-# -registry` tells you what that pane is for without attaching to it. herdr
-# addresses agents by unique name (`herdr agent prompt <name> ...`), so the name
-# is not decoration - it is the address, and a good one makes the fleet legible
-# from the workspace list alone.
+# A task id like `afs-resources-r7` tells you nothing at a glance.
+# `afs-resource-registry` tells you both the project and the work without
+# attaching to the pane. herdr addresses agents by unique name (`herdr agent
+# prompt <name> ...`), so the name is not decoration - it is the address, and a
+# good one makes the fleet legible from the workspace list alone.
 #
-# Naming convention:  <project-short>/<what-the-work-is>
-#   afs/resource-registry      afs/doc-index         cellarsky/booking-fix
-#   mac-config/cutover-guard   stone-skills/lint-edges
-# Keep it under 28 chars so it fits the sidebar (herdr's sidebar_width is 30). Kebab-case, no task suffix -
-# the id lives in state/<id>.meta, which is where an id belongs.
+# Naming convention:  <project-short>-<what-the-work-is>, kebab, under 28 chars
+#   afs-resource-registry   mac-config-cutover-guard   cellarsky-booking-fix
+#   firstmate-fleet-view    firstmate-hook-register    archify-leak-fixes
+# One HYPHEN joins the halves. No task suffix - the id lives in
+# state/<id>.meta, which is where an id belongs.
+#
+# THE SEPARATOR IS A HYPHEN, NEVER A SLASH, and that is not a style preference.
+# Verified against herdr 0.8.2: `herdr agent rename` rejects anything but
+# ^[a-z][a-z0-9_-]{0,31}$ with invalid_agent_name. The `<project>/<work>` form
+# this file once carried could therefore never be applied at all - every rename
+# it produced failed and the pane kept a name nobody chose. A live gate pins the
+# separator against the real binary, so restoring a slash turns that gate red.
+# 28 chars keeps the name readable in the sidebar (sidebar_width 30) and inside
+# herdr's 32-char address limit at once.
+# bin/fm-mux-lib.sh owns the sanitizer and the validity check.
 #
 # Usage:
 #   fm-herdr-workspaces.sh              show the plan, change nothing
 #   fm-herdr-workspaces.sh --apply      create the missing workspaces
-#   fm-herdr-workspaces.sh --name <target> <project> <work>   name an agent pane
+#   fm-herdr-workspaces.sh --name <target> <project-short> <work...>
 set -euo pipefail
 
-FM_HOME="${FM_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FM_HOME="${FM_HOME:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 REGISTRY="$FM_HOME/data/projects.md"
 PROJECTS_DIR="$FM_HOME/projects"
 
+# The multiplexer seam owns the reachability predicate and the naming rules;
+# one fact, one owner. This file stays the place the CONVENTION is documented.
+# shellcheck source=bin/fm-mux-lib.sh
+. "$SCRIPT_DIR/fm-mux-lib.sh"
+
 die() { printf 'fm-herdr-workspaces: %s\n' "$1" >&2; exit 1; }
 
-herdr_up() { herdr session list 2>/dev/null | awk '$1=="default"{print $2}' | grep -q running; }
+herdr_up() { fm_mux_herdr_up; }
 
 require_herdr() {
   command -v herdr >/dev/null 2>&1 || die "herdr is not on PATH"
   herdr_up || die "no herdr server is running — run \`herdr\` to start or attach it, then retry"
 }
 
-# --name: apply the convention to a live agent pane.
+# --name: apply the convention to a live agent pane. Names BOTH slots - the tab
+# label the captain reads and the agent address herdr steers by - with the same
+# string, because they are the same name.
 if [ "${1:-}" = "--name" ]; then
   require_herdr
   [ $# -ge 4 ] || die "usage: --name <target> <project-short> <what-the-work-is>"
   target=$2; proj=$3; shift 3
-  work=$(printf '%s' "$*" | tr '[:upper:] ' '[:lower:]-' | tr -cd 'a-z0-9/-' | sed 's/--*/-/g; s/^-//; s/-$//')
-  name="$proj/$work"
-  [ "${#name}" -le 28 ] || die "name '$name' is ${#name} chars; keep it short enough to read in the tab bar"
-  herdr agent rename "$target" "$name" >/dev/null || die "rename failed for $target"
+  name=$(fm_mux_pane_name "$proj" "$*")
+  [ -n "$name" ] || die "'$proj' + '$*' leaves nothing usable as a name"
+  # Refuse an unreadably long name rather than silently truncating it: a name
+  # the captain did not choose is worse than being told to choose a shorter one.
+  # (fm_mux_pane_name truncates for callers that must not fail, such as a spawn.)
+  untruncated="$(fm_mux_work_name "$proj")-$(fm_mux_work_name "$*")"
+  [ "${#untruncated}" -le 28 ] \
+    || die "'$untruncated' is ${#untruncated} chars; keep it under 28, e.g. afs-resource-registry"
+  # The separator is a hyphen because herdr will not accept anything else. This
+  # check is what makes putting a slash back a RED gate rather than a silent
+  # no-op rename.
+  fm_mux_name_valid "$name" \
+    || die "'$name' is not a name herdr will accept as an address (want ^[a-z][a-z0-9_-]{0,31}$ - a slash is rejected)"
+  fm_mux_herdr_label "$target" "$name" || die "herdr did not accept '$name' for $target"
   printf 'named %s -> %s\n' "$target" "$name"
   exit 0
 fi

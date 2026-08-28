@@ -22,6 +22,17 @@ printf '%s\n' "\$*" >> "\$CALLS"
 case "\$1 \$2" in
   "session list")   printf 'name status\ndefault running\n' ;;
   "workspace list") printf '%s\n' "$2" ;;
+  "pane get")       printf '{"result":{"pane":{"pane_id":"\$3","tab_id":"wT:t9"}}}\n' ;;
+  "tab rename")     printf '{"result":{"type":"ok"}}\n' ;;
+  "agent rename")
+    # herdr 0.8.2's REAL constraint. Without it this fake is a yes-machine and
+    # would happily "accept" a slash the live binary rejects - the exact way a
+    # gate passes against a stub while the fleet ends up unaddressable.
+    if printf '%s' "\$4" | grep -qE '^[a-z][a-z0-9_-]{0,31}$'; then
+      printf '{"result":{"type":"ok"}}\n'
+    else
+      printf '{"error":{"code":"invalid_agent_name"}}\n'; exit 1
+    fi ;;
 esac
 exit 0
 SH
@@ -78,15 +89,31 @@ test_apply_creates_only_the_missing_one() {
 test_name_normalises_to_the_convention() {
   : > "$CALLS"
   FM_HOME="$HOME_DIR" bash "$SCRIPT" --name w9:p2 afs "Resource Registry" >/dev/null 2>&1
-  grep -q 'agent rename w9:p2 afs/resource-registry' "$CALLS" \
-    || { echo "calls: $(cat "$CALLS")"; fail "name not normalised to <project>/<work>"; }
-  pass "naming: 'Resource Registry' -> afs/resource-registry"
+  grep -q 'agent rename w9:p2 afs-resource-registry' "$CALLS" \
+    || { echo "calls: $(cat "$CALLS")"; fail "name not normalised to <project>-<work>"; }
+  pass "naming: 'Resource Registry' -> afs-resource-registry"
+}
+
+# THE SEPARATOR. A slash is not a style question: herdr 0.8.2 rejects it with
+# invalid_agent_name, so a slashed name renames nothing and leaves the pane
+# unaddressable. This case is what turns restoring the slash RED.
+test_separator_is_a_hyphen_never_a_slash() {
+  : > "$CALLS"
+  local out
+  out=$(FM_HOME="$HOME_DIR" bash "$SCRIPT" --name w9:p9 afs "resource registry" 2>&1)
+  assert_contains "$out" "afs-resource-registry" "the applied name is not project-first with a hyphen"
+  assert_no_grep "afs/resource-registry" "$CALLS" "a slash-separated name was sent to herdr"
+  # And prove the fake would have refused one, so the case above is not vacuous.
+  if bash -c 'printf "%s" "afs/resource-registry" | grep -qE "^[a-z][a-z0-9_-]{0,31}$"'; then
+    fail "the name check would accept a slash; this gate proves nothing"
+  fi
+  pass "naming: the separator is a hyphen, and a slash is provably rejected"
 }
 
 test_name_strips_unsafe_characters() {
   : > "$CALLS"
   FM_HOME="$HOME_DIR" bash "$SCRIPT" --name w9:p3 afs 'fix: booking (v2)!' >/dev/null 2>&1
-  grep -qE 'agent rename w9:p3 afs/[a-z0-9/-]+$' "$CALLS" \
+  grep -qE 'agent rename w9:p3 afs-[a-z0-9-]+$' "$CALLS" \
     || { echo "calls: $(cat "$CALLS")"; fail "unsafe characters survived into the name"; }
   pass "naming: punctuation stripped, kebab-case enforced"
 }
@@ -125,6 +152,7 @@ test_plan_reads_registry_and_flags_missing_dirs
 test_plan_creates_nothing
 test_apply_creates_only_the_missing_one
 test_name_normalises_to_the_convention
+test_separator_is_a_hyphen_never_a_slash
 test_name_strips_unsafe_characters
 test_overlong_name_is_refused
 test_refuses_when_no_server
