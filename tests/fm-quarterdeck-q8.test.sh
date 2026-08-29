@@ -22,11 +22,16 @@
 #     verify` re-runs every gate and rewrites the ledger it is pointed at, so a
 #     classifier that called it would mutate the thing it classifies.
 #   - FAIL CLOSED: an unparseable ledger yields no rows at all, never a partial
-#     answer, and an unrecognised status is never ok.
+#     answer; an unrecognised status is never ok; and a "gates" value that is
+#     not a JSON array is BADLEDGER, never coerced into one. That coercion was
+#     a live fail-open - {"gates": {}} became an empty list, produced zero rows,
+#     and classified OK, so fm-verify announced "gates: acceptable" over a
+#     ledger it had read no gates from at all.
 #
 # Mutation (LEDGER_MUTATE=1): the assertions demand the unsafe classification -
-# that an UNDECLARED red is ok. A correct classifier calls it bad-red, so the
-# assertion fails.
+# that an UNDECLARED red is ok, and that an object-shaped "gates" is coerced and
+# classified OK. A correct classifier calls them bad-red and BADLEDGER, so both
+# assertions fail.
 #
 # spec: docs/specs/2026-07-01-agent-os-council.md
 set -u
@@ -183,6 +188,56 @@ case "$(row "$(fm_gates_classify "$H")" fx-green)" in
   *) fail "a status the classifier has no rule for must never classify ok" ;;
 esac
 
+# --- fail closed: a non-array "gates" is BADLEDGER, never coerced ------------
+#
+# The regression this freezes was live and shipped in this file's first
+# version: the shape check ran AFTER an `if isinstance(gates, dict): gates =
+# list(gates.values())` coercion lifted from tests/run-all.sh. An object-shaped
+# ledger therefore became a list, an EMPTY object became an empty list, zero
+# rows were emitted, and the header said OK - so bin/fm-verify.sh printed
+# "gates: acceptable" over a ledger from which it had read no gates whatsoever.
+# CONTRIBUTING.md states that gates must be a JSON array and that any other
+# shape makes every `ledger` subcommand abort, and frozen gate m0-ledger-shape
+# freezes that. A shape the harness calls fatal is not one to quietly repair.
+O="$TMP/o"; fixture "$O"
+printf '%s\n' '{"version": 1, "gates": {}}' > "$O/gates/ledger.json"
+outO=$(fm_gates_classify "$O")
+
+if [ "${LEDGER_MUTATE:-}" = 1 ]; then
+  # MUTATION: demand the coercion back - an empty object classifying OK.
+  expect_code OK "$(header "$outO")" \
+    "MUTATION: expected an object-shaped gates value to be coerced and classify OK"
+else
+  expect_code BADLEDGER "$outO" \
+    "an empty object-shaped gates value must be BADLEDGER, never coerced into an
+empty list that classifies OK over a ledger no gate was ever read from"
+fi
+
+# A POPULATED object is the same defect wearing a disguise: it would coerce into
+# a plausible-looking list of real gates and classify as if the ledger were fine.
+O2="$TMP/o2"; fixture "$O2"
+python3 - "$O2/gates/ledger.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d["gates"] = {g["id"]: g for g in d["gates"]}   # keyed by id: tidier, and fatal
+open(p, "w").write(json.dumps(d, indent=2))
+PY
+expect_code BADLEDGER "$(fm_gates_classify "$O2")" \
+  "a populated object-shaped gates value must be BADLEDGER too - coercing it
+would classify a ledger the harness itself refuses to load"
+
+# --- an EMPTY array is a valid array, and acceptable -------------------------
+#
+# The other side of the same rule: [] is a well-formed ledger with no gates. It
+# is not broken, so it must not be BADLEDGER; it simply has nothing to condemn.
+E2="$TMP/e2"; fixture "$E2"
+printf '%s\n' '{"version": 1, "gates": []}' > "$E2/gates/ledger.json"
+outE2=$(fm_gates_classify "$E2")
+expect_code OK "$(header "$outE2")" "an empty gates array is a valid ledger, not a broken one"
+[ "$(printf '%s\n' "$outE2" | tail -n +2 | grep -c .)" = 0 ] \
+  || fail "an empty gates array must yield no rows"
+
 # --- purity: never invokes gates/verify.sh or the ledger CLI -----------------
 #
 # `ledger verify` execSyncs every gate's test_ref and then REWRITES
@@ -216,4 +271,4 @@ re-run every gate and rewrite the ledger it is classifying"
 [ "$(header "$(fm_gates_classify "$A")")" = OK ] || fail "root A must classify OK"
 [ "$(fm_gates_classify "$C")" = NOGATES ] || fail "root C must classify NOGATES"
 
-pass "Q8 gate classifier: double condition, absence cases, pure, fail closed"
+pass "Q8 gate classifier: double condition, absence cases, array-only, pure, fail closed"

@@ -124,7 +124,7 @@ Anything else is unrecognised and fails closed.
 | `gates/` but no `accepted-red.md` | **reject** any red | No declarations exist, so every red is undeclared by construction. A fully green ledger with no `accepted-red.md` still passes. |
 | a gate's `test_ref` names a file not on disk | **reject** | A ledger claiming green for a gate whose test is gone is stale by construction. |
 | `gates/` but no `ledger.json` | **escalate** | The repo declares itself gate-governed and the record of what is proven is absent. Infrastructure, not work. |
-| ledger unreadable or wrong shape | **escalate** | A parse failure is not a finding a crewmate can fix by editing code. |
+| ledger unreadable or wrong shape | **escalate** | A parse failure is not a finding a crewmate can fix by editing code. "Wrong shape" includes a `gates` value that is not a JSON array: `CONTRIBUTING.md` and frozen gate `m0-ledger-shape` both make that fatal, so it is never coerced into a list — an object would otherwise yield zero rows and read as acceptable. An *empty* array is valid and acceptable. |
 | unrecognised status | **escalate** | Never a pass; a ledger this repo cannot interpret needs a human. |
 
 **Freshness is a cross-check, not a re-run.** The `test_ref` existence check

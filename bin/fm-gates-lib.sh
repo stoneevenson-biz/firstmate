@@ -63,7 +63,9 @@
 # Headers:
 #   NOGATES     <root>/gates is not a directory. Not applicable; no rows.
 #   NOLEDGER    gates/ exists but gates/ledger.json does not. No rows.
-#   BADLEDGER   the ledger is unreadable, unparseable, or the wrong shape.
+#   BADLEDGER   the ledger is unreadable, unparseable, or the wrong shape -
+#               including a "gates" value that is not a JSON array, which
+#               CONTRIBUTING.md and frozen gate m0-ledger-shape both call fatal.
 #               No rows - never a partial answer (see ALL OR NOTHING below).
 #   NOACCEPTED  the ledger parsed but gates/accepted-red.md is absent, so NO
 #               declarations exist. Rows follow, and every red among them is
@@ -139,10 +141,19 @@ if accepted_path:
 
 ledger = json.load(open(ledger_path))
 gates = ledger["gates"]
-if isinstance(gates, dict):
-    gates = list(gates.values())
+
+# ARRAY OR NOTHING. tests/run-all.sh used to coerce an object-shaped "gates"
+# into a list, and lifting that coercion here was a fail-open: {"gates": {}}
+# coerced to an empty list, produced zero rows, and classified OK - so
+# fm-verify announced "gates: acceptable" over a ledger it had never read a
+# single gate from. CONTRIBUTING.md ("The gate ledger") states that gates must
+# be a JSON array and that any other shape makes EVERY `ledger` subcommand
+# abort before doing any work, and frozen gate m0-ledger-shape freezes exactly
+# that. A shape the harness itself calls fatal cannot be something this
+# classifier quietly repairs. An EMPTY array is still a valid array: it means a
+# ledger with no gates, which is acceptable, not broken.
 if not isinstance(gates, list) or not all(isinstance(g, dict) for g in gates):
-    raise SystemExit("ledger gates are not a list of objects")
+    raise SystemExit("ledger gates must be a JSON array of objects")
 
 # A tab or newline inside a declared reason would silently shift every field
 # after it and turn a fail-closed row into a misread one, so the detail column

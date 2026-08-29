@@ -21,6 +21,10 @@
 #     treating "no declarations" as "nothing to declare".
 #   - gates/ with no ledger escalates: the repo declares itself gate-governed
 #     and the record of what is proven is gone. Fail closed, not open.
+#   - a ledger whose "gates" value is not a JSON array escalates rather than
+#     being announced acceptable. The classifier once coerced an object into a
+#     list, so {"gates": {}} yielded zero rows and fm-verify printed
+#     "gates: acceptable" over a ledger it had read no gates from.
 #   - a ledger citing a test file that no longer exists rejects as stale.
 #   - the verifier prompt no longer carries a gate rule of its own. Two
 #     authorities over one decision is what produced the contradiction.
@@ -173,6 +177,21 @@ run f; codeF=$?
 expect_code 2 "$codeF" "a ledger claiming a gate whose test file is gone is stale, and rejects"
 assert_grep "fx-green" "$(fm_verdict_file "$S" f)" "the stale reject names the gate"
 assert_grep "tests/aa.test.sh" "$(fm_verdict_file "$S" f)" "the stale reject names the missing test"
+
+# --- case H: a non-array "gates" escalates, and is never called acceptable ---
+#
+# The end of the fail-open Q8 covers at the unit level: an object-shaped ledger
+# must not reach the models, and must never be announced as acceptable.
+rm -f "$LENS_TRIP" "$VERIFY_TRIP"
+WH=$(task h); gates "$WH" yes
+printf '%s\n' '{"version": 1, "gates": {}}' > "$WH/gates/ledger.json"
+run h; codeH=$?
+expect_code 3 "$codeH" "a gates value that is not a JSON array must escalate, never approve"
+assert_grep "escalate:" "$(fm_verdict_file "$S" h)" "the bad shape is recorded as an escalation"
+assert_no_grep "approve:" "$(fm_verdict_file "$S" h)" "a ledger the harness refuses to load must never approve"
+assert_no_grep "gates: acceptable" "$TMP/h.out" \
+  "fm-verify must not announce an unreadable-shaped ledger as acceptable"
+assert_absent "$VERIFY_TRIP" "the bad-shape escalation also precedes the verifier"
 
 # --- case G: the prompt no longer carries a gate rule of its own -------------
 #
