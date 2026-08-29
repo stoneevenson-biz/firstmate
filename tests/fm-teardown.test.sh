@@ -186,6 +186,43 @@ test_a_successful_close_leaves_no_orphan_record() {
   pass "a clean close leaves no orphan record (the warning keeps its meaning)"
 }
 
+# The retry: run 1 could not close the pane and kept the record, run 2 closed
+# it. A record that survives the close names a pane that is no longer there,
+# which sends an operator hunting exactly as the missing record once did.
+test_a_later_successful_close_clears_a_stale_record() {
+  local case_dir rc record
+  case_dir=$(make_case close-retry)
+  write_meta "$case_dir" local-only ship
+  fail_the_close "$case_dir"
+  record="$case_dir/state/task-x1.orphan-pane"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout1" 2> "$case_dir/stderr1"
+  set -e
+  [ -f "$record" ] || fail "close-retry: the first run did not keep a record to go stale"
+
+  # Run 2: the meta the first run cleared is back (a reconcile restores it from
+  # the kept record), and the pane closes this time.
+  write_meta "$case_dir" local-only ship
+  cat > "$case_dir/fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+  chmod +x "$case_dir/fakebin/tmux"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout2" 2> "$case_dir/stderr2"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "close-retry: the second teardown should succeed"
+  [ ! -f "$record" ] \
+    || fail "close-retry: a closed pane still has an orphan record; the operator is sent hunting"
+  grep -qF 'teardown task-x1 complete (window fm-task-x1' "$case_dir/stdout2" \
+    || fail "close-retry: the second run did not report an ordinary completion"
+  pass "a later successful close clears the record an earlier failed close kept"
+}
+
 test_local_only_fork_remote_allows() {
   local case_dir rc
   case_dir=$(make_case fork-allow)
@@ -323,3 +360,4 @@ test_no_mistakes_truly_unpushed_refuses
 test_local_only_force_overrides_unpushed
 test_a_failed_close_keeps_the_task_record
 test_a_successful_close_leaves_no_orphan_record
+test_a_later_successful_close_clears_a_stale_record

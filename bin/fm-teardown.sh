@@ -22,7 +22,8 @@
 # leased home and state in place instead of hiding a still-held lease.
 # A pane that could NOT be closed is warned about AND recorded: the task's meta
 # is kept aside as state/<id>.orphan-pane so the leftover pane stays findable
-# after the volatile state is cleared.
+# after the volatile state is cleared. A later run that does close the pane
+# clears that record, so it never outlives the leak it names.
 # Usage: fm-teardown.sh <task-id> [--force]
 #   --force skips the unpushed-work check for ordinary tasks and discards
 #   secondmate child work for kind=secondmate. Only use it when the captain has
@@ -503,8 +504,18 @@ fi
 # keeping the meta would report a finished task as live forever. Misleading a
 # supervisor is the same class of defect as the leak itself; `.orphan-pane` is
 # outside that glob.
+#
+# The record means exactly one thing - a pane for this task is still open - so
+# it must be cleared the moment that stops being true. A teardown can be retried
+# (the first run may fail after this point, e.g. on a secondmate home whose
+# treehouse return failed), and a record left behind by that first run would
+# outlive the pane it names: the same "sent hunting for something that is not
+# there" defect, pointed the other way. It is dropped below only on a close this
+# run actually proved, never merely because no record was written.
 ORPHAN_RECORD=""
+CLOSE_OK=1
 if ! fm_herdr_close_pane "$T" "$MUX"; then
+  CLOSE_OK=0
   ORPHAN_RECORD="$STATE/$ID.orphan-pane"
   {
     printf '# firstmate: teardown of %s could not close its pane; this record is kept\n' "$ID"
@@ -526,6 +537,7 @@ if [ "$KIND" = secondmate ]; then
   remove_secondmate_registry_entry "$ID"
 fi
 rm -f "$STATE/$ID.status" "$STATE/$ID.turn-ended" "$STATE/$ID.check.sh" "$STATE/$ID.meta" "$STATE/$ID.pi-ext.ts"
+if [ "$CLOSE_OK" = 1 ]; then rm -f "$STATE/$ID.orphan-pane"; fi
 if [ "$KIND" != scout ] && [ "$KIND" != secondmate ] && [ "$MODE" != local-only ]; then
   "$FM_ROOT/bin/fm-fleet-sync.sh" "$PROJ" || true
 fi

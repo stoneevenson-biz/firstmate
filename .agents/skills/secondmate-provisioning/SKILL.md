@@ -108,7 +108,9 @@ The safety check is the secondmate's own home.
 Teardown refuses while its `state/*.meta` contains in-flight work.
 When safe, teardown closes the secondmate's pane through `fm_herdr_close_pane`, removes the `data/secondmates.md` route, clears the main home metadata, and removes the retired secondmate home.
 That close routes to herdr for any post-cutover pane and falls back to `tmux kill-window` only for a window that predates the cutover, and a pane that is already gone counts as closed.
-A close it genuinely could not perform is REPORTED - `warning: teardown could not close <pane> for <id>` - rather than swallowed, so treat that warning as real and check for a leftover pane before considering the retirement finished.
+A close it genuinely could not perform is REPORTED - `warning: teardown could not close <pane> for <id>` - rather than swallowed, and the task record is KEPT at `state/<id>.orphan-pane` in the home that ran the teardown, holding the meta lines plus `orphan-pane=`, `orphan-mux=`, and `orphan-since=`.
+Treat that warning as real: read the record, close the leftover pane it names, then delete the record, before considering the retirement finished.
+The record lives outside the `state/*.meta` glob so a retired secondmate never reads as in flight, and a later teardown that does close the pane clears it, so its presence always means a pane is still open.
 Removing a leased home releases its durable treehouse lease via `treehouse return`, so the pool slot is freed for reuse rather than left leased forever.
 A plain-clone home with no pool slot is simply removed.
 If `treehouse return` fails for a leased home, teardown stops with state intact rather than raw-removing the directory and hiding a held lease.

@@ -83,7 +83,7 @@ state/               volatile runtime signals; gitignored
   <id>.turn-ended    touched by turn-end hooks
   <id>.meta          written by fm-spawn: window=, worktree=, project=, harness=, mux=, name=, kind=, mode=, yolo=; `bin/fm-herdr.sh` owns what window= and mux= mean (section 8); kind=secondmate also records home= and projects= (fm-pr-check appends pr=)
   <id>.check.sh      optional slow poll you write per task (e.g. merged-PR check)
-  <id>.orphan-pane   kept by fm-teardown ONLY when it could not close the task's pane: the task's meta lines plus orphan-pane=, orphan-mux=, orphan-since=. Deliberately outside the `*.meta` glob so a finished task never reads as in flight; close the leftover pane, then delete the file
+  <id>.orphan-pane   kept by fm-teardown ONLY when it could not close the task's pane: the task's meta lines plus orphan-pane=, orphan-mux=, orphan-since=. Deliberately outside the `*.meta` glob so a finished task never reads as in flight; close the leftover pane, then delete the file - a later teardown that does close the pane clears it, so its presence always means a pane is still open
   .wake-queue        durable queued wakes: epoch<TAB>seq<TAB>kind<TAB>key<TAB>payload
   .afk               durable away-mode flag; present = sub-supervisor may inject escalations (set by /afk, cleared on user return)
   .watch.lock .wake-queue.lock watcher singleton and queue serialization locks
@@ -655,8 +655,34 @@ relying on any of them:
   checkpoint. A crewmate that reaches its context ceiling simply dies with no handoff
   written. Until this moves, watch context on long crewmates yourself.
 
-Nine more are known and deliberately deferred. Each errs toward a false negative or a
+Eleven more are known and deliberately deferred. Each errs toward a false negative or a
 loud refusal - none of them loses work - but each is worth acting on:
+
+- **A child pane teardown could not close leaves nothing durable behind.**
+  `cleanup_firstmate_home_children` in `bin/fm-teardown.sh` is the task's own pane path
+  one level down and one step behind it: on a `--force` secondmate retirement it routes
+  each child's close through `fm_herdr_close_pane`, warns on failure, then deletes that
+  child's meta unconditionally, while `remove_firstmate_home` removes the whole
+  secondmate home including its `state/` dir. So a child pane that could not be closed
+  survives as two agents still running behind a stderr line naming `<child_t>
+  (<child_id>)`, and no restart can reconstruct which panes they were. The remedy is the
+  one the task's own pane already has: write `$STATE/<child_id>.orphan-pane` in the
+  PARENT's state dir, which is still writable at that point and outlives the removed
+  home. Deferred, not dismissed: it is not a regression this branch introduced - the
+  child path was `tmux kill-window ... || true` plus the same unconditional meta delete
+  before it - and editing the `--force` discard path is exactly the widening this branch
+  was told to avoid.
+- **`state/*.orphan-pane` is durable but not discoverable.** Nothing reads it. Recovery
+  (section 5, step 3) enumerates `data/backlog.md`, `data/secondmates.md`, every
+  `state/*.meta` and every `state/*.status`, and `state/*.orphan-pane` is in none of
+  them, so a firstmate restarted after a failed teardown learns nothing and the leftover
+  pane is announced only by the one stderr line of the run that failed. An operator who
+  reads that warning can act on it today - it names the file, and section 2 documents
+  what the file means - so what is missing is automatic discovery, not the record. The
+  fix is one clause in recovery step 3 ("and any `state/*.orphan-pane`, which names a
+  pane teardown could not close"), plus closing and deleting each one found. Deferred
+  because it changes how every firstmate reconciles rather than anything in this cutover,
+  and that deserves its own slice.
 
 - **A steer to an idle crewmate reports "did not acknowledge" almost every time.**
   `fm_herdr_prompt`'s idle path submits with `--wait --until idle|done|blocked`, and
