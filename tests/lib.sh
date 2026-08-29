@@ -18,8 +18,9 @@
 
 # Idempotent guard: behavior-area helper files (secondmate-helpers.sh,
 # wake-helpers.sh) source this library for ROOT/fail/pass, and the test that
-# includes them may also source it directly. Re-sourcing must not wipe the
-# registered-cleanup array or reset state.
+# includes them may also source it directly. Re-sourcing must not re-point the
+# cleanup registry file or reinstall its EXIT trap, both of which are set up
+# once below.
 if [ -n "${FM_TEST_LIB_SOURCED:-}" ]; then
   return 0
 fi
@@ -43,10 +44,12 @@ pass() {
 
 # --- self-cleaning temp root ------------------------------------------------
 #
-# fm_test_tmproot <prefix> echoes a fresh temp dir and registers it for removal
-# on EXIT. The first call installs the cleanup trap. A test file that needs
-# extra teardown (e.g. killing a daemon) should define its own EXIT trap and
-# call fm_test_cleanup from inside it so registered dirs are still removed.
+# fm_test_tmproot <prefix> echoes a fresh temp dir and appends it to a registry
+# FILE at $TMPDIR/fm-test-cleanup.<pid>; the EXIT trap that reads that file back
+# and removes every listed dir is installed unconditionally at source time, in
+# the sourcing shell. A test file that needs extra teardown (e.g. killing a
+# daemon) should define its own EXIT trap and call fm_test_cleanup from inside
+# it so registered dirs are still removed.
 
 # Registration crosses a subshell boundary, so it goes through a FILE, not an
 # array. fm_test_tmproot is called as `TMP=$(fm_test_tmproot x)`, and a command

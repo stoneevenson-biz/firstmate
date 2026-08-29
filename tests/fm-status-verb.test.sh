@@ -69,6 +69,21 @@ FM_HOME="$HOME_DIR" bash "$BRIEF_SH" task-1 demo >/dev/null 2>&1 \
 GEN="$HOME_DIR/data/task-1/brief.md"
 assert_present "$GEN" "the generated brief must exist"
 
+# All three brief kinds are scaffolded, not just the ship one. Each kind writes
+# its own heredoc, so the guidance can regress in one of them alone - a scout or
+# secondmate brief that went back to teaching the redirect would leave that
+# crewmate's channel silently dead while a ship-only gate stayed green.
+FM_HOME="$HOME_DIR" bash "$BRIEF_SH" scout-1 demo --scout >/dev/null 2>&1 \
+  || fail "fm-brief.sh must scaffold a scout brief"
+GEN_SCOUT="$HOME_DIR/data/scout-1/brief.md"
+assert_present "$GEN_SCOUT" "the generated scout brief must exist"
+
+FM_SECONDMATE_CHARTER="supervise the demo domain" \
+  FM_HOME="$HOME_DIR" bash "$BRIEF_SH" second-1 --secondmate demo >/dev/null 2>&1 \
+  || fail "fm-brief.sh must scaffold a secondmate charter"
+GEN_SECONDMATE="$HOME_DIR/data/second-1/brief.md"
+assert_present "$GEN_SECONDMATE" "the generated secondmate charter must exist"
+
 # One backticked command per status line; take the first and strip the ticks.
 VERB_FORM=$(grep -m1 -F 'fm-status.sh' "$GEN" | sed -n 's/^[^`]*`\(.*\)`[^`]*$/\1/p')
 [ -n "$VERB_FORM" ] \
@@ -225,15 +240,40 @@ assert_absent "$TMP/escape.status" "a traversing id must not write outside the s
 # The script existing changes nothing if every generated brief still teaches the
 # form that gets refused. This is the half that closes the defect. It reads the
 # same $GEN the executed command was extracted from, so the guidance and the
-# thing this gate proved are one artifact rather than two that can diverge.
-if [ "${LEDGER_MUTATE:-}" = 1 ]; then
-  assert_grep 'echo "{state}' "$GEN" \
-    "MUTATION: expected the brief to still teach the refused redirect form"
-else
-  assert_grep "fm-status.sh" "$GEN" \
-    "the generated brief must teach the verb, or the script helps nobody"
-  assert_no_grep 'echo "{state}: {one short line}" >>' "$GEN" \
-    "the generated brief must NOT teach the redirect form that gets refused"
-fi
+# thing this gate proved are one artifact rather than two that can diverge - and
+# it reads the scout and secondmate briefs beside it, because a gate that claims
+# all three kinds must prove all three.
+for kind_brief in "ship:$GEN" "scout:$GEN_SCOUT" "secondmate:$GEN_SECONDMATE"; do
+  kind=${kind_brief%%:*}
+  brief=${kind_brief#*:}
+  if [ "${LEDGER_MUTATE:-}" = 1 ]; then
+    assert_grep 'echo "{state}' "$brief" \
+      "MUTATION: expected the $kind brief to still teach the refused redirect form"
+    continue
+  fi
+  assert_grep "fm-status.sh" "$brief" \
+    "the generated $kind brief must teach the verb, or the script helps nobody"
+  assert_no_grep 'echo "{state}: {one short line}" >>' "$brief" \
+    "the generated $kind brief must NOT teach the redirect form that gets refused"
+
+  # The verb alone is not enough: an unpinned command follows the runtime
+  # environment, which for a secondmate is its OWN home rather than the one this
+  # brief was generated in and whose watcher polls the file.
+  kind_form=$(grep -m1 -F 'fm-status.sh' "$brief" | sed -n 's/^[^`]*`\(.*\)`[^`]*$/\1/p')
+  [ -n "$kind_form" ] \
+    || fail "could not extract the status command from the generated $kind brief"
+  policy_permits "$kind_form" \
+    || fail "the $kind brief's status command must be PERMITTED by the modelled policy: $kind_form"
+  case "$kind_form" in
+    "FM_HOME='$HOME_DIR' "*) ;;
+    *) fail "the $kind brief's status command must pin the generating home in the command itself: $kind_form" ;;
+  esac
+  case "$kind_form" in
+    *"FM_STATE_OVERRIDE='$HOME_DIR/state'"*) ;;
+    *) fail "the $kind brief's status command must pin the state dir too, or a stale override diverts the line: $kind_form" ;;
+  esac
+  [ "$(policy_prefix "$kind_form")" = "bash" ] \
+    || fail "the $kind brief's status command must resolve to the bash interpreter behind its pinned env: $kind_form"
+done
 
 pass "status reporting is a verb a refused crewmate can still use"
