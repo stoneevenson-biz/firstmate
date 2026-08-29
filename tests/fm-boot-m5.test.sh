@@ -321,4 +321,143 @@ assert_not_contains "$small_ctx" "truncated" \
 assert_contains "$small_ctx" "done: finished properly" \
   "a normal status must still be relayed verbatim"
 
+# --- WHO IS STEERING IS ANSWERED, GUESSED AT, OR MARKED - NEVER GUESSED -----
+#
+# The same defect as "unreadable is not empty", one field over. The emitter
+# decides whether this session is steering its home by asking whether the lock
+# holder is one of its own ancestors, and both halves of that question can fail:
+# the lock line may not read, and the ancestry probe may not run. Collapsing
+# either failure into "not steering" makes the block state, flatly, that ANOTHER
+# session is steering and this one should go ask it - which, for a resume or a
+# /clear inside the steering session, is a self-referential falsehood produced
+# from no evidence at all.
+#
+# So the verdict has three values, and each one is proved here. Until this
+# section existed none of them was: every boot fixture writes a dead pid to
+# state/.lock, fm-lock.sh calls that stale, and the stale branch returns
+# "steering" without ever invoking the ancestry probe. The observing verdict and
+# both unknown verdicts were rendered by no gate in the suite.
+#
+# The fixtures drive the lock line through the FM_BOOTSTRAP_BIN stub seam and
+# the ancestry probe through a `ps` shim on PATH, which is what lets a test say
+# "held by a live harness that is not us" and "ps is broken" without needing a
+# second real session.
+FOREIGN_SLEEPER=""
+m5_cleanup() {
+  [ -n "$FOREIGN_SLEEPER" ] && kill "$FOREIGN_SLEEPER" 2>/dev/null
+  # Chain the library cleanup: replacing its EXIT trap without calling it is
+  # what leaks a registry file per run.
+  fm_test_cleanup
+}
+trap m5_cleanup EXIT
+
+# A live process that is emphatically NOT one of our ancestors. Bounded, so a
+# run that dies on an earlier assertion cannot leave it behind for long, and
+# deliberately not the `sleep 999` signature tests/fm-reap-strays.sh hunts.
+sleep 60 &
+FOREIGN_SLEEPER=$!
+
+steer_bin() {
+  local dir=$1 holder=$2
+  mkdir -p "$dir"
+  cat > "$dir/fm-lock.sh" <<SH
+#!/usr/bin/env bash
+echo "lock: held by live harness pid $holder"
+SH
+  cat > "$dir/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+echo "watcher: healthy (beacon 2s old)"
+SH
+  chmod +x "$dir/fm-lock.sh" "$dir/fm-watch-arm.sh"
+}
+
+# A `ps` shim that answers the way the argument says, shadowing the real one.
+ps_shim() {
+  local dir=$1 mode=$2
+  mkdir -p "$dir"
+  if [ "$mode" = fails ]; then
+    cat > "$dir/ps" <<'SH'
+#!/usr/bin/env bash
+echo "ps: cannot read the process table" >&2
+exit 1
+SH
+  else
+    cat > "$dir/ps" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+  fi
+  chmod +x "$dir/ps"
+  printf '%s
+' "$dir"
+}
+
+steer_boot() {
+  fm_boot_hook_json | env \
+    FM_HOME="$HOME_DIR" \
+    FM_BOOT_FLEET_DIR="$FLEET" \
+    FM_CTX_WINDOW=probe-session \
+    FIRSTMATE_ROLE=captain \
+    "$@" \
+    bash "$UNDER_TEST"
+}
+
+# 1. STEERING. The shipped fixture's lock is stale, so this session is about to
+#    take it. The verdict must be plain, and it must carry the digest a steering
+#    session reconciles from.
+assert_contains "$clean_ctx" "(steering)" \
+  "a stale lock means this session is steering, and the identity line must say so"
+assert_not_contains "$clean_ctx" "steering unknown" \
+  "a lock that read fine leaves nothing unknown about who is steering"
+assert_not_contains "$clean_ctx" "Another session is steering" \
+  "the steering session must not be told to go ask itself"
+assert_contains "$clean_ctx" "## Reconciliation digest" \
+  "the steering session must receive the digest it reconciles from"
+
+# 2. OBSERVING. The lock is held by a live harness that is not in our ancestry,
+#    which is the one case where the assertive wording is TRUE.
+OBIN="$TMP/observing-bin"
+steer_bin "$OBIN" "$FOREIGN_SLEEPER"
+obs=$(steer_boot FM_BOOTSTRAP_BIN="$OBIN") || fail "an observing boot must exit 0"
+obs_ctx=$(fm_boot_context "$obs")
+assert_contains "$obs_ctx" "(observing)" \
+  "a lock held by a live harness outside our ancestry means this session is observing"
+assert_contains "$obs_ctx" "Another session is steering this home" \
+  "the observing session must be told to ask rather than act"
+assert_not_contains "$obs_ctx" "## Reconciliation digest" \
+  "an observing session must not be handed the steering session's digest"
+
+# 3. UNKNOWN, because the probe BROKE. ps exits non-zero, so nothing is known
+#    about the ancestry, and a verdict either way would be invented.
+FAILPS=$(ps_shim "$TMP/ps-fails" fails)
+unk=$(steer_boot FM_BOOTSTRAP_BIN="$OBIN" PATH="$FAILPS:$PATH") \
+  || fail "a broken ancestry probe must not break the hook"
+unk_ctx=$(fm_boot_context "$unk")
+assert_contains "$unk_ctx" "(steering unknown)" \
+  "a probe that could not run leaves the steering question unknown, and the identity line must say so"
+assert_contains "$unk_ctx" "## steering - UNAVAILABLE" \
+  "an unknown verdict must carry an explicit marker, not degrade quietly into observing"
+assert_contains "$unk_ctx" "re-read the lock before acting" \
+  "the marker must tell the reader what to do about it"
+assert_not_contains "$unk_ctx" "Another session is steering" \
+  "THE POINT: a degraded probe must never assert that another session is steering"
+assert_not_contains "$unk_ctx" "## Reconciliation digest" \
+  "an unknown verdict must not hand out the steering digest either"
+
+# 4. UNKNOWN, because the probe answered but said NOTHING. This is the sharper
+#    half: ps exits 0 with an empty table, the ancestry walk still yields our own
+#    pid, and "the holder is not in that one-element chain" reads exactly like a
+#    real observing verdict. Silence from ps is not evidence.
+MUTEPS=$(ps_shim "$TMP/ps-mute" mute)
+mute=$(steer_boot FM_BOOTSTRAP_BIN="$OBIN" PATH="$MUTEPS:$PATH") \
+  || fail "an empty ancestry probe must not break the hook"
+mute_ctx=$(fm_boot_context "$mute")
+assert_contains "$mute_ctx" "(steering unknown)" \
+  "a probe that returned no chain for this process knows nothing, and must say so"
+assert_not_contains "$mute_ctx" "Another session is steering" \
+  "an empty process table must not be read as proof that someone else holds the lock"
+
+kill "$FOREIGN_SLEEPER" 2>/dev/null
+FOREIGN_SLEEPER=""
+
 pass "m5 boot context never fails silently"

@@ -533,8 +533,13 @@ def helpers(specs):
         # already sitting in the pipe - rendering a healthy watcher UNAVAILABLE
         # because the lock read was slow. Only a process still running when the
         # deadline passes is killed and marked.
-        if left <= 0 and proc.poll() is not None:
-            left = MIN_HELPER_SLICE
+        #
+        # The floor is MIN_HELPER_SLICE, not merely a positive number: draining
+        # an exited process's pipes under a sub-millisecond budget can still
+        # raise TimeoutExpired on a loaded machine, which is the same false
+        # degradation at a tighter margin.
+        if proc.poll() is not None:
+            left = max(left, MIN_HELPER_SLICE)
         try:
             if left <= 0:
                 raise subprocess.TimeoutExpired(proc.args, budget)
@@ -694,33 +699,47 @@ def wake_queue():
 # --- steering ---------------------------------------------------------------
 
 def ancestors():
-    """(ran, pids) - whether the probe ACTUALLY ran, and the ancestor pids.
+    """(ran, pids, why) - whether the probe ACTUALLY ran, the pids, and if not, why.
 
     One `ps -eo pid=,ppid=` beats walking the chain with one exec per level,
     and it is bounded by the same deadline as every other exec here.
 
-    The pair matters more than the set. An empty set means two different
-    things - the probe was SKIPPED because the shared budget is spent, or ps
-    ran and matched nothing - and collapsing them into one falsy answer is what
-    let a degraded boot claim another session was steering. The caller cannot
-    recover the difference afterwards, so it is returned rather than inferred.
+    The verdict matters more than the set. An empty set means the probe did not
+    happen - the shared budget was spent, ps exited non-zero, or its output did
+    not contain this process - and collapsing that into one falsy answer is
+    what let a degraded boot claim another session was steering. The caller
+    cannot recover the difference afterwards, so it is returned rather than
+    inferred; ran=False is the only shape that carries "no evidence". Each way
+    of not running names itself, because "unknown" is only actionable if the
+    reader can tell a spent budget from a broken ps.
     """
     slice_ = min(HELPER_TIMEOUT, remaining())
     if slice_ < MIN_HELPER_SLICE:
-        return False, set()
+        return False, set(), "the ancestry probe could not run within the boot budget"
     r = subprocess.run(["ps", "-eo", "pid=,ppid="], capture_output=True,
                        text=True, timeout=slice_)
+    # A ps that exited non-zero did not answer. Without this the walk below
+    # still yields our own pid, so an empty process table would read as "the
+    # holder is not our ancestor" - an observing verdict built on no evidence,
+    # which is the whole thing this pair exists to prevent.
+    if r.returncode != 0:
+        return False, set(), "the ancestry probe failed (ps exited %d)" % r.returncode
     parent = {}
     for line in (r.stdout or "").splitlines():
         parts = line.split()
         if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
             parent[int(parts[0])] = int(parts[1])
+    # Nor did a ps whose output does not even contain THIS process: an ancestry
+    # we are not in cannot be walked, and the one-element chain it would
+    # produce is indistinguishable from a real answer.
+    if os.getpid() not in parent:
+        return False, set(), "the ancestry probe returned no chain for this process"
     seen, pid = set(), os.getpid()
     while pid in parent and pid > 1 and pid not in seen:
         seen.add(pid)
         pid = parent[pid]
     seen.add(pid)
-    return True, seen
+    return True, seen, ""
 
 
 def steering_state(lock_line):
@@ -748,11 +767,11 @@ def steering_state(lock_line):
         return "unknown", "the lock line names no holder pid"
     holder = int(digits[-1])
     try:
-        ran, pids = ancestors()
+        ran, pids, why = ancestors()
     except Exception as e:
         return "unknown", "the ancestry probe failed (%s)" % type(e).__name__
     if not ran:
-        return "unknown", "the ancestry probe could not run within the boot budget"
+        return "unknown", why
     return ("steering" if holder in pids else "observing"), ""
 
 

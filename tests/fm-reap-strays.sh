@@ -9,6 +9,9 @@
 #   tests/fm-reap-strays.sh reap-tmpdirs [mins] remove test temp dirs older than
 #                                               <mins> (default 60)
 #
+# "tmpdirs" covers both shapes of temp debris: the mktemp directories the suites
+# create, and the cleanup-registry files tests/lib.sh writes alongside them.
+#
 # WHY THIS EXISTS
 #
 # The boot gates stub their helpers with `sleep 999` so a wedged helper can be
@@ -66,6 +69,28 @@ list_tmpdirs() {
     -name 'fm-*.??????' -mmin "+$mins" -print 2>/dev/null
 }
 
+# The other half of the same leak, and the reason it survived the repair above.
+# tests/lib.sh records its registered dirs in a REGULAR FILE,
+# $TMPDIR/fm-test-cleanup.<pid>, and only fm_test_cleanup unlinks it. Thirteen
+# suites install their own EXIT trap, which replaces the source-time one, so
+# each of those runs leaves its registry behind - and list_tmpdirs cannot see
+# it, because it matches directories on the mktemp template. Same shape, same
+# unbounded accumulation, so it gets the same narrow treatment: directly under
+# TMPDIR, exact name shape, owned by the invoking user, older than the age
+# guard, so a suite running right now is never disturbed.
+list_registries() {
+  local mins=${1:-60} tmp=${TMPDIR:-/tmp}
+  find "$tmp" -maxdepth 1 -type f -user "$(id -u)" \
+    -name 'fm-test-cleanup.*' -mmin "+$mins" -print 2>/dev/null
+}
+
+# Both shapes, one listing: every caller wants the whole sweep, and splitting
+# them would just be a second place to forget one.
+list_stale() {
+  list_tmpdirs "${1:-60}"
+  list_registries "${1:-60}"
+}
+
 # Print "pid" per line for every process that looks like our stub and is
 # orphaned. ps, not pgrep: pgrep -x matches the process NAME only (every sleep
 # looks alike) and pgrep -f substring-matches, which would also match this
@@ -114,7 +139,7 @@ EOF
     fi
     ;;
   tmpdirs)
-    list_tmpdirs "${2:-60}" | wc -l | tr -d ' '
+    list_stale "${2:-60}" | wc -l | tr -d ' '
     ;;
   reap-tmpdirs)
     mins=${2:-60}
@@ -123,9 +148,9 @@ EOF
       [ -n "$d" ] || continue
       rm -rf "$d" && removed=$((removed + 1))
     done <<EOF
-$(list_tmpdirs "$mins")
+$(list_stale "$mins")
 EOF
-    echo "removed $removed test temp dir(s) older than ${mins}m" >&2
+    echo "removed $removed stale test temp path(s) older than ${mins}m" >&2
     ;;
   *)
     usage
