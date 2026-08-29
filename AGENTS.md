@@ -655,8 +655,19 @@ relying on any of them:
   checkpoint. A crewmate that reaches its context ceiling simply dies with no handoff
   written. Until this moves, watch context on long crewmates yourself.
 
-Eleven more are known and deliberately deferred. Each errs toward a false negative or a
+Twelve more are known and deliberately deferred. Each errs toward a false negative or a
 loud refusal - none of them loses work - but each is worth acting on:
+
+- **Relaunching an exited agent has no operator-facing wrapper.** `fm-send.sh` refuses a
+  pane holding no agent on purpose - the only way to put text into a shell pane is to run
+  it, so forwarding a steer there would EXECUTE it - which leaves the stuck-crewmate
+  playbook's own relaunch step with no firstmate command. `fm_herdr_run` in
+  `bin/fm-herdr.sh` does exactly the right thing but is library-level only, and that
+  script's CLI exposes just `--name` and the workspace reconcile. Nothing is stranded:
+  `harness-adapters` and `stuck-crewmate-recovery` now name the binary's own verb,
+  `herdr pane run <pane-id> '<launch command>'`, which is what `fm-spawn.sh` uses to start
+  every agent. A wrapper would only save the operator from assembling the env prefix by
+  hand, so it is a convenience, not a gap in the procedure.
 
 - **A child pane teardown could not close leaves nothing durable behind.**
   `cleanup_firstmate_home_children` in `bin/fm-teardown.sh` is the task's own pane path
