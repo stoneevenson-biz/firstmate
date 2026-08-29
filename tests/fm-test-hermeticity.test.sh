@@ -35,6 +35,8 @@ in_fresh() {  # <env-assignments...> -- <snippet>
   while [ $# -gt 0 ] && [ "$1" != "--" ]; do envs+=("$1"); shift; done
   shift
   snippet=$1
+  # $1/$@ are bash -c's own positionals, expanded by the inner shell - intentional.
+  # shellcheck disable=SC2016
   env -u FM_TEST_ALLOW_LIVE_HERDR -u FM_TEST_ALLOW_LIVE_TMUX \
       -u FM_TEST_LIVE_TMUX_SESSION "${envs[@]}" \
       bash -c '. "$1/tests/lib.sh" >/dev/null 2>&1; shift; eval "$@"' \
@@ -116,11 +118,11 @@ test_a_helper_that_never_reaches_lib_is_not_proof() {
 # what it is exempt FOR, so the list stays reviewable and shrinkable.
 test_every_waiver_states_a_reason() {
   local f base line
-  for f in $(grep -rl '^# HERMETICITY-WAIVER:' "$ROOT"/tests/*.test.sh); do
+  while IFS= read -r f; do
     base=$(basename "$f")
     line=$(grep -m1 '^# HERMETICITY-WAIVER:' "$f")
     [ "${#line}" -gt 40 ] || fail "$base carries a bare HERMETICITY-WAIVER with no reason"
-  done
+  done < <(grep -rl '^# HERMETICITY-WAIVER:' "$ROOT"/tests/*.test.sh)
   pass "hermeticity: every waiver names the real server it is exempt for"
 }
 

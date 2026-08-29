@@ -118,6 +118,8 @@ test_a_named_session_is_a_running_server() {
 # actionable diagnostic than the escalation this predicate exists to produce.
 test_a_running_session_the_verbs_cannot_reach_is_not_up() {
   local rc=0
+  # $1 is bash -c's own positional, expanded by the inner shell - intentional.
+  # shellcheck disable=SC2016
   env -u HERDR_SESSION -u FM_HERDR_SESSION HERDR_SESSION_NAME=fleet HERDR_SERVER=running \
     bash -c '. "$1"; fm_herdr_up' _ "$LIB" >/dev/null 2>&1 || rc=$?
   if [ "$rc" = 0 ]; then
@@ -145,9 +147,12 @@ test_the_session_override_pins_one_session() {
 # up as an override that appeared to work.
 test_the_session_override_moves_the_verbs_too() {
   local out
+  # $1 and $HERDR_SESSION are expanded by the inner shell - intentional.
+  # shellcheck disable=SC2016
   out=$(env -u HERDR_SESSION FM_HERDR_SESSION=fleet \
     bash -c '. "$1"; printf "%s" "${HERDR_SESSION:-unset}"' _ "$LIB" 2>/dev/null)
   assert_eq "$out" "fleet" "FM_HERDR_SESSION did not export HERDR_SESSION for the verbs"
+  # shellcheck disable=SC2016
   out=$(env -u HERDR_SESSION -u FM_HERDR_SESSION \
     bash -c '. "$1"; fm_herdr_session' _ "$LIB" 2>/dev/null)
   assert_eq "$out" "default" "the probed session is not herdr's own default"
