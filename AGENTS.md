@@ -654,7 +654,7 @@ relying on any of them:
   checkpoint. A crewmate that reaches its context ceiling simply dies with no handoff
   written. Until this moves, watch context on long crewmates yourself.
 
-Eight more are known and deliberately deferred. Each errs toward a false negative or a
+Nine more are known and deliberately deferred. Each errs toward a false negative or a
 loud refusal - none of them loses work - but each is worth acting on:
 
 - **A steer to an idle crewmate reports "did not acknowledge" almost every time.**
@@ -715,6 +715,18 @@ loud refusal - none of them loses work - but each is worth acting on:
   so it survives, and bypasses the shell quoting the launch string otherwise needs.
   Deferred because it changes the launch contract of every direct report, not because
   the spawn path is wrong today.
+- **Four test suites are outside the deny net rather than opted into it.**
+  `tests/fm-ctxwatch-g2/g4/g6/g9` each carry a permanent `HERMETICITY-WAIVER` and are
+  the last code in `tests/` that reaches the captain's real tmux server with no guard
+  shim at all: they create a session on it, send keys to it, and kill it. (The other
+  waiver, `tests/fm-afk-inject-e2e.test.sh`, drives a private `tmux -L` socket it
+  creates itself, so it cannot reach the fleet's.) The practical risk is low today
+  because each one's kill targets the `$$`-suffixed session it made, but that is
+  discipline rather than a property. The fix is the opt-in each waiver already
+  describes: set `FM_TEST_ALLOW_LIVE_TMUX=1` before sourcing `tests/lib.sh` and export
+  `FM_TEST_LIVE_TMUX_SESSION="$SESS"`, which makes the shim scope their kills to their
+  own session instead of trusting them. Deferred because their exposure predates the
+  cutover - this branch built the net and waived them, rather than introducing the gap.
 
 The two "not yet migrated" gaps above - `fm-watch.sh` (with the away-mode daemon's
 `window_for_task`) and the context watchdog - should move onto `fm-herdr.sh` once the

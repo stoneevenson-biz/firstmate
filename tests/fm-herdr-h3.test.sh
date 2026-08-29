@@ -182,6 +182,38 @@ test_an_off_contract_id_keeps_its_suffix_and_truncation_speaks_up() {
   pass "naming: an off-contract id keeps its suffix, and truncation reports itself"
 }
 
+# herdr constrains the FIRST character of the WHOLE name, so a digit is only
+# illegal where the name STARTS. Enforcing that on every half deleted a leading
+# character for nothing: `2fa-login` became `fa-login`, so the captain read
+# `archify-fa-login` for work called 2fa-login - the wrong work, in the one line
+# that names the work. It degraded silently too, because the shortened-name note
+# compared the assembled name against the same mangled halves.
+test_a_leading_digit_survives_in_the_work_half() {
+  reset
+  local home out
+  home="$TMP_ROOT/home-lead-digit"; mkdir -p "$home/data"
+  out=$(run_spawn "$home" 2fa-login-k3)
+  assert_grep "--label archify-2fa-login" "$CALLS" \
+    "a leading digit was eaten from the work half - the work is '2fa-login', not 'fa-login'"
+  case "$out" in
+    *"does not fit a pane name"*) fail "an untruncated name reported itself as shortened" ;;
+  esac
+
+  reset
+  home="$TMP_ROOT/home-lead-digit2"; mkdir -p "$home/data"
+  run_spawn "$home" render-x1 --name "3d render" >/dev/null
+  assert_grep "--label archify-3d-render" "$CALLS" \
+    "a leading digit was eaten from an explicit --name"
+
+  # The project half DOES lead, so there the strip is real and still applies.
+  reset
+  home="$TMP_ROOT/home-lead-proj"; mkdir -p "$home/data"
+  local nm
+  nm=$(bash -c '. "$1"; fm_herdr_pane_name 2app work' _ "$ROOT/bin/fm-herdr.sh")
+  [ "$nm" = "app-work" ] || fail "the leading half must still start with a letter (got: $nm)"
+  pass "naming: a leading digit is kept in the work half and stripped only where the name starts"
+}
+
 # --- the session pin reaches the AGENT ---------------------------------------
 
 # A pane's shell is forked by the herdr server at `tab create`, not by fm-spawn,
@@ -293,6 +325,7 @@ test_the_name_is_one_herdr_accepts
 test_name_defaults_from_the_task_id_without_its_suffix
 test_a_derived_name_keeps_a_real_trailing_word
 test_an_off_contract_id_keeps_its_suffix_and_truncation_speaks_up
+test_a_leading_digit_survives_in_the_work_half
 test_the_session_pin_reaches_the_launched_agent
 test_meta_records_the_target_and_its_driver
 test_the_task_id_lives_in_the_meta_not_the_name

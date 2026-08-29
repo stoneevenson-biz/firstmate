@@ -154,22 +154,52 @@ fm_herdr_field() {  # <json> <key>
 fm_herdr_name_max=28
 
 # Sanitize one half of a name. Anything herdr would reject is removed here
-# rather than discovered at rename time.
+# rather than discovered at rename time. A LEADING DIGIT IS KEPT: herdr's
+# ^[a-z][a-z0-9_-]{0,31}$ constrains the first character of the WHOLE name, so
+# only the half that starts the name has to start with a letter. Enforcing that
+# per half deleted a character for nothing - `2fa-login` became `fa-login`, so
+# `app-2fa-login`, a name herdr accepts, was rendered as `app-fa-login` and the
+# one line the captain reads named the wrong work.
 fm_herdr_work_name() {  # <work...>
   printf '%s' "$*" | tr '[:upper:]' '[:lower:]' | tr ' _/' '-' \
-    | tr -cd 'a-z0-9-' | sed 's/--*/-/g; s/^[^a-z]*//; s/-*$//'
+    | tr -cd 'a-z0-9-' | sed 's/--*/-/g; s/^-*//; s/-*$//'
 }
 
-# The full pane name: project, one hyphen, work. Over-length truncates the WORK
-# half; callers that would rather refuse than accept a name the captain did not
-# choose check the length themselves before calling.
+# The leading-letter rule, applied where it actually belongs: to whichever half
+# ends up first in the assembled name.
+fm_herdr_lead_name() {  # <half>
+  printf '%s' "$1" | sed 's/^[^a-z]*//'
+}
+
+# The name the halves ASK for, before any budget is applied: project, one
+# hyphen, work. This is the one owner of how the halves join, so a caller that
+# would rather refuse than accept a shortened name compares against this rather
+# than reassembling the halves itself and drifting from what was assembled.
+fm_herdr_full_name() {  # <project-short> <work...>
+  local proj=$1; shift
+  local work
+  proj=$(fm_herdr_lead_name "$(fm_herdr_work_name "$proj")")
+  work=$(fm_herdr_work_name "$@")
+  if [ -z "$proj" ]; then
+    fm_herdr_lead_name "$work"
+  elif [ -z "$work" ]; then
+    printf '%s' "$proj"
+  else
+    printf '%s-%s' "$proj" "$work"
+  fi
+}
+
+# The full pane name, within the budget. Over-length truncates the WORK half;
+# callers that would rather refuse than accept a name the captain did not choose
+# compare against fm_herdr_full_name before calling.
 fm_herdr_pane_name() {  # <project-short> <work...>
   local proj=$1; shift
-  local work room
-  proj=$(fm_herdr_work_name "$proj")
+  local full work room
+  full=$(fm_herdr_full_name "$proj" "$@")
+  [ "${#full}" -gt "$fm_herdr_name_max" ] || { printf '%s' "$full"; return 0; }
+  proj=$(fm_herdr_lead_name "$(fm_herdr_work_name "$proj")")
   work=$(fm_herdr_work_name "$@")
-  [ -n "$proj" ] || { fm_herdr_work_name "$@" | cut -c "1-$fm_herdr_name_max"; return 0; }
-  [ -n "$work" ] || { printf '%s' "$proj" | cut -c "1-$fm_herdr_name_max"; return 0; }
+  [ -n "$proj" ] || { printf '%s' "$full" | cut -c "1-$fm_herdr_name_max" | sed 's/-*$//'; return 0; }
   room=$(( fm_herdr_name_max - ${#proj} - 1 ))
   if [ "$room" -lt 1 ]; then
     printf '%s' "$proj" | cut -c "1-$fm_herdr_name_max" | sed 's/-*$//'
@@ -753,7 +783,7 @@ fm_herdr_cli() {
     # the captain did not choose is worse than being told to choose a shorter
     # one. (fm_herdr_pane_name truncates for callers that must not fail, e.g. a
     # spawn, where a cosmetic name must never abort the work.)
-    untruncated="$(fm_herdr_work_name "$proj")-$(fm_herdr_work_name "$*")"
+    untruncated=$(fm_herdr_full_name "$proj" "$*")
     [ "${#untruncated}" -le 28 ] \
       || die "'$untruncated' is ${#untruncated} chars; keep it under 28, e.g. afs-resource-registry"
     fm_herdr_name_valid "$name" \

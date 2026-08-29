@@ -412,10 +412,9 @@ PANE_NAME=$(fm_herdr_pane_name "$PROJ_LABEL" "$WORK_NAME")
 # name the captain reads. Truncation is the one case where information is
 # actually lost, so it is the one case that says so instead of degrading
 # silently; `--name` is the way to choose the name outright.
-WORK_WANT=$(fm_herdr_work_name "$WORK_NAME")
-PROJ_WANT=$(fm_herdr_work_name "$PROJ_LABEL")
-if [ -n "$WORK_WANT" ] && [ -n "$PROJ_WANT" ] && [ "$PANE_NAME" != "$PROJ_WANT-$WORK_WANT" ]; then
-  echo "note: '$PROJ_WANT-$WORK_WANT' does not fit a pane name; shortened to '$PANE_NAME' - pass --name <kebab-work-name> to choose it" >&2
+NAME_WANT=$(fm_herdr_full_name "$PROJ_LABEL" "$WORK_NAME")
+if [ -n "$NAME_WANT" ] && [ "$PANE_NAME" != "$NAME_WANT" ]; then
+  echo "note: '$NAME_WANT' does not fit a pane name; shortened to '$PANE_NAME' - pass --name <kebab-work-name> to choose it" >&2
 fi
 if ! fm_herdr_name_valid "$PANE_NAME"; then
   echo "error: '$PROJ_LABEL' + '$WORK_NAME' does not reduce to a usable pane name; pass --name <kebab-work-name>" >&2
