@@ -170,6 +170,32 @@ test_the_captain_digest_inventories_herdr() {
   pass "startup: the captain digest lists live herdr agents"
 }
 
+# THE DEFECT THIS FREEZES. The digest pulled names out of `"agent_name":"..."`,
+# a key herdr 0.8.2's AgentInfo does not have, so the primary regex always came
+# back empty and the pane-id fallback silently became the whole answer: the
+# captain's restart digest read `herdr: wM:p9, wM:pA` - the opaque ids the whole
+# <project>-<work> naming convention exists to remove. The readable name lives on
+# the agent's TAB, and a pane id is a LAST RESORT that has to say so.
+test_the_digest_falls_back_to_a_pane_id_only_explicitly() {
+  local fb fm out ctx
+  fb=$(fm_herdr_fake_server "$TMP_ROOT/unnamed")
+  fm="$TMP_ROOT/unnamed-home"; mkdir -p "$fm/data" "$fm/state"
+  printf 'demo [no-mistakes] - a demo project\n' > "$fm/data/projects.md"
+  : > "$fm/data/secondmates.md"
+  printf -- '- an item\n' > "$fm/data/backlog.md"
+  out=$(printf '%s' '{"source":"startup","cwd":"/tmp/x","session_id":"sess-h9b"}' \
+    | PATH="$fb:$PATH" HERDR_AGENTS="archify-leak-fixes" HERDR_UNNAMED_AGENTS="stray" \
+      FIRSTMATE_ROLE=captain FM_HOME="$fm" FM_CTX_WINDOW=h9btest \
+      ${TIMEOUT_BIN:+"$TIMEOUT_BIN" 30} bash "$ROOT/bin/fm-captain-bootstrap.sh") \
+    || fail "the captain hook did not exit 0"
+  ctx=$(printf '%s' "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin)["hookSpecificOutput"]["additionalContext"])')
+  assert_contains "$ctx" "archify-leak-fixes" \
+    "the named agent lost its name to the fallback"
+  assert_contains "$ctx" "unnamed:" \
+    "a nameless pane was listed as a bare id, which reads like a name"
+  pass "startup: an unnamed pane is marked as such, never passed off as a name"
+}
+
 test_the_captain_digest_teaches_the_herdr_lifecycle() {
   local body
   body=$(grep -vE '^[[:space:]]*#' "$ROOT/bin/fm-captain-bootstrap.sh")
@@ -188,4 +214,5 @@ test_an_unreachable_server_is_its_own_problem_line
 test_the_server_line_says_how_to_fix_it
 test_a_reachable_server_says_nothing
 test_the_captain_digest_inventories_herdr
+test_the_digest_falls_back_to_a_pane_id_only_explicitly
 test_the_captain_digest_teaches_the_herdr_lifecycle

@@ -26,7 +26,13 @@
 #   HERDR_WORKSPACES  "id=label,id=label"  the workspaces that already exist
 #   HERDR_BLOCKED     1 -> agent prompt returns agent_blocked
 #   HERDR_NO_AGENT    1 -> agent prompt/get return agent_not_found
+#   HERDR_AGENTS      comma list of NAMED agents (their tab carries the name)
+#   HERDR_UNNAMED_AGENTS  comma list of agents whose tab has herdr's default
+#                     numeric label - the pane-id-fallback case
+#   HERDR_TITLE       terminal_title on every agent record (defaults to text
+#                     containing "working", the rendered-text hazard)
 #   HERDR_PANE_CWD    what `pane get` reports as foreground_cwd
+#   HERDR_KEY_FAIL    1 -> both `agent send-keys` and `pane send-keys` refuse
 #   HERDR_PANE_FILE   file whose contents `agent read`/`pane read` return
 #   CALLS             file every invocation's argv is appended to
 fm_herdr_fake_server() {  # <dir>
@@ -49,6 +55,16 @@ ws_json() {
   unset IFS
   printf '%s]}}\n' "$out"
 }
+# A real agent record carries RENDERED TEXT beside the lifecycle field - the
+# terminal title, which routinely contains words like "working" while the agent
+# is idle or blocked. HERDR_TITLE defaults to exactly that hazard so a caller
+# that greps the whole record instead of reading agent_status is caught here.
+agent_get_json() {  # <agent_status>
+  printf '{"id":"cli:agent:get","result":{"agent":{"agent":"claude","agent_session":{"agent":"claude","kind":"id","value":"fake"},"agent_status":"%s","cwd":"%s","pane_id":"wZ:p9","tab_id":"wZ:t9","terminal_title":"%s","terminal_title_stripped":"%s","workspace_id":"wZ"},"type":"agent_info"}}\n' \
+    "$1" "${HERDR_PANE_CWD:-/proj}" \
+    "${HERDR_TITLE:-i want to start working on our fm-herdr script}" \
+    "${HERDR_TITLE:-i want to start working on our fm-herdr script}"
+}
 case "$1 $2" in
   "session list")
     printf 'name                 status   directory\ndefault              %s  /x\n' "${HERDR_SERVER:-running}" ;;
@@ -59,9 +75,9 @@ case "$1 $2" in
     printf '{"id":"cli:workspace:create","result":{"workspace":{"label":"%s","workspace_id":"wNEW"},"type":"workspace_created"}}\n' "$label"
     printf '%s\n' "wNEW=$label" >> "${HERDR_WS_CREATED:-/dev/null}" ;;
   "tab list")
-    printf '{"id":"cli:tab:list","result":{"tabs":[' 
+    printf '{"id":"cli:tab:list","result":{"tabs":['
+    first=1
     if [ -s "${HERDR_TABS:-/dev/null}" ]; then
-      first=1
       while IFS= read -r l; do
         [ -n "$l" ] || continue
         [ "$first" = 1 ] || printf ','
@@ -69,6 +85,26 @@ case "$1 $2" in
         printf '{"label":"%s","tab_id":"wT:t9"}' "$l"
       done < "${HERDR_TABS:-/dev/null}"
     fi
+    # The agents' own tabs: a named agent's tab carries its name, an unnamed
+    # one carries herdr's default numeric label.
+    n=0
+    IFS=,; set -- ${HERDR_AGENTS:-}; unset IFS
+    for a in "$@"; do
+      [ -n "$a" ] || continue
+      n=$((n + 1))
+      [ "$first" = 1 ] || printf ','
+      first=0
+      printf '{"label":"%s","tab_id":"wZ:t%s","workspace_id":"wZ"}' "$a" "$n"
+    done
+    n=0
+    IFS=,; set -- ${HERDR_UNNAMED_AGENTS:-}; unset IFS
+    for a in "$@"; do
+      [ -n "$a" ] || continue
+      n=$((n + 1))
+      [ "$first" = 1 ] || printf ','
+      first=0
+      printf '{"label":"%s","tab_id":"wU:t%s","workspace_id":"wZ"}' "$n" "$n"
+    done
     printf '],"type":"tab_list"}}\n' ;;
   "tab create")
     ws=""; label=""; cwd=""
@@ -109,15 +145,32 @@ case "$1 $2" in
   "pane read"|"agent read") cat "${HERDR_PANE_FILE:-/dev/null}" 2>/dev/null ;;
   "pane close")  printf '{"id":"cli:pane:close","result":{"type":"ok"}}\n' ;;
   "agent list")
+    # THE SHAPE THE REAL BINARY EMITS. herdr 0.8.2's AgentInfo has NO name field
+    # at all - a fake that invented `agent_name` is exactly why a digest gate
+    # passed green while the captain's real digest showed opaque pane ids. The
+    # readable name lives on the TAB, so each agent here gets a tab that `tab
+    # list` labels with its name; HERDR_UNNAMED_AGENTS get herdr's default
+    # numeric tab label instead, which is the unnamed case.
     printf '{"id":"cli:agent:list","result":{"agents":['
-    first=1
-    IFS=,; for a in ${HERDR_AGENTS:-}; do
+    first=1; n=0
+    IFS=,; set -- ${HERDR_AGENTS:-}; unset IFS
+    for a in "$@"; do
       [ -n "$a" ] || continue
+      n=$((n + 1))
       [ "$first" = 1 ] || printf ','
       first=0
-      printf '{"agent":"claude","agent_name":"%s","agent_status":"idle","pane_id":"wZ:p9"}' "$a"
+      printf '{"agent":"claude","agent_status":"idle","pane_id":"wZ:p%s","tab_id":"wZ:t%s","terminal_title":"\u271b %s","terminal_title_stripped":"%s","workspace_id":"wZ"}' \
+        "$n" "$n" "$a" "$a"
     done
-    unset IFS
+    IFS=,; set -- ${HERDR_UNNAMED_AGENTS:-}; unset IFS
+    for a in "$@"; do
+      [ -n "$a" ] || continue
+      n=$((n + 1))
+      [ "$first" = 1 ] || printf ','
+      first=0
+      printf '{"agent":"claude","agent_status":"idle","pane_id":"wZ:p%s","tab_id":"wU:t%s","terminal_title":"\u271b %s","terminal_title_stripped":"%s","workspace_id":"wZ"}' \
+        "$n" "$n" "$a" "$a"
+    done
     printf '],"type":"agent_list"}}\n' ;;
   "agent get")
     [ "${HERDR_NO_AGENT:-0}" = 1 ] && {
@@ -138,10 +191,10 @@ case "$1 $2" in
       done
       unset IFS
       [ "$_cur" = /dev/null ] || printf '%s' "$((_n + 1))" > "$_cur"
-      printf '{"id":"cli:agent:get","result":{"agent":{"agent_status":"%s"},"type":"agent_info"}}\n' "$_st"
+      agent_get_json "$_st"
       exit 0
     fi
-    printf '{"id":"cli:agent:get","result":{"agent":{"agent_status":"%s"},"type":"agent_info"}}\n' "${AGENT_STATE:-idle}" ;;
+    agent_get_json "${AGENT_STATE:-idle}" ;;
   "agent wait")
     # Mirrors the real verb: succeeds when the scripted lifecycle reaches one of
     # the requested states within the budget, fails otherwise.
@@ -196,7 +249,14 @@ case "$1 $2" in
       printf '{"error":{"code":"invalid_agent_name","message":"agent name must start with a lowercase letter and contain only lowercase letters, digits, %s-%s or %s_%s (1-32 characters)"},"id":"cli:agent:rename"}\n' "'" "'" "'" "'"
       exit 1
     fi ;;
-  "agent send-keys") printf '{"id":"cli:agent:send-keys","result":{"type":"ok"}}\n' ;;
+  "agent send-keys"|"pane send-keys")
+    # HERDR_KEY_FAIL=1 refuses BOTH key verbs. Sending a key is the documented
+    # trust-dialog clearing step, so its failure has to be visible.
+    if [ "${HERDR_KEY_FAIL:-0}" = 1 ]; then
+      echo '{"error":{"code":"pane_not_found","message":"no such pane"}}' >&2
+      exit 1
+    fi
+    printf '{"id":"cli:%s:send-keys","result":{"type":"ok"}}\n' "$1" ;;
 esac
 exit 0
 SH

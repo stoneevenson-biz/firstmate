@@ -105,11 +105,38 @@ test_a_stall_is_its_own_code() {
 }
 
 # busy is a real lifecycle state, not a regex over rendered text. That is the
-# single largest thing herdr buys over the pane-scraping it replaced.
+# single largest thing herdr buys over the pane-scraping it replaced - and the
+# fake's records carry a terminal_title containing "working" precisely so a
+# whole-record grep cannot pass this. A pane blocked at an approval dialog whose
+# title happens to mention working is the live case that caught it.
 test_is_busy_reads_a_real_state() {
   AGENT_STATE=working fm_herdr_is_busy w9:p2 || fail "missed a working agent"
   AGENT_STATE=idle    fm_herdr_is_busy w9:p2 && fail "called an idle agent busy"
+  HERDR_TITLE='i want to start working on our fm-herdr script' \
+    AGENT_STATE=blocked fm_herdr_is_busy w9:p2 \
+    && fail "rendered text passed for a lifecycle state: a blocked agent was called busy"
   pass "is_busy: reads herdr's lifecycle state rather than scraping the pane"
+}
+
+# THE DEFECT THIS FREEZES. Both key verbs were redirected to /dev/null and the
+# function was the last statement in fm-send's `--key` branch, so under `set -eu`
+# `fm-send.sh <pane> --key enter` exited non-zero with NO output at all. That is
+# the documented way to clear a crewmate's trust dialog, and the operator was
+# handed a failed command and nothing to act on.
+test_a_refused_key_is_reported_not_swallowed() {
+  local err rc=0
+  err=$(HERDR_KEY_FAIL=1 fm_herdr_send_key w9:p2 enter 2>&1) || rc=$?
+  expect_code 1 "$rc" "a refused key did not fail"
+  case "$err" in
+    "") fail "a refused key produced no output at all; the operator has nothing to act on" ;;
+    *"could not send key"*) : ;;
+    *) fail "the refusal does not say a key could not be sent: '$err'" ;;
+  esac
+  case "$err" in
+    *pane_not_found*) : ;;
+    *) fail "the refusal drops herdr's own reason: '$err'" ;;
+  esac
+  pass "send_key: a refusal is reported with herdr's reason, not swallowed"
 }
 
 test_read_returns_pane_text() {
@@ -117,6 +144,26 @@ test_read_returns_pane_text() {
   printf 'line-one\nline-two\n' > "$HERDR_PANE_FILE"
   fm_herdr_read w9:p2 | grep -q line-two || fail "read lost content"
   pass "read: returns the pane's text"
+}
+
+# THE DEFECT THIS FREEZES. `--source visible` is the current VIEWPORT, so
+# `fm-peek.sh <pane> 200` came back with at most one screen and the caller could
+# not tell a truncated read from a quiet crewmate. `recent` is herdr's
+# scrollback-backed source - the equivalent of the `capture-pane -S -$N` this
+# replaced - and is what a peek must ask for. The readiness marker probe is the
+# one caller that genuinely wants the viewport, and asks for it explicitly.
+test_read_is_scrollback_backed_by_default() {
+  reset_calls
+  fm_herdr_read w9:p2 200 >/dev/null 2>&1
+  grep -q -- "--source recent --lines 200" "$CALLS" \
+    || fail "a peek did not ask for scrollback: $(cat "$CALLS")"
+  grep -q -- "--source visible" "$CALLS" \
+    && fail "a peek asked for the viewport, which silently caps the read at one screen"
+  reset_calls
+  fm_herdr_read w9:p2 40 visible >/dev/null 2>&1
+  grep -q -- "--source visible --lines 40" "$CALLS" \
+    || fail "an explicit viewport read was not honoured: $(cat "$CALLS")"
+  pass "read: scrollback-backed by default, viewport only when asked for"
 }
 
 # THE DEFECT THIS FREEZES (Quarterdeck reject, attempt 1). fm_herdr_prompt ran
@@ -190,4 +237,6 @@ test_an_error_envelope_is_a_failure_even_on_exit_zero
 test_an_undetected_agent_never_executes_the_steer_as_a_shell_command
 test_is_busy_reads_a_real_state
 test_read_returns_pane_text
+test_read_is_scrollback_backed_by_default
+test_a_refused_key_is_reported_not_swallowed
 test_a_failed_create_is_reported

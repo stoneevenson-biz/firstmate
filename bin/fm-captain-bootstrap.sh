@@ -268,9 +268,34 @@ if role == "captain":
             return subprocess.run(cmd, capture_output=True, text=True, timeout=3).stdout.strip()
         except Exception:
             return ""
-    herdr_raw = _run(["herdr", "agent", "list"])
-    herdr_names = sorted(set(re.findall(r'"agent_name":"([^"]+)"', herdr_raw))) or \
-                  sorted(set(re.findall(r'"pane_id":"([^"]+)"', herdr_raw)))
+    # herdr's AgentInfo carries NO name field - verified against herdr 0.8.2,
+    # whose records hold agent, agent_status, pane_id, tab_id, workspace_id and
+    # the terminal title, and nothing else. The readable name firstmate gives a
+    # crewmate lives on its TAB (fm_herdr_label renames tab and agent to the same
+    # <project>-<work> string), so the tab label is what makes this digest legible.
+    # A pane id is the LAST RESORT and says so: `unnamed:wM:p9` tells the captain
+    # the pane has no name, where a bare id read like one.
+    def _herdr_names():
+        try:
+            agents = json.loads(_run(["herdr", "agent", "list"]))["result"]["agents"]
+        except Exception:
+            return []
+        labels = {}
+        try:
+            for t in json.loads(_run(["herdr", "tab", "list"]))["result"]["tabs"]:
+                labels[t.get("tab_id")] = t.get("label") or ""
+        except Exception:
+            pass
+        out = []
+        for a in agents:
+            label = labels.get(a.get("tab_id"), "")
+            pane = a.get("pane_id") or ""
+            if re.match(r"^[a-z][a-z0-9_-]{0,31}$", label):
+                out.append(label)
+            elif pane:
+                out.append("unnamed:" + pane)
+        return sorted(set(out))
+    herdr_names = _herdr_names()
     tmux_wins = [w for w in _run(
         ["tmux", "list-windows", "-t", "firstmate", "-F", "#{window_name}"]).splitlines() if w.strip()]
     parts = []

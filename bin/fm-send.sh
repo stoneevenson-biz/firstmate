@@ -46,7 +46,15 @@ T=$FM_HERDR_TARGET
 shift
 
 if [ "${1:-}" = "--key" ]; then
-  if [ "$FM_HERDR_DRAIN" = 1 ]; then tmux send-keys -t "$T" "$2"; else fm_herdr_send_key "$T" "$2"; fi
+  # A key is the documented trust-dialog clearing step. Letting the herdr path
+  # fail silently gave the operator a non-zero exit and NOTHING to act on; the
+  # drain path beside it has always let tmux print its own error.
+  if [ "$FM_HERDR_DRAIN" = 1 ]; then
+    tmux send-keys -t "$T" "$2"
+  elif ! fm_herdr_send_key "$T" "$2"; then
+    echo "error: key '$2' was not delivered to $T" >&2
+    exit 1
+  fi
 elif [ "$FM_HERDR_DRAIN" = 0 ]; then
   # Acknowledged delivery. There is nothing to verify afterwards and nothing to
   # settle for: the call does not return until the agent has taken the prompt,

@@ -341,22 +341,41 @@ fm_herdr_prompt_classify() {  # <pane> <out> <rc>
   return 200
 }
 
+# Keys are the trust-dialog clearing step, so a failure here has to SAY so.
+# Swallowing both attempts left `fm-send.sh <pane> --key enter` exiting non-zero
+# with no output at all under `set -eu` - the operator got a failed command and
+# nothing to act on.
 fm_herdr_send_key() {  # <pane> <key>
-  herdr agent send-keys "$1" "$2" >/dev/null 2>&1 || herdr pane send-keys "$1" "$2" >/dev/null 2>&1
+  local out
+  herdr agent send-keys "$1" "$2" >/dev/null 2>&1 && return 0
+  out=$(herdr pane send-keys "$1" "$2" 2>&1) && return 0
+  echo "fm-herdr: could not send key '$2' to $1: ${out:-herdr gave no output}" >&2
+  return 1
 }
 
-fm_herdr_read() {  # <pane> [lines]
-  herdr agent read "$1" --source visible --lines "${2:-40}" --format text 2>/dev/null \
-    || herdr pane read "$1" --source visible --lines "${2:-40}" --format text 2>/dev/null
+# SOURCE MATTERS. `visible` is the current viewport, so it silently caps a read
+# at one screen however many lines were asked for - and a peek that comes back
+# short is indistinguishable from a quiet crewmate. `recent` is herdr's
+# scrollback-backed source and is the equivalent of the `capture-pane -S -$N`
+# this replaced, so it is the default. Callers that genuinely want the viewport
+# (the readiness marker probe) ask for `visible` explicitly.
+fm_herdr_read() {  # <pane> [lines] [source]
+  local pane=$1 lines=${2:-40} src=${3:-recent}
+  herdr agent read "$pane" --source "$src" --lines "$lines" --format text 2>/dev/null \
+    || herdr pane read "$pane" --source "$src" --lines "$lines" --format text 2>/dev/null
 }
 
 fm_herdr_cwd() {  # <pane>
   fm_herdr_field "$(herdr pane get "$1" 2>/dev/null)" foreground_cwd
 }
 
-# A real lifecycle state, not a regex over rendered text.
+# A real lifecycle state, not a regex over rendered text - and that means
+# reading the FIELD. An agent record carries terminal_title and
+# terminal_title_stripped, which are rendered text, so a grep over the whole
+# record calls a pane blocked at an approval dialog busy the moment its title
+# happens to contain the word "working".
 fm_herdr_is_busy() {  # <pane>
-  herdr agent get "$1" 2>/dev/null | grep -qiE '(^|[^a-z])(working|busy)([^a-z]|$)'
+  [ "$(fm_herdr_field "$(herdr agent get "$1" 2>/dev/null)" agent_status)" = working ]
 }
 
 # Shell readiness, not agent readiness: at spawn time the pane holds a bare
@@ -375,7 +394,7 @@ fm_herdr_wait_shell_ready() {  # <pane> [timeout-seconds]
     while [ "$waited" -lt 10 ]; do
       sleep "$poll"
       waited=$((waited + 1))
-      if fm_herdr_read "$pane" 40 | grep -qx "$marker"; then return 0; fi
+      if fm_herdr_read "$pane" 40 visible | grep -qx "$marker"; then return 0; fi
     done
   done
   return 1
@@ -596,8 +615,7 @@ fm_herdr_cli() {
   [ -f "$REGISTRY" ] || die "no project registry at $REGISTRY"
   require_server
 
-  local existing made=0 skipped=0 missing=0 name cwd
-  existing=$(herdr workspace list 2>/dev/null || true)
+  local made=0 skipped=0 missing=0 name cwd
   printf '%-26s %-9s %s\n' PROJECT STATUS CWD
   printf '%-26s %-9s %s\n' "-------" "------" "---"
   while IFS= read -r name; do
@@ -606,7 +624,11 @@ fm_herdr_cli() {
     if [ ! -d "$cwd" ]; then
       printf '%-26s %-9s %s\n' "$name" "NO-DIR" "$cwd"; missing=$((missing+1)); continue
     fi
-    if printf '%s' "$existing" | grep -qw -- "$name"; then
+    # fm_herdr_workspace_id is the one owner of this question. `grep -w` over the
+    # raw listing treated `-` as a word boundary, so project `fm` matched a
+    # workspace labelled `fm-x` and was reported as already present - it never got
+    # its own workspace, and its first spawn landed in someone else's.
+    if [ -n "$(fm_herdr_workspace_id "$name")" ]; then
       printf '%-26s %-9s %s\n' "$name" "exists" "$cwd"; skipped=$((skipped+1)); continue
     fi
     if [ "$APPLY" = 1 ]; then
