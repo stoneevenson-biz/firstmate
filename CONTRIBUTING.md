@@ -67,6 +67,7 @@ CI runs the whole suite, so such a gate would fail the build forever, and the wr
 
 Instead, add the gate id to `gates/accepted-red.md` with a reason and a route back to green.
 `tests/run-all.sh` then skips that gate's test, and announces every skip by name in the log.
+(`FM_SUITE_ROOT=<dir>` points the runner at a fixture tree instead of this repo; that seam is how the runner's own gate exercises it.)
 
 The skip is deliberately narrow, and both conditions must hold: the gate is `red` in `gates/ledger.json` **and** its id is declared in `gates/accepted-red.md`.
 Skipping on status alone would mask a regression the moment a working gate went red - the failure would disappear from CI exactly when it mattered most.
@@ -74,6 +75,12 @@ Skipping on the declaration alone would let a stale entry silence a test that ha
 If either file is missing or unreadable, nothing is skipped at all and the runner says so; the safe direction is running a test that might fail, never silently not running one.
 
 This is gated by `gate-ci-declared-red`, so the narrowness is machine-checked rather than trusted.
+
+### A test whose prerequisite is missing
+
+The other skip is the test's own: one that needs a tool CI does not install (`loop-audit`, the `ledger` CLI) prints a line beginning `PREREQUISITE MISSING:` and exits 2.
+The marker is required and the exit code alone is never enough, because bash also exits 2 on a syntax error, and a broken test laundered into a skip is exactly the false green the runner promises not to produce.
+`tests/run-all.sh` syntax-checks every test before running it, and reports an exit 2 with no marker as a failure rather than a skip.
 
 ## Development
 
@@ -109,10 +116,15 @@ tests/fm-boot-m1.test.sh                  # boot-context hook registration; EXPE
 tests/fm-boot-m2.test.sh                  # boot-context emitter writes nothing: manifest identity, a chmod a-w tree, and a bare home
 tests/fm-boot-m4.test.sh                  # boot budget under wedged helpers: wall clock, injection cap, peers never elided, zero peer execs
 tests/fm-boot-m5.test.sh                  # boot context never fails silently: a raising section leaves an explicit UNAVAILABLE marker
+tests/fm-ci-declared-red.test.sh          # tests/run-all.sh skips a test only when its gate is both red and declared, announces every skip, and fails closed
+tests/fm-status-verb.test.sh              # bin/fm-status.sh appends one line to the right home, and briefs teach the verb instead of a redirect
 [ "$(readlink CLAUDE.md)" = "AGENTS.md" ]
 [ "$(readlink .claude/skills)" = "../.agents/skills" ]
 FM_HEARTBEAT=2 FM_POLL=1 bin/fm-watch-arm.sh  # watcher re-arm smoke test (prints arm status, then "heartbeat")
 ```
+
+The boot gates stub their helpers with processes that hang on purpose, and reap them on every exit path via `tests/fm-reap-strays.sh`.
+If a run is killed before it can clean up, `tests/fm-reap-strays.sh count` reports the strays still alive and `tests/fm-reap-strays.sh reap-tmpdirs` removes the temp dirs left behind.
 
 ## Questions
 
