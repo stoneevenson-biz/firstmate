@@ -177,7 +177,7 @@ fi
 # stdin via the heredoc, so the payload is handed over in the environment.
 FM_HOOK_JSON="$(cat)" FM_BOOT_FM="$FM" FM_BOOTSTRAP_BIN="$FM_BIN" \
 FM_BOOT_START="$FM_BOOT_START" python3 - <<'PY'
-import os, sys, json, glob, time, signal, subprocess
+import os, sys, json, glob, time, signal, stat, subprocess
 
 # The wrapper's start time, so the ceiling covers interpreter startup too. A
 # missing or unusable value falls back to now, which only ever makes the budget
@@ -304,9 +304,84 @@ def remaining():
 READ_LIMIT = 256 * 1024
 
 
+def safe_read(path):
+    """(text, problem). Never blocks, and never truncates silently.
+
+    A bare open() is not safe here, for two reasons that were both measured.
+
+    IT CAN BLOCK FOREVER. open() on a FIFO waits for a writer. A FIFO named
+    state/.wake-queue, state/<task>.meta or fleet/<peer>.json hung the whole
+    hook until the harness killed it - over 30s against a 0.05s normal boot -
+    injecting NOTHING, with no marker: the exact zero-context failure this file
+    exists to prevent, and it defeats the budget entirely because the deadline
+    only ever bounded subprocess helpers, never a blocking read. The fleet
+    directory makes it worse than a local footgun: it is written by OTHER
+    firstmate instances, so one bad entry there would blind every other
+    captain's boot, permanently and silently.
+
+    O_NONBLOCK makes the open itself return immediately even on a FIFO, and the
+    fstat that follows rejects anything that is not a regular file. Checking
+    with stat() BEFORE opening would leave a window in which the path could be
+    swapped; opening first and inspecting the descriptor we actually hold does
+    not.
+
+    IT CAN TRUNCATE SILENTLY. Reading exactly READ_LIMIT bytes cannot tell a
+    file that ends there from one that does not. A 400KB status file rendered
+    with no marker and dropped its real last line - a `done:` - so the boot
+    reported a finished task as still running. Confidently incomplete is the
+    same lie as "unreadable is not empty". One byte past the limit is requested,
+    and its presence is what proves truncation.
+    """
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return "", None
+    except Exception as e:
+        return "", "%s unreadable (%s)" % (os.path.basename(path), type(e).__name__)
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            return "", "%s is not a regular file (%s)" % (
+                os.path.basename(path), describe_mode(st.st_mode))
+        chunks, got = [], 0
+        while got <= READ_LIMIT:
+            block = os.read(fd, min(65536, READ_LIMIT + 1 - got))
+            if not block:
+                break
+            chunks.append(block)
+            got += len(block)
+    except Exception as e:
+        return "", "%s unreadable (%s)" % (os.path.basename(path), type(e).__name__)
+    finally:
+        try:
+            os.close(fd)
+        except Exception:
+            pass
+
+    raw = b"".join(chunks)
+    truncated = len(raw) > READ_LIMIT
+    text = raw[:READ_LIMIT].decode("utf-8", "replace")
+    if truncated:
+        return text, "%s is larger than %dKB and was truncated; its last lines are NOT shown" % (
+            os.path.basename(path), READ_LIMIT // 1024)
+    return text, None
+
+
+def describe_mode(mode):
+    for flag, name in ((stat.S_ISFIFO, "FIFO"), (stat.S_ISDIR, "directory"),
+                       (stat.S_ISSOCK, "socket"), (stat.S_ISCHR, "character device"),
+                       (stat.S_ISBLK, "block device")):
+        if flag(mode):
+            return name
+    return "not a regular file"
+
+
 def read(path, limit=None):
-    with open(path) as f:
-        return f.read(limit or READ_LIMIT)
+    """Text, or an exception. Kept for callers that guard with try/except."""
+    text, problem = safe_read(path)
+    if problem:
+        raise OSError(problem)
+    return text
 
 
 def read_field(path, default=""):
@@ -315,20 +390,14 @@ def read_field(path, default=""):
     An absent file is NOT a problem - callers know whether absence is ordinary
     (no wake queue means an empty queue) or not. An unreadable file always is.
     """
-    if not os.path.exists(path):
-        return default, None
-    try:
-        return read(path), None
-    except Exception as e:
-        return default, "%s unreadable (%s)" % (os.path.basename(path), type(e).__name__)
+    text, problem = safe_read(path)
+    return (text if text else default), problem
 
 
 def read_or(path, default="", limit=None):
     """Text only, for reads whose failure the caller reports separately."""
-    try:
-        return read(path, limit)
-    except Exception:
-        return default
+    text, _problem = safe_read(path)
+    return text if text else default
 
 
 def dir_problem(path, label):
@@ -526,12 +595,18 @@ def section(name, build, *args):
 # --- own-home facts ---------------------------------------------------------
 
 def meta_of(path):
+    """(meta, problem). A meta we could not read is not an empty meta.
+
+    read_or() discards the reason, which would render the task with
+    window=? kind=? mode=? and no explanation - degraded, and silent about it.
+    """
+    text, problem = safe_read(path)
     meta = {}
-    for line in read_or(path).splitlines():
+    for line in text.splitlines():
         if "=" in line:
             k, _, v = line.partition("=")
             meta.setdefault(k.strip(), v.strip())
-    return meta
+    return meta, problem
 
 
 def own_tasks():
@@ -554,7 +629,10 @@ def own_tasks():
             last = "UNAVAILABLE (%s)" % status_problem
         else:
             last = lines[-1] if lines else "(no status yet)"
-        out.append((tid, meta_of(mp), last))
+        meta, meta_problem = meta_of(mp)
+        if meta_problem:
+            problems.append(meta_problem)
+        out.append((tid, meta, last))
     return out, problems
 
 
@@ -582,14 +660,13 @@ def wake_queue():
     path = os.path.join(state, ".wake-queue")
     if not os.path.exists(path):
         return 0, [], False, None
-    try:
-        with open(path, "rb") as f:
-            raw = f.read(READ_LIMIT)
-    except Exception as e:
-        return 0, [], False, ".wake-queue unreadable (%s)" % type(e).__name__
-    if not raw:
+    # Through the safe primitive: a FIFO here hung the entire boot, and a queue
+    # past the read limit would otherwise report a confident wrong depth.
+    text, problem = safe_read(path)
+    if problem:
+        return 0, [], False, problem
+    if not text:
         return 0, [], False, None
-    text = raw.decode("utf-8", "replace")
     rows = [r for r in text.split("\n") if r != ""]
     torn = False
     if rows and (not text.endswith("\n") or len(rows[-1].split("\t")) < 5):
@@ -654,7 +731,13 @@ def peer_line(path):
     name = os.path.basename(path)[: -len(".json")]
     try:
         age = time.time() - os.path.getmtime(path)
-        d = json.loads(read(path))
+        # A peer file is written by ANOTHER instance, so it is the least
+        # trustworthy input here: safe_read refuses a FIFO rather than letting
+        # one foreign entry hang every other captain's boot.
+        raw, problem = safe_read(path)
+        if problem:
+            return "- %-14s [UNAVAILABLE: %s]" % (clip(name, PEER_ID_MAX), problem)
+        d = json.loads(raw)
         # A record that parses but lacks its required fields is not an idle
         # peer. Defaulting the counts to 0 would report live work as none -
         # the same defect one level down from an unreadable directory.

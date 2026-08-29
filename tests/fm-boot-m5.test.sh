@@ -285,4 +285,40 @@ assert_contains "$badrec_ctx" "UNAVAILABLE" \
 assert_not_contains "$badrec_ctx" "peer-x         [0 in flight" \
   "a record missing its counts must not be rendered as an idle peer"
 
+# 8. TRUNCATION IS REPORTED. A file too large to read whole is not a short file.
+#
+# read() took exactly READ_LIMIT bytes and could not tell a file that ends there
+# from one that does not, while the code's own comment promised "truncation is
+# reported, never silent". Measured: a 400KB status file rendered with no marker
+# and dropped its real last line - a `done:` - so the boot reported a FINISHED
+# task as still working. That is the same lie as "unreadable is not empty", and
+# it is worse than an unreadable file, because an unreadable one at least looks
+# wrong. One byte past the limit is now requested, and its presence proves the
+# truncation.
+BIGHOME="$TMP/bigstatus"
+fm_boot_make_home "$BIGHOME" 2
+python3 - "$BIGHOME/state/task-1.status" <<'PY'
+import sys
+open(sys.argv[1], "w").write("working: filler\n" * 30000 + "done: THE REAL LAST LINE\n")
+PY
+big=$(unreadable_boot "$BIGHOME") || fail "an oversized status file must not break the hook"
+big_ctx=$(fm_boot_context "$big")
+assert_contains "$big_ctx" "truncated" \
+  "a file read past its limit must say it was truncated"
+assert_contains "$big_ctx" "task-1.status" "the marker must name the truncated file"
+# The critical half: it must not present the surviving prefix as the task's
+# current state, because the real last line is exactly what was lost.
+printf '%s\n' "$big_ctx" | grep -E '^- task-1 .* - working: filler' >/dev/null \
+  && fail "a truncated status must not be rendered as the task's live state - the \
+line that was dropped is the one that mattered"
+
+# And an ordinary status is untouched, so the marker keeps its meaning.
+printf 'working: one\ndone: finished properly\n' > "$BIGHOME/state/task-1.status"
+small=$(unreadable_boot "$BIGHOME") || fail "a normal status must boot"
+small_ctx=$(fm_boot_context "$small")
+assert_not_contains "$small_ctx" "truncated" \
+  "a normal-sized file must raise no truncation marker"
+assert_contains "$small_ctx" "done: finished properly" \
+  "a normal status must still be relayed verbatim"
+
 pass "m5 boot context never fails silently"

@@ -357,6 +357,68 @@ listed=$(printf '%s\n' "$huge_ctx" | grep -c '^- peer-')
 assert_contains "$huge_ctx" "injection cap - UNAVAILABLE" \
   "overrunning the cap to keep every peer must be stated, never silent"
 
+# 8b. A BLOCKING FILE MUST NOT HANG THE BOOT.
+#
+# The budget bounded subprocess helpers and nothing else, so a bare open() on a
+# FIFO waited for a writer that never came. Measured against a 0.05s normal
+# boot: over 30s, killed by the harness, injecting NOTHING and leaving no
+# marker - the zero-context failure this whole design exists to prevent, and it
+# made this gate's "holds its budget" claim false while it was green.
+#
+# fleet/*.json is the worst case and the reason this is not merely a local
+# footgun: that directory is written by OTHER firstmate instances, so a single
+# bad entry there would blind every other captain's boot, permanently.
+#
+# Every path the emitter reads is covered. The bound is generous on purpose -
+# a hang is 30s+ or infinite, a healthy boot is under a second, so 15s
+# discriminates them by orders of magnitude and cannot be flipped by load.
+for victim in "state/.wake-queue" "state/task-1.meta" "state/task-1.status"; do
+  rm -f "$HOME_DIR/$victim"
+  mkfifo "$HOME_DIR/$victim"
+  fifo_out=$(env FM_HOME="$HOME_DIR" FM_BOOT_FLEET_DIR="$FLEET" \
+    FM_CTX_WINDOW=probe-session FIRSTMATE_ROLE=captain \
+    python3 - "$FM_BOOT_EMITTER" "$(fm_boot_hook_json)" <<'PY'
+import os, subprocess, sys, time
+t0 = time.time()
+try:
+    r = subprocess.run(["bash", sys.argv[1]], input=sys.argv[2], capture_output=True,
+                       text=True, env=os.environ, timeout=15)
+except subprocess.TimeoutExpired:
+    print("HUNG")
+    raise SystemExit(0)
+print("%.3f" % (time.time() - t0))
+sys.stderr.write(r.stdout)
+PY
+)
+  rm -f "$HOME_DIR/$victim"
+  [ "$fifo_out" != HUNG ] \
+    || fail "a FIFO at $victim hung the boot - a blocking open() defeats the budget entirely"
+done
+
+# The same for a peer file, which another instance writes.
+mkfifo "$FLEET/peer-fifo.json"
+peer_out=$(env FM_HOME="$HOME_DIR" FM_BOOT_FLEET_DIR="$FLEET" \
+  FM_CTX_WINDOW=probe-session FIRSTMATE_ROLE=captain \
+  python3 - "$FM_BOOT_EMITTER" "$(fm_boot_hook_json)" <<'PY'
+import os, subprocess, sys, time
+try:
+    r = subprocess.run(["bash", sys.argv[1]], input=sys.argv[2], capture_output=True,
+                       text=True, env=os.environ, timeout=15)
+except subprocess.TimeoutExpired:
+    print("HUNG")
+    raise SystemExit(0)
+print(r.stdout)
+PY
+)
+rm -f "$FLEET/peer-fifo.json"
+[ "$peer_out" != HUNG ] \
+  || fail "a FIFO in the shared fleet dir hung the boot - one foreign entry must never blind a captain"
+peer_ctx=$(fm_boot_context "$peer_out")
+assert_contains "$peer_ctx" "UNAVAILABLE" \
+  "a non-regular peer file must be marked, not silently skipped"
+assert_contains "$peer_ctx" "not a regular file" \
+  "the marker must say what was wrong with it"
+
 # 9. THE NORMAL PATH, and END-GOAL condition 2.
 #
 # Condition 2 reads: "Boot injects the fleet picture in UNDER A SECOND, with no
