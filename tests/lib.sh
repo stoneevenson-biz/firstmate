@@ -31,44 +31,6 @@ FM_TEST_LIB_SOURCED=1
 # shellcheck disable=SC2034
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# --- keeping tests off the live herdr server --------------------------------
-#
-# herdr is the only surface firstmate spawns onto, so any suite that drives
-# fm-spawn/fm-send/fm-peek without faking `herdr` will reach the CAPTAIN'S REAL
-# SERVER and create real tabs in his real workspaces. That is not hypothetical:
-# it happened twice during this migration, leaving stray `design-home`,
-# `spawn-proj` and `alpha` workspaces behind for someone to notice and clean up.
-#
-# There is no longer an FM_MUX to pin, and there should not be - headless is not
-# a flag anyone gets to flip. So the net is a PATH shim instead: a `herdr` that
-# refuses loudly. A suite that fakes herdr prepends its own fakebin ahead of this
-# one and never sees it; a suite that forgot gets an obvious, greppable failure
-# rather than silently touching the fleet.
-#
-# The live gates need the real binary. They set FM_TEST_ALLOW_LIVE_HERDR=1 BEFORE
-# sourcing this file, which is deliberate and visible at the top of those files.
-
-# The shim dir is PER RUN, not per file: mktemp -d here ran at source time in
-# every suite and nothing removed it, so a full pass left one stray directory
-# per test FILE on the captain's machine, forever. One fixed path derived from
-# the run needs no trap and cannot accumulate.
-if [ "${FM_TEST_ALLOW_LIVE_HERDR:-0}" != 1 ]; then
-  FM_TEST_DENY_BIN="${TMPDIR:-/tmp}/fm-test-deny.$(id -u)"
-  mkdir -p "$FM_TEST_DENY_BIN"
-  cat > "$FM_TEST_DENY_BIN/herdr" <<'DENY'
-#!/usr/bin/env bash
-echo "fm-test: this suite reached the REAL herdr binary." >&2
-echo "  A test must never touch the captain's live server. Install a fake herdr" >&2
-echo "  on PATH (tests/herdr-helpers.sh: fm_herdr_fake_server), or set" >&2
-echo "  FM_TEST_ALLOW_LIVE_HERDR=1 before sourcing tests/lib.sh if this suite is" >&2
-echo "  a live gate that genuinely needs the real server." >&2
-exit 97
-DENY
-  chmod +x "$FM_TEST_DENY_BIN/herdr"
-  PATH="$FM_TEST_DENY_BIN:$PATH"
-  export PATH
-fi
-
 # --- reporters --------------------------------------------------------------
 
 fail() {
@@ -124,6 +86,35 @@ fm_test_tmproot() {
 }
 
 trap fm_test_cleanup EXIT
+
+# --- keeping tests off the live herdr server --------------------------------
+#
+# herdr is the only surface firstmate spawns onto, so any suite that drives
+# fm-spawn/fm-send/fm-peek without faking `herdr` will reach the CAPTAIN'S REAL
+# SERVER and create real tabs in his real workspaces. That is not hypothetical:
+# it happened twice during this migration, leaving stray `design-home`,
+# `spawn-proj` and `alpha` workspaces behind for someone to notice and clean up.
+#
+# There is no longer an FM_MUX to pin, and there should not be - headless is not
+# a flag anyone gets to flip. So the net is a PATH shim instead: a `herdr` that
+# refuses loudly. A suite that fakes herdr prepends its own fakebin ahead of this
+# one and never sees it; a suite that forgot gets an obvious, greppable failure
+# rather than silently touching the fleet.
+#
+# The live gates need the real binary. They set FM_TEST_ALLOW_LIVE_HERDR=1 BEFORE
+# sourcing this file, which is deliberate and visible at the top of those files.
+#
+# THE SHIM IS A COMMITTED FILE, not a temp dir, because it is static content and
+# every temp-dir shape had a defect the file does not: minting one per sourcing
+# suite leaked a directory per test FILE forever, and a shared fixed path let one
+# worktree's run truncate a shim another run was exec'ing while putting a
+# guessable, world-creatable directory on PATH. Repo-owned needs no trap, cannot
+# race, and cannot be pre-created by anyone who could not already edit the tests.
+if [ "${FM_TEST_ALLOW_LIVE_HERDR:-0}" != 1 ]; then
+  FM_TEST_DENY_BIN="$ROOT/tests/denybin"
+  PATH="$FM_TEST_DENY_BIN:$PATH"
+  export PATH
+fi
 
 # --- fakebin / PATH shims ---------------------------------------------------
 #

@@ -49,10 +49,15 @@
 # the escalation. This predicate is the single gate on all dispatch, so a false
 # negative strands the whole fleet. FM_HERDR_SESSION pins one session by name
 # when that is genuinely what is meant.
+#
+# Nothing is skipped by POSITION either: the header's second field is the
+# literal `status`, so the predicate already excludes it, and a herdr that
+# stopped printing a header would otherwise hide the fleet's only running
+# session behind exactly the false negative this predicate exists to avoid.
 fm_herdr_up() {
   command -v herdr >/dev/null 2>&1 || return 1
   herdr session list 2>/dev/null | awk -v want="${FM_HERDR_SESSION:-}" '
-    NR > 1 && $2 == "running" && (want == "" || $1 == want) { found = 1 }
+    $2 == "running" && (want == "" || $1 == want) { found = 1 }
     END { exit !found }'
 }
 
@@ -385,17 +390,26 @@ fm_herdr_read_quiet() {  # <pane> [lines] [source]
 # attempts left `fm-peek.sh <pane>` exiting non-zero with no output under
 # `set -eu`, which made a dead pane and a quiet crewmate look identical to a
 # supervisor.
+#
+# stderr is kept OUT of the returned text and only surfaced on failure. Folding
+# it in with 2>&1 would print any warning, deprecation notice or socket retry
+# herdr emits during a SUCCESSFUL read as if it were crewmate pane content, and
+# peek is what a supervisor reads to decide whether a crewmate is wedged.
 fm_herdr_read() {  # <pane> [lines] [source]
-  local pane=$1 lines=${2:-40} src=${3:-recent} out
+  local pane=$1 lines=${2:-40} src=${3:-recent} out err errfile
   if out=$(herdr agent read "$pane" --source "$src" --lines "$lines" --format text 2>/dev/null); then
     [ -z "$out" ] || printf '%s\n' "$out"
     return 0
   fi
-  if out=$(herdr pane read "$pane" --source "$src" --lines "$lines" --format text 2>&1); then
+  errfile=$(mktemp "${TMPDIR:-/tmp}/fm-herdr-read.XXXXXX")
+  if out=$(herdr pane read "$pane" --source "$src" --lines "$lines" --format text 2>"$errfile"); then
+    rm -f "$errfile"
     [ -z "$out" ] || printf '%s\n' "$out"
     return 0
   fi
-  echo "fm-herdr: could not read $pane: ${out:-herdr gave no output}" >&2
+  err=$(cat "$errfile" 2>/dev/null)
+  rm -f "$errfile"
+  echo "fm-herdr: could not read $pane: ${err:-herdr gave no output}" >&2
   return 1
 }
 

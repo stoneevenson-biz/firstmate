@@ -634,7 +634,7 @@ relying on any of them:
   checkpoint. A crewmate that reaches its context ceiling simply dies with no handoff
   written. Until this moves, watch context on long crewmates yourself.
 
-Four more are known and deliberately deferred. Each errs toward a false negative or a
+Five more are known and deliberately deferred. Each errs toward a false negative or a
 loud refusal - none of them loses work - but each is worth acting on:
 
 - **A steer to an idle crewmate reports "did not acknowledge" almost every time.**
@@ -663,14 +663,14 @@ loud refusal - none of them loses work - but each is worth acting on:
   `docs/scripts.md`, while herdr documents `esc` and `ctrl+c`. Verified against herdr
   0.8.2: it accepts all of them, so the documented procedures work today and no crewmate
   can be stranded by it. Tidiness, not correctness.
-
 - **The captain's boot digest inventories every agent on the machine.** `_herdr_names()`
   in `bin/fm-captain-bootstrap.sh` lists every herdr agent whose tab label looks like a
   name, so the captain's own non-fleet panes read as fleet, where the tmux inventory it
   replaced was scoped to the `firstmate` session. Whether to scope it to the workspaces
   in `data/projects.md` is the captain's call about what he wants to see at boot.
 
-The first two should move onto `fm-herdr.sh` once the drain is empty, and the watchdog first.
+The two "not yet migrated" gaps - `fm-watch.sh`/`fm-ff-lib.sh` and the context watchdog -
+should move onto `fm-herdr.sh` once the drain is empty, and the watchdog first.
 `bin/fm-teardown.sh` HAS moved: it closes through `fm_herdr_close_pane`, which routes a
 herdr pane to herdr and a draining window to tmux.
 
