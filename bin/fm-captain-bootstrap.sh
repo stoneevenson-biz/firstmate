@@ -33,7 +33,7 @@ FM_BIN="${FM_BOOTSTRAP_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 # program itself arrives on python's stdin via the heredoc, so the program reads
 # the hook JSON from the environment, not sys.stdin.
 FM_HOOK_JSON="$(cat)" FM_BOOTSTRAP_FM="$FM" FM_BOOTSTRAP_BIN="$FM_BIN" python3 - <<'PY'
-import os, json, glob, subprocess, time, shutil
+import os, re, json, glob, subprocess, time, shutil
 fm = os.environ["FM_BOOTSTRAP_FM"]
 bindir = os.environ.get("FM_BOOTSTRAP_BIN", "")
 
@@ -259,11 +259,26 @@ if role == "captain":
     projects    = read(os.path.join(fm, "data/projects.md")).strip()
     secondmates = read(os.path.join(fm, "data/secondmates.md")).strip()
     backlog     = read(os.path.join(fm, "data/backlog.md"), 1500).strip()
-    try:
-        wins = subprocess.run(["tmux","list-windows","-t","firstmate","-F","#{window_name}"],
-                              capture_output=True, text=True, timeout=3).stdout.strip()
-    except Exception:
-        wins = ""
+    # Inventory the fleet where it actually LIVES. Crewmates run in herdr, so
+    # listing only tmux showed a restarted supervisor an EMPTY fleet while real
+    # crew were live - and tmux still matters for windows predating the cutover,
+    # which are being drained. Both, labelled, or the digest lies by omission.
+    def _run(cmd):
+        try:
+            return subprocess.run(cmd, capture_output=True, text=True, timeout=3).stdout.strip()
+        except Exception:
+            return ""
+    herdr_raw = _run(["herdr", "agent", "list"])
+    herdr_names = sorted(set(re.findall(r'"agent_name":"([^"]+)"', herdr_raw))) or \
+                  sorted(set(re.findall(r'"pane_id":"([^"]+)"', herdr_raw)))
+    tmux_wins = [w for w in _run(
+        ["tmux", "list-windows", "-t", "firstmate", "-F", "#{window_name}"]).splitlines() if w.strip()]
+    parts = []
+    if herdr_names:
+        parts.append("herdr: " + ", ".join(herdr_names))
+    if tmux_wins:
+        parts.append("tmux (draining): " + ", ".join(tmux_wins))
+    wins = "\n".join(parts)
     ctx = f"""# You are Cortana — firstmate captain (this session)
 Operating manual: {fm}/AGENTS.md — READ IT before any software orchestration (full lifecycle, recovery, harness adapters, delivery modes). Your conversation memory is a cache; truth lives in the panes (herdr, or tmux for windows still draining) + {fm}/state + data/backlog.md + treehouse.
 You delegate every piece of project work to a crewmate/secondmate you spawn, supervise, and tear down. Never do project work inline.
@@ -272,9 +287,10 @@ You delegate every piece of project work to a crewmate/secondmate you spawn, sup
 1. Project must be registered: a git repo at {fm}/projects/<name> + one line in data/projects.md (name, delivery mode, optional +yolo, one-line desc).
 2. Brief:  bin/fm-brief.sh <task-id> <repo-name> [--scout | --secondmate <proj>...]
    then edit data/<task-id>/brief.md, replacing {{TASK}} with task + acceptance criteria + context.
-3. Spawn:  bin/fm-spawn.sh <task-id> <project-dir> [claude|codex|opencode|pi] [--scout|--secondmate]
-   -> opens tmux window fm-<id> in session 'firstmate', runs `treehouse get` for an isolated worktree, launches the harness on the brief. Peek the pane within ~20s and clear any trust dialog with bin/fm-send.sh <win> --key Enter.
+3. Spawn:  bin/fm-spawn.sh <task-id> <project-dir> [claude|codex|opencode|pi] [--scout|--secondmate] [--name <work>]
+   -> creates a HERDR tab named <project>-<work> in that project's workspace, runs `treehouse get` for an isolated worktree, launches the harness on the brief. herdr is the only surface: no reachable server means the spawn STOPS and escalates - it never falls back to a pane you cannot see. Peek within ~20s and clear any trust dialog with bin/fm-send.sh <win> --key enter.
 4. Supervise:  bin/fm-watch.sh · peek bin/fm-peek.sh <win> · steer bin/fm-send.sh <win> · teardown bin/fm-teardown.sh <id>
+   Address a crewmate by fm-<task-id>; state/<id>.meta carries the pane and, in mux=, which surface made it (herdr, or tmux for a window still draining).
 Delivery mode per project (data/projects.md via fm-project-mode.sh): no-mistakes (default: implement -> /no-mistakes -> PR -> captain merge) | direct-PR | local-only.
 
 ## Live fleet state

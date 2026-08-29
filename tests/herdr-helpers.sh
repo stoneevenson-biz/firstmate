@@ -108,6 +108,17 @@ case "$1 $2" in
     printf '{"id":"cli:pane:run","result":{"type":"ok"}}\n' ;;
   "pane read"|"agent read") cat "${HERDR_PANE_FILE:-/dev/null}" 2>/dev/null ;;
   "pane close")  printf '{"id":"cli:pane:close","result":{"type":"ok"}}\n' ;;
+  "agent list")
+    printf '{"id":"cli:agent:list","result":{"agents":['
+    first=1
+    IFS=,; for a in ${HERDR_AGENTS:-}; do
+      [ -n "$a" ] || continue
+      [ "$first" = 1 ] || printf ','
+      first=0
+      printf '{"agent":"claude","agent_name":"%s","agent_status":"idle","pane_id":"wZ:p9"}' "$a"
+    done
+    unset IFS
+    printf '],"type":"agent_list"}}\n' ;;
   "agent get")
     [ "${HERDR_NO_AGENT:-0}" = 1 ] && {
       echo '{"error":{"code":"agent_not_found","message":"agent target not found"}}'; exit 1; }

@@ -501,6 +501,23 @@
       "regression": false,
       "created": "2026-08-28T00:00:00Z",
       "last_verified": "2026-08-28T00:00:00Z"
+    },
+    "gate-h9-startup-reports-unusable-herdr": {
+      "id": "gate-h9-startup-reports-unusable-herdr",
+      "title": "Startup says the fleet cannot dispatch: herdr is a bootstrap tool, and a stopped server is its own problem line",
+      "observable": "fm-bootstrap reports an absent herdr as MISSING with an install command and knows how to install it, reports an installed-but-unreachable herdr as NEEDS_HERDR_SERVER with the fix, and stays silent when a server is reachable; the captain boot digest lists live herdr agents and teaches the herdr spawn lifecycle rather than the tmux one",
+      "origin_mode": "build",
+      "spec_ref": "data/captain.md#where-agents-run",
+      "blocked_by": [],
+      "test_ref": "bash tests/fm-herdr-h9-startup.test.sh",
+      "baseline_ref": null,
+      "first_observed_red": "2026-08-28T00:00:00Z",
+      "mutation_verified": "2026-08-28T00:00:00Z",
+      "status": "green",
+      "vacuous": false,
+      "regression": false,
+      "created": "2026-08-28T00:00:00Z",
+      "last_verified": "2026-08-28T00:00:00Z"
     }
   }
 }

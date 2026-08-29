@@ -33,6 +33,11 @@ FM_TEST_ALLOW_LIVE_HERDR=1
 
 TMP_ROOT=$(fm_test_tmproot fm-herdr-h8)
 
+# Re-entrant mode: run ONLY the live case. Used by the strict-mode self-check
+# below so it can prove the guard's ordering without recursing into itself.
+LIVE_ONLY=0
+[ "${1:-}" = "__live_only" ] && LIVE_ONLY=1
+
 # --- the routing: each surface closes its own ------------------------------
 
 test_a_herdr_pane_is_closed_with_herdr() {
@@ -89,7 +94,12 @@ test_fm_teardown_closes_through_the_surface() {
 # --- LIVE: the tab is really gone -------------------------------------------
 
 test_live_a_real_herdr_tab_is_really_closed() {
-  if [ "${FM_TEST_REQUIRE_LIVE:-0}" = 1 ]; then
+  # Order matters, and getting it wrong is how a strict-mode guard becomes a
+  # strict-mode BUG: this checked FM_TEST_REQUIRE_LIVE before reachability, so
+  # it failed even with the server up - refusing to run the very case it exists
+  # to force. Reachability first; the switch only decides what an unreachable
+  # server MEANS (a hard failure instead of a skip).
+  if ! fm_herdr_up && [ "${FM_TEST_REQUIRE_LIVE:-0}" = 1 ]; then
     fail "FM_TEST_REQUIRE_LIVE=1 but no herdr server is reachable; this gate cannot be proven here"
   fi
   if ! fm_herdr_up; then
@@ -125,6 +135,28 @@ test_live_a_real_herdr_tab_is_really_closed() {
   pass "teardown: a real herdr tab is really gone after the close"
 }
 
+# THE GUARD IS ITSELF GATED. A strict-mode switch that fires when it should not
+# is worse than no switch: it makes the live case unrunnable exactly when someone
+# is trying hardest to prove it. This asserts the ordering directly.
+test_strict_mode_does_not_fire_against_a_live_server() {
+  if ! fm_herdr_up; then
+    printf 'SKIP - the strict-mode ordering check needs a live server to be meaningful.\n' >&2
+    return 0
+  fi
+  local rc=0
+  FM_TEST_REQUIRE_LIVE=1 bash "$0" __live_only >/dev/null 2>&1 || rc=$?
+  expect_code 0 "$rc" "strict mode failed with a reachable server; the guard checks the switch before reachability"
+  pass "strict mode: with a server up, FM_TEST_REQUIRE_LIVE runs the live case instead of failing it"
+}
+
+if [ "$LIVE_ONLY" = 1 ]; then
+  # Re-entered by the strict-mode self-check: run ONLY the live case, so the
+  # check proves the guard's ordering without recursing into itself.
+  test_live_a_real_herdr_tab_is_really_closed
+  exit 0
+fi
+
+test_strict_mode_does_not_fire_against_a_live_server
 test_a_herdr_pane_is_closed_with_herdr
 test_a_pre_cutover_window_is_still_closed_with_tmux
 test_a_failed_close_is_reported
