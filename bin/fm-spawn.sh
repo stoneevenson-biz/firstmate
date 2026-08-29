@@ -21,7 +21,7 @@
 #   name - it lives in state/<id>.meta, which is where an id belongs.
 #
 # CREWMATES ARE CREATED IN HERDR, through bin/fm-herdr.sh, never by calling tmux.
-# herdr is the only surface (data/captain.md, "Where agents run"): the crewmate
+# herdr is the only surface (AGENTS.md, "herdr workspace hygiene"): the crewmate
 # becomes a named tab in that project's workspace, and there is no driver to
 # select. An unreachable herdr STOPS this spawn with an escalation - it is never
 # a reason to put an agent in a pane the captain cannot see. Panes that predate
@@ -40,7 +40,7 @@
 #     __PIEXT__    absolute path to state/<task-id>.pi-ext.ts (pi turn-end extension,
 #                  written by this script; outside the worktree to avoid pi's trust gate)
 # Per-harness turn-end hooks are installed automatically; some live outside the worktree.
-# On success prints: spawned <id> harness=<name> kind=<ship|scout|secondmate> mode=<mode> yolo=<on|off> mux=herdr name=<work> workspace=<id> pane=<id> worktree=<path>
+# On success prints: spawned <id> harness=<name> kind=<ship|scout|secondmate> mode=<mode> yolo=<on|off> mux=herdr name=<project>-<work> workspace=<id> pane=<id> worktree=<path>
 # mode/yolo are resolved per-project from data/projects.md for ship/scout tasks;
 # secondmate spawns record mode=secondmate, yolo=off, home=, and projects=.
 set -eu

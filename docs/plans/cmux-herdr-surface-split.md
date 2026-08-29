@@ -5,7 +5,7 @@
 > `FM_MUX`, tmux default) shipped and was then collapsed: herdr is the only surface, there is
 > no driver selection, and `bin/fm-herdr.sh` is the single herdr-native library. Headless is
 > never selected automatically - an unreachable herdr escalates rather than degrading
-> (`data/captain.md`, "Where agents run"). Panes predating the cutover are still read, steered
+> (AGENTS.md, "herdr workspace hygiene"). Panes predating the cutover are still read, steered
 > and closed over tmux until they drain. The rest of this plan stands.
 
 **Status:** design, grilled. 2026-08-09.

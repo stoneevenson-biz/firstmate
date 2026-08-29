@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # GATE h1 - herdr is the only surface. There is nothing to select.
 #
-# THE CAPTAIN'S RULE (data/captain.md, "Where agents run", 2026-08-28):
+# THE CAPTAIN'S RULE, stated 2026-08-28 and recorded in AGENTS.md under
+# "herdr workspace hygiene" (his own copy is local and gitignored, so the
+# tracked section is what any clone can read):
 #
 #   "Headless is not an automatic fallback and must never be selected by a
 #    reachability rule. Any tier may *recommend* a headless run, but it asks me

@@ -21,9 +21,13 @@
 # destroys its own throwaway session; it never touches the fleet's.
 set -u
 
-# This gate needs the REAL binary; tests/lib.sh otherwise shims it away so no
-# suite can touch the captain's live server by accident.
+# This gate needs the REAL binaries; tests/lib.sh otherwise shims both away so
+# no suite can touch the captain's live servers by accident. The tmux opt-out is
+# the narrow one it sounds like: every tmux verb below is scoped to the
+# throwaway session this file creates and kills ($SES, below), never the fleet's
+# - which is the whole reason a stray tmux call is denied by default.
 FM_TEST_ALLOW_LIVE_HERDR=1
+FM_TEST_ALLOW_LIVE_TMUX=1
 
 # shellcheck source=tests/herdr-helpers.sh
 . "$(dirname "${BASH_SOURCE[0]}")/herdr-helpers.sh"
@@ -40,6 +44,8 @@ PEEK="$ROOT/bin/fm-peek.sh"
 SEND="$ROOT/bin/fm-send.sh"
 TMP_ROOT=$(fm_test_tmproot fm-herdr-h7)
 SES="fmh7-$$"
+# The guard shim only lets a kill through against the session declared here.
+FM_TEST_LIVE_TMUX_SESSION="$SES"; export FM_TEST_LIVE_TMUX_SESSION
 WORKDIR="$TMP_ROOT/work"; mkdir -p "$WORKDIR"
 WORKDIR=$(cd "$WORKDIR" && pwd -P)
 HOME_DIR="$TMP_ROOT/home"; mkdir -p "$HOME_DIR/state"

@@ -118,6 +118,7 @@ tests/fm-boot-m4.test.sh                  # boot budget under wedged helpers: wa
 tests/fm-boot-m5.test.sh                  # boot context never fails silently: a raising section leaves an explicit UNAVAILABLE marker
 tests/fm-ci-declared-red.test.sh          # tests/run-all.sh skips a test only when its gate is both red and declared, announces every skip, and fails closed
 tests/fm-status-verb.test.sh              # bin/fm-status.sh appends one line to the right home, and briefs teach the verb instead of a redirect
+tests/fm-test-hermeticity.test.sh         # the suites stay off the captain's live herdr and tmux: both refusers on PATH, independent opt-outs, and a live-tmux opt-in whose kills are scoped to the suite's own throwaway session
 [ "$(readlink CLAUDE.md)" = "AGENTS.md" ]
 [ "$(readlink .claude/skills)" = "../.agents/skills" ]
 FM_HEARTBEAT=2 FM_POLL=1 bin/fm-watch-arm.sh  # watcher re-arm smoke test (prints arm status, then "heartbeat")

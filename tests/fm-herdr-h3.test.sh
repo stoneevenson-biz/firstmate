@@ -37,10 +37,11 @@ PROJ=$(make_repo "$TMP_ROOT/archify")
 git -C "$PROJ" worktree add -q --detach "$TMP_ROOT/wt" >/dev/null 2>&1
 WT=$(cd "$TMP_ROOT/wt" && pwd -P)
 
-# BOTH multiplexers are faked. Faking only herdr is not enough: the FM_MUX=tmux
-# case below would then drive the REAL tmux server and leave a window in the
-# captain's live firstmate session - which is exactly what happened once during
-# this work, and what the duplicate-window guard then refused on the next run.
+# BOTH multiplexers are faked. Faking only herdr is not enough: a stray tmux
+# call would then drive the REAL tmux server and leave a window in the captain's
+# live firstmate session - which is exactly what happened once during this work,
+# and what the duplicate-window guard then refused on the next run. Faking tmux
+# is how such a call is CAUGHT here rather than landing on the live server.
 # A spawn test must be unable to reach any live multiplexer.
 FB=$(fm_herdr_fake_server "$TMP_ROOT")
 fm_herdr_fake_tmux "$TMP_ROOT" >/dev/null
@@ -252,13 +253,13 @@ test_a_refused_pane_name_is_reported() {
 
 # --- an unreachable herdr STOPS the spawn ------------------------------------
 
-# THE GATE THAT PROVES THE RULE (data/captain.md, "Where agents run"). With no
-# FM_MUX set and no herdr server reachable, the spawn must FAIL - non-zero, with
-# an escalation - and must not put the crewmate anywhere else. Falling back to a
-# tmux window here is the exact failure the captain drew the line against:
-# he would believe he is watching the fleet while the work landed somewhere
-# invisible. Knowing the fleet is invisible is strictly better than wrongly
-# believing it is visible.
+# THE GATE THAT PROVES THE RULE (AGENTS.md, "herdr workspace hygiene"). With no
+# herdr server reachable, the spawn must FAIL - non-zero, with an escalation -
+# and must not put the crewmate anywhere else. Falling back to a tmux window
+# here is the exact failure the captain drew the line against: he would believe
+# he is watching the fleet while the work landed somewhere invisible. Knowing
+# the fleet is invisible is strictly better than wrongly believing it is
+# visible.
 test_unreachable_herdr_fails_the_spawn() {
   reset
   local home out rc=0

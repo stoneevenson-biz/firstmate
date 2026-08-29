@@ -11,7 +11,8 @@
 # call site got would depend on PATH order at the moment of the call.
 #
 # WHY THERE IS NO DRIVER SELECTION. Agents run in herdr and herdr is the ONLY
-# automatic choice (data/captain.md, "Where agents run"). Headless is never
+# automatic choice (AGENTS.md, "herdr workspace hygiene" - the shared statement
+# of record; the captain's own copy is local and gitignored). Headless is never
 # selected automatically — not by a reachability probe, not by a missing binary,
 # not by an environment variable, and not loudly. Degrading is the decision the
 # captain reserved for himself: believing he is watching the fleet while work
