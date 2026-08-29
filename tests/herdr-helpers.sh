@@ -122,7 +122,46 @@ case "$1 $2" in
   "agent get")
     [ "${HERDR_NO_AGENT:-0}" = 1 ] && {
       echo '{"error":{"code":"agent_not_found","message":"agent target not found"}}'; exit 1; }
+    # HERDR_STATES scripts a LIFECYCLE: successive `agent get` calls walk the
+    # comma-separated list and the last entry sticks. That is what lets a test
+    # model "working, then the turn ends, then a new turn starts" - the sequence
+    # a queued prompt actually produces - versus "working, turn ends, stays
+    # idle", which is a prompt that was swallowed.
+    if [ -n "${HERDR_STATES:-}" ]; then
+      _cur="${HERDR_STATE_CURSOR:-/dev/null}"
+      _n=$(cat "$_cur" 2>/dev/null); case "$_n" in ''|*[!0-9]*) _n=0 ;; esac
+      _i=0; _st=""
+      IFS=,; for _s in $HERDR_STATES; do
+        _st=$_s
+        [ "$_i" -ge "$_n" ] && break
+        _i=$((_i + 1))
+      done
+      unset IFS
+      [ "$_cur" = /dev/null ] || printf '%s' "$((_n + 1))" > "$_cur"
+      printf '{"id":"cli:agent:get","result":{"agent":{"agent_status":"%s"},"type":"agent_info"}}\n' "$_st"
+      exit 0
+    fi
     printf '{"id":"cli:agent:get","result":{"agent":{"agent_status":"%s"},"type":"agent_info"}}\n' "${AGENT_STATE:-idle}" ;;
+  "agent wait")
+    # Mirrors the real verb: succeeds when the scripted lifecycle reaches one of
+    # the requested states within the budget, fails otherwise.
+    _want=""
+    for _a in "$@"; do case "$_prev" in --until) _want="$_want $_a" ;; esac; _prev=$_a; done
+    _cur="${HERDR_STATE_CURSOR:-/dev/null}"
+    _n=$(cat "$_cur" 2>/dev/null); case "$_n" in ''|*[!0-9]*) _n=0 ;; esac
+    _i=0; _st=""
+    IFS=,; for _s in ${HERDR_STATES:-idle}; do
+      _st=$_s
+      [ "$_i" -ge "$_n" ] && break
+      _i=$((_i + 1))
+    done
+    unset IFS
+    [ "$_cur" = /dev/null ] || printf '%s' "$((_n + 1))" > "$_cur"
+    for _w in $_want; do
+      [ "$_w" = "$_st" ] && { printf '{"result":{"agent_status":"%s"}}\n' "$_st"; exit 0; }
+    done
+    echo '{"error":{"code":"timeout","message":"timed out waiting for agent status"}}'
+    exit 1 ;;
   "agent prompt")
     # An arbitrary failure the pattern list does not know about - a dropped
     # socket, a CLI parse error, a changed error envelope. The point is that the
@@ -141,11 +180,12 @@ case "$1 $2" in
       echo '{"error":{"code":"agent_prompt_stalled","message":"agent prompt produced no observed state change within 5000 ms"}}'; exit 1; }
     [ "${HERDR_NO_AGENT:-0}" = 1 ] && {
       echo '{"error":{"code":"agent_not_found","message":"agent target not found"}}'; exit 1; }
-    case "$*" in
-      *--wait*) : ;;
-      # Unacknowledged delivery is the tmux weakness this driver exists to fix.
-      *) echo '{"error":{"code":"unacknowledged","message":"prompt without --wait"}}' >&2; exit 1 ;;
-    esac
+    # A prompt WITHOUT --wait is valid and is what the seam sends to an agent
+    # that is already working: there, --wait "does not track turns" and can be
+    # satisfied by the turn that was already running, so its verdict would be
+    # about the wrong turn. The fake must not invent a rule the binary does not
+    # have - doing so is what made a gate assert the opposite of the truth.
+    :
     printf '{"id":"cli:agent:prompt","result":{"agent":{"agent_status":"done"},"type":"agent_info"}}\n' ;;
   "agent rename")
     name=$4

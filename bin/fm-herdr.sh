@@ -228,7 +228,10 @@ fm_herdr_run() {  # <pane> <shell-command>
 #
 # Return codes are the whole contract, because "did it land" is the only
 # question a supervisor actually has:
-#   0  delivered AND acknowledged — the agent consumed it
+#   0  delivered AND acknowledged — the agent consumed it. From a non-working
+#      agent that is herdr's --wait; from a WORKING one it is the observed
+#      settle-then-working transition, because herdr's --wait "does not track
+#      turns" and can be satisfied by the turn that was already running.
 #   3  refused: the agent is blocked at an approval dialog, nothing was sent
 #   4  delivered but NOT acknowledged
 #   5  no agent detected in that pane: nothing delivered, nothing executed
@@ -241,11 +244,73 @@ fm_herdr_run() {  # <pane> <shell-command>
 # worse of the two available errors: firstmate would re-send a steer that
 # already landed and the crewmate would be told twice.
 fm_herdr_prompt() {  # <pane> <text>
-  local pane=$1 text=$2 out rc=0
-  out=$(herdr agent prompt "$pane" "$text" --wait --timeout "${FM_HERDR_SEND_TIMEOUT_MS:-15000}" 2>&1) || rc=$?
+  local pane=$1 text=$2 out rc=0 state budget deadline poll settled
+  budget=${FM_HERDR_SEND_TIMEOUT_MS:-15000}
+  poll=${FM_HERDR_ACK_POLL:-0.25}
 
-  # The specific outcomes first: each says something the caller can act on that
-  # a bare exit status cannot.
+  # READ THE STATE FIRST. Which acknowledgment is available depends on it, and
+  # the binary is explicit about why (herdr agent prompt --help):
+  #
+  #   "It does not track turns: if the agent is already working, that active
+  #    turn's completion may match."
+  #
+  # So from a WORKING agent, --wait's verdict is not evidence about OUR prompt -
+  # it can be satisfied by the turn that was already running. Leaning on it there
+  # returned 0, "the agent consumed it", for a steer that had not started.
+  state=$(fm_herdr_field "$(herdr agent get "$pane" 2>&1)" agent_status)
+
+  if [ "$state" = working ]; then
+    # Submit WITHOUT --wait: its answer here would be about the wrong turn, and
+    # waiting on it would also block for the whole current turn to no purpose.
+    out=$(herdr agent prompt "$pane" "$text" 2>&1) || rc=$?
+    fm_herdr_prompt_classify "$pane" "$out" "$rc" && return 0 || rc=$?
+    [ "$rc" = 200 ] || return "$rc"
+
+    # A queued prompt is consumed when the current turn ENDS and a new one
+    # BEGINS. That settle-then-working transition is the acknowledgment, and it
+    # is the only one available here. Its absence within the budget is reported
+    # as delivered-but-unconfirmed - never invented as success.
+    deadline=$(( $(date +%s) + (budget / 1000) + 1 ))
+    settled=0
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+      state=$(fm_herdr_field "$(herdr agent get "$pane" 2>&1)" agent_status)
+      case "$state" in
+        working) [ "$settled" = 1 ] && return 0 ;;
+        idle|done) settled=1 ;;
+        blocked)
+          echo "fm-herdr: $pane stopped at an approval dialog after the steer; delivery is unconfirmed" >&2
+          return 4 ;;
+      esac
+      sleep "$poll"
+    done
+    echo "fm-herdr: $pane was mid-turn; the steer is queued but no new turn started within the budget." >&2
+    echo "  Delivery is UNCONFIRMED, not acknowledged - and NOT re-sent, because re-sending" >&2
+    echo "  a steer the crewmate already holds is the worse of the two errors." >&2
+    return 4
+  fi
+
+  # From a non-working state --wait IS trustworthy: the binary requires an
+  # observed state change before it matches, so a match means the agent moved
+  # because of this prompt. --until is explicit so a change to herdr's default
+  # cannot silently alter what "acknowledged" means here.
+  out=$(herdr agent prompt "$pane" "$text" --wait \
+          --until idle --until 'done' --until blocked \
+          --timeout "$budget" 2>&1) || rc=$?
+  fm_herdr_prompt_classify "$pane" "$out" "$rc" && return 0 || rc=$?
+  [ "$rc" = 200 ] || return "$rc"
+  return 0
+}
+
+# Shared outcome classification for a submission attempt.
+# Returns 0 for a clean acknowledged result, 200 when the caller should carry on
+# with its own confirmation, and otherwise the code the caller must return:
+#   3 blocked (nothing sent) · 4 delivered-unconfirmed · 5 no agent · 1 failed
+#
+# The EXIT STATUS is authoritative. A dropped socket, a CLI parse error, an error
+# envelope this list has never seen - none of them match the patterns, and all of
+# them mean the steer did not land.
+fm_herdr_prompt_classify() {  # <pane> <out> <rc>
+  local pane=$1 out=$2 rc=$3
   case "$out" in
     *agent_blocked*)
       echo "fm-herdr: $pane is at an approval dialog; not overwriting it" >&2
@@ -254,31 +319,17 @@ fm_herdr_prompt() {  # <pane> <text>
       echo "fm-herdr: $pane took the prompt but never changed state; delivery is unconfirmed, NOT re-sent" >&2
       return 4 ;;
     *agent_not_found*)
-      # herdr has not classified an agent in this pane. NOTHING is delivered.
-      #
-      # This used to fall back to `herdr pane run`, whose job is running SHELL
-      # COMMAND LINES - so a steer like `git reset --hard origin/main` executed
-      # in the worktree, and the caller was told it was merely unacknowledged.
-      # Blind delivery into a TUI composer and blind delivery into a shell are
-      # not the same risk. The honest answer is that there is no agent here.
+      # No agent in this pane. NOTHING is delivered, and nothing is executed:
+      # forwarding the steer to `herdr pane run` would RUN it as a shell command.
       echo "fm-herdr: no agent detected in $pane; the steer was NOT delivered." >&2
       echo "  Nothing was executed - a pane holding a shell would have RUN the steer." >&2
       echo "  Peek the pane: the agent may have exited or may still be starting." >&2
       return 5 ;;
   esac
-
-  # THE EXIT STATUS IS AUTHORITATIVE. A dropped socket, a CLI parse error, an
-  # error envelope this list has never seen - none of them print anything the
-  # patterns above match, and all of them mean the steer did not land. Trusting
-  # the message alone is how a network failure got reported as an acknowledged
-  # delivery (Quarterdeck reject, attempt 1): `|| true` erased the status and an
-  # unmatched message fell through to success.
   if [ "$rc" -ne 0 ]; then
     echo "fm-herdr: prompt failed for $pane (herdr exited $rc): $out" >&2
     return 1
   fi
-  # And the mirror: a zero exit that still carries an error envelope. Trusting
-  # only the status would swap one blind spot for the other.
   case "$out" in
     *'{"error"'*)
       echo "fm-herdr: prompt failed for $pane: $out" >&2
@@ -287,7 +338,7 @@ fm_herdr_prompt() {  # <pane> <text>
       echo "fm-herdr: prompt produced no response for $pane" >&2
       return 1 ;;
   esac
-  return 0
+  return 200
 }
 
 fm_herdr_send_key() {  # <pane> <key>

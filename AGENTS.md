@@ -550,8 +550,9 @@ Silence is the correct state while a healthy background watcher is waiting.
 
 **Agents run in herdr, and herdr is the only surface.**
 A pane the captain cannot see does not count, so `bin/fm-spawn.sh` puts every crewmate in
-herdr - no flag, no opt-in, nothing to remember. The canonical statement of the rule is
-`data/captain.md`, section "Where agents run".
+herdr - no flag, no opt-in, nothing to remember. The captain stated this rule on 2026-08-28; where he
+keeps his own copy of it (`data/captain.md`, section "Where agents run") is local to a
+firstmate home and gitignored, so this section is the shared statement of record.
 
 **Headless is never selected automatically.** No code path may choose tmux, or any other
 headless transport, on its own - not from a reachability probe, not from a missing binary,
@@ -575,11 +576,23 @@ The three entry points firstmate creates, steers, and observes direct reports wi
 `bin/fm-herdr.sh`, never tmux directly. There is one library and one surface, so there is
 no driver to select and nothing to configure. `state/<id>.meta` records the herdr pane id
 in `window=` and marks the crewmate post-cutover with `mux=herdr`.
-`fm-send.sh` delivers through `herdr agent prompt --wait`, which returns only once the
-agent has consumed the prompt - real acknowledgment, where tmux could only guess. A
-crewmate blocked at an approval dialog is refused rather than typed over, and a delivery
-that goes in without a state change is reported as unconfirmed rather than as a failure,
-because re-sending a steer the crewmate already has is the worse of the two errors.
+`fm-send.sh` delivers through `herdr agent prompt`, and how strong the acknowledgment is
+depends on what the crewmate was doing, so read the exit code rather than assuming:
+
+- **Idle crewmate:** `--wait` is real acknowledgment. herdr requires an observed state
+  change before it matches, so a match means the agent moved because of this steer.
+- **Busy crewmate:** `--wait` is NOT evidence about your steer. The binary is explicit -
+  "it does not track turns: if the agent is already working, that active turn's completion
+  may match" - so leaning on it would report the turn that was already running as proof
+  your steer landed. Instead the steer is submitted and firstmate watches for the current
+  turn to end and a new one to begin, which only the queued steer causes. If that happens
+  inside the budget the steer is acknowledged; if it does not, the delivery is reported as
+  UNCONFIRMED, not as success and not as failure.
+- A crewmate blocked at an approval dialog is refused rather than typed over, and a pane
+  with no agent is refused without executing the steer as a shell command.
+
+An unconfirmed delivery is assumed sent and never re-sent: re-sending a steer the crewmate
+already holds is the worse of the two available errors.
 
 **The drain.** Crewmates spawned before the cutover live in tmux windows and their meta has
 no `mux=herdr` line. Those stay readable, steerable and closable until they are torn down:
@@ -608,14 +621,22 @@ plan that changes nothing, `--apply` to create the missing workspaces, and
 `--name <pane> <project> <work>` to name a live pane. It is deliberately not called `herdr`,
 which would shadow the real binary and make every call site depend on `PATH` order.
 
-Not yet migrated: `bin/fm-watch.sh` and `bin/fm-ff-lib.sh` still read `window=` and call
-tmux on it directly. That is what keeps the drain working, and it is also a gap: for a
-herdr-spawned crewmate, stale-pane detection is inert, so a wedged crewmate is caught by
-its status file and the heartbeat review rather than by pane staleness. Supervision still
-works - status files, heartbeats, and the per-task checks do not depend on the
-multiplexer - and nothing unsafe happens. They should move onto `fm-herdr.sh` once the
-drain is empty, and not before. `bin/fm-teardown.sh` HAS moved: it closes through
-`fm_herdr_close_pane`, which routes a herdr pane to herdr and a draining window to tmux.
+Not yet migrated, and the two gaps are NOT equally covered - know which is which before
+relying on either:
+
+- `bin/fm-watch.sh` and `bin/fm-ff-lib.sh` still read `window=` and call tmux on it, which
+  is what keeps the drain working. For a herdr crewmate, stale-pane detection is inert, so
+  a wedged crewmate is caught by its status file and the heartbeat review instead. That is
+  a degraded path with a real fallback.
+- **The context watchdog has NO fallback.** `bin/fm-ctx-statusline.sh` stamps a session
+  `managed:false` when `TMUX_PANE` is unset, and `fm-context-watch.sh` re-confirms the
+  target through tmux at fire time, so no herdr crewmate is ever selected for a compaction
+  checkpoint. A crewmate that reaches its context ceiling simply dies with no handoff
+  written. Until this moves, watch context on long crewmates yourself.
+
+Both should move onto `fm-herdr.sh` once the drain is empty, and the watchdog first.
+`bin/fm-teardown.sh` HAS moved: it closes through `fm_herdr_close_pane`, which routes a
+herdr pane to herdr and a draining window to tmux.
 
 ### Away-mode stub
 

@@ -37,3 +37,4 @@
 | gate-h7-drain-live-roundtrip | green | LIVE drain: a real pre-cutover tmux pane is still readable, steerable and closable |
 | gate-h8-teardown-closes-the-pane | green | Teardown closes the pane on the surface that created it, and reports a close it could not do |
 | gate-h9-startup-reports-unusable-herdr | green | Startup says the fleet cannot dispatch: herdr is a bootstrap tool, and a stopped server is its own problem line |
+| gate-h10-busy-agent-acknowledgment | green | Acknowledgment is real for a BUSY agent, or it is reported as unconfirmed rather than claimed |

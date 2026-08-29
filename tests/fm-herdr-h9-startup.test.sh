@@ -67,13 +67,42 @@ test_the_missing_line_carries_an_install_command() {
   pass "startup: the herdr MISSING line carries an install command, like every other tool"
 }
 
+# Assert the install command RESOLVES; never invoke the installer.
+#
+# The first version of this case ran `fm-bootstrap.sh install herdr`, which
+# reaches `eval "brew install herdr"`. A recording brew shim caught it:
+# `FAKE-BREW-INVOKED: install herdr`. CI runs every tests/*.test.sh on
+# ubuntu-latest with linuxbrew on PATH, so a test would have installed a package
+# on the runner - a test that changes the machine it runs on is not a test.
 test_install_knows_how_to_install_herdr() {
-  local out
-  # `install` with an unknown tool errors; herdr must be known to it.
-  out=$(FM_ROOT_OVERRIDE='' FM_HOME="$HOME_DIR" ${TIMEOUT_BIN:+"$TIMEOUT_BIN" 20} bash "$BOOT" install herdr 2>&1 || true)
-  assert_not_contains "$out" "unknown tool herdr" \
-    "bootstrap can report herdr missing but not install it"
-  pass "startup: bootstrap install knows herdr"
+  local cmd
+  # Source the script's own resolver rather than driving the install path.
+  cmd=$(FM_BOOTSTRAP_LIB_ONLY=1 bash -c '. "$1"; install_cmd herdr' _ "$BOOT" 2>/dev/null || true)
+  [ -n "$cmd" ] || fail "bootstrap has no install command for herdr; it can report it missing but not fix it"
+  case "$cmd" in
+    *herdr*) : ;;
+    *) fail "the herdr install command does not mention herdr: '$cmd'" ;;
+  esac
+  pass "startup: bootstrap resolves an install command for herdr (without running it)"
+}
+
+# The guard that keeps it that way: nothing in this suite may reach a package
+# manager. Proven with a recording shim rather than trusted.
+test_no_case_here_invokes_a_package_manager() {
+  local shim log out
+  shim="$TMP_ROOT/pkgshim"; mkdir -p "$shim"
+  log="$TMP_ROOT/pkg.log"; : > "$log"
+  for tool in brew apt-get npm; do
+    # shellcheck disable=SC2016  # the shim's own $0/$* must reach it unexpanded
+    printf '#!/usr/bin/env bash\nprintf "INVOKED: %%s %%s\\n" "$(basename "$0")" "$*" >> "%s"\nexit 0\n' "$log" > "$shim/$tool"
+    chmod +x "$shim/$tool"
+  done
+  # Output is irrelevant here; what matters is that the log stays empty.
+  PATH="$shim:$PATH" run_boot >/dev/null
+  if [ -s "$log" ]; then
+    fail "a startup case invoked a package manager: $(head -1 "$log")"
+  fi
+  pass "startup: detection never reaches a package manager - a test must not change the host"
 }
 
 # --- the binary is there but no server is running ---------------------------
@@ -154,6 +183,7 @@ test_the_captain_digest_teaches_the_herdr_lifecycle() {
 test_an_absent_herdr_binary_is_reported_as_missing
 test_the_missing_line_carries_an_install_command
 test_install_knows_how_to_install_herdr
+test_no_case_here_invokes_a_package_manager
 test_an_unreachable_server_is_its_own_problem_line
 test_the_server_line_says_how_to_fix_it
 test_a_reachable_server_says_nothing

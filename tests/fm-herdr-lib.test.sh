@@ -67,17 +67,23 @@ test_new_tab_is_scoped_and_returns_the_pane() {
   pass "new_tab: workspace-scoped, unfocused, and returns the pane id"
 }
 
-# Delivery to an agent is ONE acknowledged call. --wait is the acknowledgment;
-# without it the library would be no better than blind keystrokes.
-test_prompt_is_one_acknowledged_call() {
+# Delivery to an IDLE agent is one acknowledged call. --wait is trustworthy from
+# a non-working state, because the binary requires an observed state change
+# before it matches - so a match means the agent moved because of this prompt.
+#
+# This case used to assert --wait on EVERY prompt. That was wrong, and wrong in
+# the direction that mattered: from a working agent --wait "does not track
+# turns" and can be satisfied by the turn already running, so insisting on it
+# there is insisting on the very signal that cannot be trusted. Busy delivery is
+# gated in tests/fm-herdr-h10-busy-ack.
+test_an_idle_prompt_is_one_acknowledged_call() {
   reset_calls
-  fm_herdr_prompt w9:p2 "hello" || fail "prompt failed"
+  HERDR_STATES=idle fm_herdr_prompt w9:p2 "hello" || fail "prompt failed"
   assert_grep "agent prompt w9:p2 hello --wait" "$CALLS" \
-    "the prompt did not use the acknowledged path"
-  if grep -F 'agent prompt' "$CALLS" | grep -qvF -- '--wait'; then
-    fail "a prompt went out without --wait"
-  fi
-  pass "prompt: one call, and it always carries the acknowledgment"
+    "the idle prompt did not use the acknowledged path"
+  assert_grep "--until" "$CALLS" \
+    "the idle prompt does not name the states it accepts; herdr's default could change under it"
+  pass "prompt: an idle agent gets one acknowledged call, with its states named"
 }
 
 # A blocked agent is at an approval dialog. Typing over it is how a prompt gets
@@ -176,7 +182,7 @@ test_a_failed_create_is_reported() {
 test_field_extraction_pulls_real_values
 test_field_extraction_does_not_straddle_records
 test_new_tab_is_scoped_and_returns_the_pane
-test_prompt_is_one_acknowledged_call
+test_an_idle_prompt_is_one_acknowledged_call
 test_blocked_agent_returns_its_own_code
 test_a_stall_is_its_own_code
 test_a_nonzero_exit_is_never_reported_as_acknowledged

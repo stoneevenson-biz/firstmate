@@ -145,6 +145,11 @@ treehouse_supports_lease() {
   treehouse get --help 2>&1 | grep -Eq '(^|[^[:alnum:]_-])--lease([^[:alnum:]_-]|$)'
 }
 
+# Sourced for its resolvers only (tests assert install_cmd without invoking any
+# installer). Stops before the detection body, which would run fleet syncs.
+# shellcheck disable=SC2317  # the exit is the executed-not-sourced path
+if [ -n "${FM_BOOTSTRAP_LIB_ONLY:-}" ]; then return 0 2>/dev/null || exit 0; fi
+
 if [ "${1:-}" = "install" ]; then
   shift
   [ $# -gt 0 ] || { echo "usage: fm-bootstrap.sh install <tool>..." >&2; exit 1; }

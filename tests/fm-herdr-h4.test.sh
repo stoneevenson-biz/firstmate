@@ -81,15 +81,16 @@ test_send_to_a_herdr_crewmate_is_acknowledged() {
   pass "send: a herdr crewmate is steered with one acknowledged agent prompt"
 }
 
-# The --wait is the acknowledgment. Without it the seam buys nothing over tmux,
-# so the fake refuses an unwaited prompt and this case proves we never send one.
-test_send_never_drops_the_acknowledgment() {
+# --wait is the acknowledgment FROM A NON-WORKING AGENT, and that is the case
+# this file covers. It is deliberately not asserted for a working agent: there
+# the binary "does not track turns" and --wait can be satisfied by the turn that
+# was already running, so requiring it would be requiring the wrong evidence.
+# Busy delivery has its own gate, tests/fm-herdr-h10-busy-ack.
+test_an_idle_steer_keeps_the_acknowledgment() {
   reset
-  run "$SEND" fm-herdrcrew 'another instruction' >/dev/null
-  if grep -F 'agent prompt' "$CALLS" | grep -qvF -- '--wait'; then
-    fail "a prompt was sent WITHOUT --wait; delivery was unacknowledged"
-  fi
-  pass "send: every herdr prompt carries --wait (unacknowledged delivery is unreachable)"
+  HERDR_STATES=idle run "$SEND" fm-herdrcrew 'another instruction' >/dev/null
+  assert_grep "--wait" "$CALLS" "an idle steer stopped using the acknowledged prompt"
+  pass "send: a steer to an idle crewmate carries the acknowledgment"
 }
 
 # A blocked agent is sitting at an approval dialog. Typing over it is how a
@@ -234,7 +235,7 @@ test_a_raw_target_is_a_tmux_address() {
 }
 
 test_send_to_a_herdr_crewmate_is_acknowledged
-test_send_never_drops_the_acknowledgment
+test_an_idle_steer_keeps_the_acknowledgment
 test_send_to_a_blocked_agent_fails_loudly
 test_an_unconfirmed_delivery_is_not_reported_as_a_failure
 test_an_undetected_agent_is_refused_not_executed
