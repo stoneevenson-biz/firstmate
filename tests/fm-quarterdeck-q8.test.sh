@@ -1,0 +1,219 @@
+#!/usr/bin/env bash
+# Q8: the gate classifier is the single, pure, fail-closed owner of "is this
+# gate's state acceptable?".
+#
+# The defect it freezes: the rule had three statements - tests/run-all.sh
+# implemented it, bin/fm-verify.sh's verifier prompt contradicted it ("every
+# gate must be green"), and fm-brief.sh restated it again. gates/accepted-red.md
+# is a deliberate baseline, so a ledger holding declared reds can never be
+# absolutely green, and acceptance came down to whether an LLM happened to reason
+# about that file on a given run. This gate freezes the classifier's answer so
+# there is one authority to cite instead of three to drift.
+#
+# It asserts, in one place:
+#   - the DOUBLE condition: red AND declared is ok; red alone is not; a
+#     declaration alone (on a non-red gate) grants nothing.
+#   - frozen is acceptable. `ledger verify` DEMOTES frozen to green
+#     (CONTRIBUTING.md), so frozen is strictly stronger than green, and 7 of
+#     this repo's own gates are frozen today.
+#   - all three ABSENCE cases, because the classifier runs on the Quarterdeck
+#     path for every project and most have no gates/ at all.
+#   - PURITY: it never invokes gates/verify.sh or the `ledger` CLI. `ledger
+#     verify` re-runs every gate and rewrites the ledger it is pointed at, so a
+#     classifier that called it would mutate the thing it classifies.
+#   - FAIL CLOSED: an unparseable ledger yields no rows at all, never a partial
+#     answer, and an unrecognised status is never ok.
+#
+# Mutation (LEDGER_MUTATE=1): the assertions demand the unsafe classification -
+# that an UNDECLARED red is ok. A correct classifier calls it bad-red, so the
+# assertion fails.
+#
+# spec: docs/specs/2026-07-01-agent-os-council.md
+set -u
+# shellcheck source=tests/lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source=bin/fm-gates-lib.sh
+. "$ROOT/bin/fm-gates-lib.sh"
+
+TMP=$(fm_test_tmproot fm-qd-q8)
+
+# row <output> <gate-id> -> the classifier's row for that gate, tabs -> spaces
+row() { printf '%s\n' "$1" | awk -F'\t' -v g="$2" '$2 == g { print $1 " | " $3 " | " $4 " | " $5 }'; }
+header() { printf '%s\n' "$1" | head -1; }
+
+# --- fixture ----------------------------------------------------------------
+fixture() {
+  local dir=$1
+  mkdir -p "$dir/gates" "$dir/tests"
+  : > "$dir/tests/aa.test.sh"
+  : > "$dir/tests/bb.test.sh"
+  : > "$dir/tests/cc.test.sh"
+  : > "$dir/tests/dd.test.sh"
+  : > "$dir/tests/ee.test.sh"
+  cat > "$dir/gates/ledger.json" <<'JSON'
+{
+  "version": 1,
+  "gates": [
+    { "id": "fx-green",          "status": "green",  "test_ref": "bash tests/aa.test.sh" },
+    { "id": "fx-frozen",         "status": "frozen", "test_ref": "bash tests/bb.test.sh" },
+    { "id": "fx-declared-red",   "status": "red",    "test_ref": "bash tests/cc.test.sh" },
+    { "id": "fx-undeclared-red", "status": "red",    "test_ref": "bash tests/dd.test.sh" },
+    { "id": "fx-declared-green", "status": "green",  "test_ref": "bash tests/ee.test.sh" }
+  ]
+}
+JSON
+  cat > "$dir/gates/accepted-red.md" <<'MD'
+# Accepted red gates
+
+- fx-declared-red - a fixture gate, declared red on purpose, with a route back to green.
+- fx-declared-green - declared, but this gate is not red, so the declaration grants nothing.
+- fx-no-reason
+MD
+}
+
+A="$TMP/a"; fixture "$A"
+outA=$(fm_gates_classify "$A")
+
+expect_code OK "$(header "$outA")" "a readable ledger and accepted-red.md classify as OK"
+
+if [ "${LEDGER_MUTATE:-}" = 1 ]; then
+  # MUTATION: demand that an undeclared red be acceptable - the exact fail-open
+  # the double condition exists to prevent.
+  case "$(row "$outA" fx-undeclared-red)" in
+    ok\ *) : ;;
+    *) fail "MUTATION: expected an undeclared red gate to classify ok" ;;
+  esac
+else
+  case "$(row "$outA" fx-undeclared-red)" in
+    bad-red\ *) : ;;
+    *) fail "a red gate that is NOT declared in accepted-red.md must classify bad-red;
+being red is not enough to be excused" ;;
+  esac
+fi
+
+# The double condition, both halves.
+assert_contains "$(row "$outA" fx-declared-red)" "ok | red | tests/cc.test.sh | a fixture gate" \
+  "red AND declared is acceptable, and the row carries the declared reason"
+assert_contains "$(row "$outA" fx-declared-green)" "ok | green |" \
+  "a declared gate that is green is acceptable as green, not as an excused red"
+assert_not_contains "$(printf '%s\n' "$outA" | awk -F'\t' '$2 == "fx-declared-green" { print $3 }')" "red" \
+  "a declaration must never make a gate count as red"
+
+# frozen: strictly stronger than green, and 7 of this repo's gates hold it.
+assert_contains "$(row "$outA" fx-frozen)" "ok | frozen |" \
+  "frozen is a passing status - ledger verify DEMOTES frozen to green, so
+treating it as unacceptable would reject every ship task in this repo"
+assert_contains "$(row "$outA" fx-green)" "ok | green |" "green is acceptable"
+
+# test_ref is reported as the ledger records it, not stat()ed - that is I/O, and
+# the freshness policy belongs to the caller that wants it.
+assert_contains "$(row "$outA" fx-green)" "tests/aa.test.sh" \
+  "the row carries the test path token from test_ref"
+
+# --- an entry with no stated reason is ignored, not trusted -------------------
+# accepted-red.md's own format requires a reason: "an entry with no route back
+# to green is a bug report, not a baseline".
+B="$TMP/b"; fixture "$B"
+python3 - "$B/gates/ledger.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d["gates"].append({"id": "fx-no-reason", "status": "red", "test_ref": "bash tests/aa.test.sh"})
+open(p, "w").write(json.dumps(d, indent=2))
+PY
+outB=$(fm_gates_classify "$B")
+case "$(row "$outB" fx-no-reason)" in
+  bad-red\ *) : ;;
+  *) fail "a declaration with no stated reason must not excuse a red gate" ;;
+esac
+
+# --- absence case 1: no gates/ dir -> not applicable --------------------------
+# Most projects firstmate ships to have no gate ledger at all. This must be a
+# quiet "not applicable", never an error.
+C="$TMP/c"; mkdir -p "$C"
+expect_code NOGATES "$(fm_gates_classify "$C")" "a root with no gates/ dir classifies NOGATES"
+
+# --- absence case 2: gates/ but no ledger -> nothing can be classified --------
+D="$TMP/d"; fixture "$D"; rm -f "$D/gates/ledger.json"
+expect_code NOLEDGER "$(fm_gates_classify "$D")" "gates/ without a ledger classifies NOLEDGER"
+
+# --- absence case 3: gates/ but no accepted-red.md ---------------------------
+# No declarations exist, so every red is undeclared by construction.
+E="$TMP/e"; fixture "$E"; rm -f "$E/gates/accepted-red.md"
+outE=$(fm_gates_classify "$E")
+expect_code NOACCEPTED "$(header "$outE")" "a missing accepted-red.md classifies NOACCEPTED"
+case "$(row "$outE" fx-declared-red)" in
+  bad-red\ *) : ;;
+  *) fail "with no accepted-red.md nothing is declared, so every red must be bad-red" ;;
+esac
+assert_contains "$(row "$outE" fx-green)" "ok | green |" \
+  "a missing accepted-red.md must not condemn the gates that are green"
+
+# --- fail closed: an unparseable ledger yields NO rows -----------------------
+F="$TMP/f"; fixture "$F"; printf 'not json at all\n' > "$F/gates/ledger.json"
+outF=$(fm_gates_classify "$F")
+expect_code BADLEDGER "$outF" "an unparseable ledger classifies BADLEDGER and emits no rows"
+
+# A PARTIAL parse must also yield nothing: a half-list looks exactly like a
+# complete answer, and acting on one is a fail-open.
+G="$TMP/g"; fixture "$G"
+python3 - "$G/gates/ledger.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d["gates"].append("not-an-object")   # well-formed entries first, then garbage
+open(p, "w").write(json.dumps(d, indent=2))
+PY
+expect_code BADLEDGER "$(fm_gates_classify "$G")" \
+  "a ledger that parses partway then fails must yield NO rows, never a half-list"
+
+# --- fail closed: an unrecognised status is never ok -------------------------
+H="$TMP/h"; fixture "$H"
+python3 - "$H/gates/ledger.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+for g in d["gates"]:
+    if g["id"] == "fx-green":
+        g["status"] = "unproven"
+open(p, "w").write(json.dumps(d, indent=2))
+PY
+case "$(row "$(fm_gates_classify "$H")" fx-green)" in
+  bad-status\ *) : ;;
+  *) fail "a status the classifier has no rule for must never classify ok" ;;
+esac
+
+# --- purity: never invokes gates/verify.sh or the ledger CLI -----------------
+#
+# `ledger verify` execSyncs every gate's test_ref and then REWRITES
+# gates/ledger.json and gates/LEDGER.md in the directory it is pointed at. A
+# classifier that called it would re-run the whole suite, mutate the worktree it
+# is classifying, and exit 2 wherever the CLI is absent - as it is in CI.
+P="$TMP/p"; fixture "$P"
+TRIP="$TMP/tripwire"
+cat > "$P/gates/verify.sh" <<SH
+#!/usr/bin/env bash
+echo "gates/verify.sh" >> "$TRIP"
+SH
+chmod +x "$P/gates/verify.sh"
+FAKEBIN=$(fm_fakebin "$TMP")
+cat > "$FAKEBIN/ledger" <<SH
+#!/usr/bin/env bash
+echo "ledger \$*" >> "$TRIP"
+SH
+chmod +x "$FAKEBIN/ledger"
+before=$(cat "$P/gates/ledger.json")
+PATH="$FAKEBIN:$PATH" fm_gates_classify "$P" >/dev/null
+assert_absent "$TRIP" \
+  "the classifier must never invoke gates/verify.sh or the ledger CLI - it would
+re-run every gate and rewrite the ledger it is classifying"
+[ "$before" = "$(cat "$P/gates/ledger.json")" ] \
+  || fail "classifying must not modify gates/ledger.json - it is a pure read"
+
+# --- the root is an argument, never assumed ----------------------------------
+# The classifier is called against a crewmate's worktree, not firstmate's own
+# repo, so it must classify whatever root it is handed.
+[ "$(header "$(fm_gates_classify "$A")")" = OK ] || fail "root A must classify OK"
+[ "$(fm_gates_classify "$C")" = NOGATES ] || fail "root C must classify NOGATES"
+
+pass "Q8 gate classifier: double condition, absence cases, pure, fail closed"

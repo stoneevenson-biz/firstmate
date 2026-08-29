@@ -36,7 +36,11 @@ stone-skills, council/runtime skills unlinked in ~/.claude/skills).
   - Thinker → parallel read-only specialist panel (`eng-architecture`, `eng-security`, `eng-researcher`, Explore) — formalized Phase 2
   - Worker → **crewmate** (sole writer, worktree, brief contract) — unchanged
   - Verifier → **`eng-gate-verifier`** fresh-context default-REJECT + foreign lens — Phase 1
-- **Stop condition:** verifier APPROVE over a green ledger. Never the worker's claim.
+- **Stop condition:** verifier APPROVE over an *acceptable* ledger — not a green one.
+  A green ledger is unsatisfiable by construction wherever `gates/accepted-red.md`
+  declares a baseline, and this repo declares two.
+  Acceptable is defined once, in `fm_gates_classify` (`bin/fm-gates-lib.sh`), and
+  never restated. Never the worker's claim.
 
 ## Phase 1 — the Quarterdeck (structural verifier stage)
 
@@ -48,16 +52,21 @@ stone-skills, council/runtime skills unlinked in ~/.claude/skills).
 2. Watcher wakes firstmate (unchanged). Firstmate's first act on a `done:` for a
    **ship** task is now `bin/fm-verify.sh <id>` — never direct acceptance.
 3. `fm-verify.sh`:
-   a. Runs the **foreign lens** on the crewmate's diff: Fugu (`fugu` model,
+   a. **Adjudicates the gate ledger structurally, ahead of both models**
+      (see *Gate adjudication* below). An unacceptable ledger rejects or
+      escalates without spending the lens or the verifier.
+   b. Runs the **foreign lens** on the crewmate's diff: Fugu (`fugu` model,
       OpenAI-compatible `https://api.sakana.ai/v1`, key `FUGU_API_KEY`) with
       fallback to `codex exec` (subscription-authed CLI), producing
       `data/<id>/lens-review.md`. If neither is available: log
       `lens: none (degraded)` and continue. Every hop is logged; no silent skip.
-   b. Spawns **`eng-gate-verifier`** in a fresh context against the crewmate's
+   c. Spawns **`eng-gate-verifier`** in a fresh context against the crewmate's
       worktree, with `data/<id>/brief.md` + the lens review as evidence.
-      Verifier re-runs `gates/verify.sh` (when the repo has gates), re-executes
-      the DoD claims itself, and never trusts the crewmate's report.
-      Default stance: REJECT.
+      Verifier re-executes the DoD claims itself and never trusts the
+      crewmate's report. Default stance: REJECT.
+      It does **not** adjudicate the gate ledger and its prompt carries no gate
+      rule: that decision was already made in (a), and two authorities over one
+      decision is what produced the defect below.
 4. Verdict is appended to **`state/<id>.verdict`** — same append-only grammar
    as `.status`, one line per event:
    - `approve: <one line>`
@@ -70,6 +79,58 @@ stone-skills, council/runtime skills unlinked in ~/.claude/skills).
 6. **On reject:** findings relayed to the crewmate via `fm-send.sh`; status
    returns to `working:`. **Attempt cap = 3** total verify attempts, then
    `escalate:` to the captain (loop-engineering: hard cap → human gate).
+
+### Gate adjudication (amendment)
+
+`bin/fm-verify.sh` did not know `gates/accepted-red.md` existed. Its verifier
+prompt said *"If a gates/ dir exists here, run: bash gates/verify.sh — every
+gate must be green; red or unproven gates are an automatic reject."*
+That is unsatisfiable in any repo holding a declared red, and this one holds
+two (`gate-l2-loop-audit-level`, `m1-hook-registered`).
+Acceptance therefore depended on whether the LLM verifier happened to reason
+about the baseline on that particular run — correct work was rejected
+non-deterministically, after the build, the pipeline, and CI.
+CI honoured the baseline; the verifier contradicted it, and the verifier was
+the one that was wrong.
+
+**One owner.** `fm_gates_classify` in `bin/fm-gates-lib.sh` is the rule's only
+implementation. `tests/run-all.sh` and `bin/fm-verify.sh` are its two callers;
+`bin/fm-brief.sh`'s `GATE_CHECK` clause and this spec cite it rather than
+restate it. Its prose reasoning lives in `gates/accepted-red.md`.
+
+**Classification is not policy.** The classifier is pure: it reads exactly
+`gates/ledger.json` and `gates/accepted-red.md`, takes the root as an argument,
+and answers one question per gate — acceptable or not, and why. It never
+invokes `gates/verify.sh` or the `ledger` CLI, because `ledger verify` re-runs
+every gate, **rewrites the ledger inside the worktree it is pointed at**,
+demotes `frozen` gates to `green`, and is absent in CI. What to *do* with the
+answer belongs to each caller: `run-all.sh` skips a test, `fm-verify.sh`
+rejects or escalates.
+
+**Acceptable** is `green`, `frozen`, or (`red` **and** declared in
+`gates/accepted-red.md` with a stated reason).
+`frozen` is proven *and* mutation-verified *and* locked — `ledger verify`
+demotes it to `green`, so it is strictly stronger than green, and `ledger
+verify`'s own definition of done (an empty WIP drain list) excludes it.
+Anything else is unrecognised and fails closed.
+
+**Which way each condition fails**, on the `fm-verify.sh` path:
+
+| condition | outcome | why |
+| --- | --- | --- |
+| no `gates/` dir | proceed | Most projects firstmate ships to have no ledger at all; escalating on a missing file would stop every one of them. Never an escalation. |
+| red, declared with a reason | proceed | The baseline is the point. |
+| red, undeclared | **reject** | Crewmate-actionable: go green, or get the red declared. |
+| `gates/` but no `accepted-red.md` | **reject** any red | No declarations exist, so every red is undeclared by construction. A fully green ledger with no `accepted-red.md` still passes. |
+| a gate's `test_ref` names a file not on disk | **reject** | A ledger claiming green for a gate whose test is gone is stale by construction. |
+| `gates/` but no `ledger.json` | **escalate** | The repo declares itself gate-governed and the record of what is proven is absent. Infrastructure, not work. |
+| ledger unreadable or wrong shape | **escalate** | A parse failure is not a finding a crewmate can fix by editing code. |
+| unrecognised status | **escalate** | Never a pass; a ledger this repo cannot interpret needs a human. |
+
+**Freshness is a cross-check, not a re-run.** The `test_ref` existence check
+proves only that the ledger is not referencing tests that no longer exist. It
+does **not** prove any test passes — that is CI's job, and re-running the suite
+inside `fm-verify` would duplicate it at the most expensive possible moment.
 
 ### Contract updates
 
@@ -111,6 +172,13 @@ bash tests in `tests/` matching the existing suite style:
    logged, verify still runs (no silent skip, no crash).
 7. `gate-q7-fail-closed` — verifier spawn failure yields `escalate:`, never
    `approve:`.
+8. `gate-q8-gate-classifier` — the classifier's double condition, `frozen`,
+   all three absence cases, purity (never invokes `gates/verify.sh` or
+   `ledger`), and fail-closed on a partial parse or an unknown status.
+9. `gate-q9-verify-honours-declared-red` — a declared red proceeds; an
+   undeclared red rejects **before either model runs**; no `gates/` dir never
+   escalates; a missing ledger escalates; a stale `test_ref` rejects; the
+   verifier prompt carries no gate rule of its own.
 
 ## Phases 2–5 (outline)
 

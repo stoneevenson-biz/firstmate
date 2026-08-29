@@ -1,0 +1,210 @@
+#!/usr/bin/env bash
+# fm-gates-lib.sh - the one place that answers "is this gate's state acceptable?"
+#
+# THE RULE HAS ONE OWNER. It used to have three: tests/run-all.sh implemented
+# it, bin/fm-verify.sh's verifier prompt contradicted it ("every gate must be
+# green; red or unproven gates are an automatic reject"), and fm-brief.sh's
+# GATE_CHECK clause restated it a third way. The ledger legitimately holds
+# declared reds, so "every gate must be green" is unsatisfiable by construction:
+# whether a task was accepted depended on whether the LLM verifier happened to
+# reason its way to gates/accepted-red.md on that particular run. Correct work
+# was rejected at random, at the most expensive possible moment - after the
+# build, the pipeline, and CI. This file is that rule's only implementation;
+# every other statement of it is now a citation.
+#
+# CLASSIFICATION IS NOT POLICY. This library only classifies, per gate:
+# acceptable or not, and why. What to DO about it belongs to the caller -
+# tests/run-all.sh skips a test, bin/fm-verify.sh rejects or escalates. Folding
+# either caller's needs in here is how one caller's policy quietly bends the
+# other's rule.
+#
+# IT IS PURE. It reads exactly two files - <root>/gates/ledger.json and
+# <root>/gates/accepted-red.md - and nothing else. It must NEVER invoke
+# gates/verify.sh or the `ledger` CLI: `ledger verify` re-runs every gate's
+# test, REWRITES gates/ledger.json and gates/LEDGER.md in the worktree it is
+# pointed at, exits 2 when the CLI is absent (as it is in CI), and demotes
+# frozen gates to green as a side effect. A classifier that mutates the thing it
+# is classifying is not a classifier. The root is always an ARGUMENT; nothing
+# here assumes the caller's own repo.
+#
+# THE DOUBLE CONDITION. A red gate's test is excused only when BOTH hold:
+#
+#   1. the gate's status is "red" in gates/ledger.json, AND
+#   2. the gate's id is listed in gates/accepted-red.md, with a stated reason
+#
+# Excusing on (1) alone would mask a real regression the moment a working gate
+# went red. Excusing on (2) alone would let a stale declaration silence a test
+# that had since been fixed. Requiring both means every excused red is someone's
+# reviewed, written-down decision about a gate that is actually red today.
+# gates/accepted-red.md is the canonical prose statement of why; this is its
+# canonical implementation.
+#
+# FAIL CLOSED. An unreadable ledger, an unparseable accepted-red.md, or a status
+# this file does not recognise is never quietly acceptable. It is reported as
+# such and each caller decides which way to fail - but never toward "fine".
+#
+# Usage:
+#   . bin/fm-gates-lib.sh            # library
+#   fm_gates_classify <root>
+#   bash bin/fm-gates-lib.sh <root>  # CLI: same output; exit 0 acceptable,
+#                                    # 1 unacceptable, 2 cannot tell
+#
+# Output of fm_gates_classify: a HEADER line, then (for OK/NOACCEPTED) one
+# tab-separated row per gate:
+#
+#   <verdict>\t<gate-id>\t<status>\t<test-path>\t<detail>
+#
+#   verdict     ok | bad-red | bad-status
+#   test-path   the ".test.sh" token from test_ref, or empty. Reported as the
+#               ledger records it and NOT stat()ed - checking it is I/O, and
+#               belongs to the caller that wants a freshness cross-check.
+#   detail      the declared reason for an excused red; why, for a bad verdict.
+#
+# Headers:
+#   NOGATES     <root>/gates is not a directory. Not applicable; no rows.
+#   NOLEDGER    gates/ exists but gates/ledger.json does not. No rows.
+#   BADLEDGER   the ledger is unreadable, unparseable, or the wrong shape.
+#               No rows - never a partial answer (see ALL OR NOTHING below).
+#   NOACCEPTED  the ledger parsed but gates/accepted-red.md is absent, so NO
+#               declarations exist. Rows follow, and every red among them is
+#               undeclared by construction.
+#   OK          both files read. Rows follow.
+#
+# ALL OR NOTHING. The rows are built whole inside python and written in a single
+# call, and the shell emits them only if python exited cleanly. A half-list that
+# stopped at a malformed entry looks exactly like a complete answer, and acting
+# on one is a fail-open in the one place this file promises to fail closed.
+
+# --- acceptable-on-their-own statuses ---------------------------------------
+#
+# "green" is proven. "frozen" is proven AND mutation-verified AND locked: it is
+# strictly stronger than green, not weaker. CONTRIBUTING.md ("The gate ledger")
+# records that `ledger verify` DEMOTES frozen gates to green, so frozen is a
+# passing state that green is the fallback from, and `ledger verify`'s own
+# definition of done - an empty WIP drain list - excludes frozen gates from the
+# drain. gates/LEDGER.md's drain list holds only the reds.
+#
+# Treating frozen as unacceptable would reject every ship task in this very
+# repository: 7 of its 27 gates are frozen today. Anything NOT in this tuple is
+# unrecognised and fails closed; the set is deliberately short and explicit so
+# adding to it is a visible decision rather than a drift.
+FM_GATES_CLEAN_STATUSES='green frozen'
+
+# fm_gates_classify <root>
+# Prints the header and rows described above. Returns 0 unless <root> is
+# missing (usage error, 1) - the classification itself is carried in the output,
+# never in the exit code, because "no gates here" and "every gate is red" are
+# both successful classifications with very different policies attached.
+fm_gates_classify() {
+  local root=${1:-}
+  if [ -z "$root" ]; then
+    echo "usage: fm_gates_classify <root>" >&2
+    return 1
+  fi
+
+  local ledger="$root/gates/ledger.json"
+  local accepted="$root/gates/accepted-red.md"
+
+  [ -d "$root/gates" ] || { echo NOGATES; return 0; }
+  [ -f "$ledger" ]     || { echo NOLEDGER; return 0; }
+
+  # An absent accepted-red.md is not an error: it means no gate has been
+  # declared, so the declared set is empty and every red is undeclared. The
+  # header still says so, because a caller may want to distinguish "nothing was
+  # declared" from "nothing needed declaring".
+  local header=OK
+  if [ ! -f "$accepted" ]; then
+    header=NOACCEPTED
+    accepted=""
+  fi
+
+  local out
+  if out=$(FM_GATES_CLEAN="$FM_GATES_CLEAN_STATUSES" \
+      python3 - "$ledger" "$accepted" <<'PY' 2>/dev/null
+import json, os, re, sys
+
+ledger_path, accepted_path = sys.argv[1], sys.argv[2]
+clean = tuple(os.environ.get("FM_GATES_CLEAN", "").split())
+
+# Declared ids: "- <gate-id> - <reason>". The reason is required by
+# accepted-red.md's own format, and an entry without one is ignored rather than
+# trusted: "an entry with no route back to green is a bug report, not a
+# baseline". An empty path means the file is absent, so nothing is declared.
+declared = {}
+if accepted_path:
+    for line in open(accepted_path):
+        m = re.match(r"^\s*-\s+(\S+)\s+-\s+(.+?)\s*$", line)
+        if m:
+            declared[m.group(1)] = m.group(2)
+
+ledger = json.load(open(ledger_path))
+gates = ledger["gates"]
+if isinstance(gates, dict):
+    gates = list(gates.values())
+if not isinstance(gates, list) or not all(isinstance(g, dict) for g in gates):
+    raise SystemExit("ledger gates are not a list of objects")
+
+# A tab or newline inside a declared reason would silently shift every field
+# after it and turn a fail-closed row into a misread one, so the detail column
+# is flattened to spaces. The unabridged reason is always in accepted-red.md.
+def flat(s):
+    return re.sub(r"[\t\r\n]+", " ", str(s)).strip()
+
+# Built whole, then printed. A raise partway through must yield NO rows at all,
+# never a half-list that would look like a complete answer.
+rows = []
+for g in gates:
+    gid = str(g.get("id"))
+    status = str(g.get("status"))
+
+    # test_ref is a shell command ("bash tests/x.test.sh"); take the path token.
+    test_path = ""
+    for tok in str(g.get("test_ref") or "").split():
+        if tok.endswith(".test.sh"):
+            test_path = tok
+            break
+
+    if status in clean:
+        verdict, detail = "ok", ""
+    elif status == "red":
+        if gid in declared:
+            verdict, detail = "ok", flat(declared[gid])
+        else:
+            verdict, detail = "bad-red", "red and not declared in gates/accepted-red.md"
+    else:
+        verdict, detail = "bad-status", 'unrecognised status "%s"' % status
+
+    rows.append("\t".join((verdict, gid, status, test_path, detail)))
+
+sys.stdout.write("".join(r + "\n" for r in rows))
+PY
+  ); then
+    printf '%s\n' "$header"
+    # An `[ -n ] && printf` one-liner here would make the whole statement return
+    # 1 whenever there are zero rows, which is a live hazard under a caller
+    # running set -e (bin/fm-verify.sh does).
+    if [ -n "$out" ]; then printf '%s\n' "$out"; fi
+    return 0
+  fi
+  echo BADLEDGER
+  return 0
+}
+
+# --- CLI --------------------------------------------------------------------
+#
+# Exists so a crewmate or a human can ask the same question the machinery asks,
+# and get the same answer, without reimplementing it: `bash
+# bin/fm-gates-lib.sh <repo-root>`. Exit 0 acceptable, 1 unacceptable, 2 cannot
+# tell (no ledger, or an unreadable one).
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  fm_gates_raw=$(fm_gates_classify "${1:-.}") || exit 1
+  printf '%s\n' "$fm_gates_raw"
+  case "$(printf '%s\n' "$fm_gates_raw" | head -1)" in
+    NOGATES) exit 0 ;;
+    NOLEDGER|BADLEDGER) exit 2 ;;
+  esac
+  if printf '%s\n' "$fm_gates_raw" | tail -n +2 | grep -q '^bad-'; then
+    exit 1
+  fi
+  exit 0
+fi
