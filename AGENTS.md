@@ -93,6 +93,9 @@ state/               volatile runtime signals; gitignored
 ```
 
 Task ids are short kebab slugs with a random suffix, e.g. `fix-login-k3`.
+The suffix has a SHAPE, and it is load-bearing rather than decorative: one lowercase letter followed by one digit, `-k3` / `-z1` / `-h2`.
+`bin/fm-spawn.sh` derives a pane's work half by dropping exactly that shape, so an id minted outside it (`-ab`, `-3k`, `-k39`) keeps its suffix in the name the captain reads.
+Mint ids to the shape; for a task whose name genuinely needs something else, pass `--name <work>` to `bin/fm-spawn.sh` and choose the pane name outright.
 A task's pane is a herdr tab named `<project>-<work>` in that project's workspace (section 8); firstmate addresses it as `fm-<id>`, which `state/<id>.meta` resolves. Panes predating the herdr cutover are tmux windows named `fm-<id>` and are still being drained.
 
 ## 3. Bootstrap (run at every session start)

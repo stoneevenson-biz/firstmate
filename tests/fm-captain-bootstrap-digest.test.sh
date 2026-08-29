@@ -212,4 +212,33 @@ ls "$S2"/.watch-arm-output.* >/dev/null 2>&1 && fail "E3: --status must not fork
 
 pass "E: fm-watch-arm.sh --status honors pinned grammar in all three states, side-effect-free"
 
+# --- Case F: the fleet inventory obeys the session pin -----------------------
+# Every herdr verb takes its session from $HERDR_SESSION alone, and bin/fm-herdr.sh
+# owns turning the firstmate-side FM_HERDR_SESSION pin into that export. The
+# digest is not launched by fm-spawn, so before it sourced the library it queried
+# `default` and reported an empty fleet while crew were live in the pinned
+# session. The fake records the session it was called in, which is the only way
+# to catch a probe and its verbs aiming at different places.
+FMF="$TMP/homeF"
+mkdir -p "$FMF/data" "$FMF/state" "$TMP/fakebin"
+printf -- '- demo [no-mistakes] - a demo project\n' > "$FMF/data/projects.md"
+CALLS_F="$TMP/herdr-calls"
+: > "$CALLS_F"
+cat > "$TMP/fakebin/herdr" <<'EOF'
+#!/usr/bin/env bash
+printf 'session=%s argv=%s\n' "${HERDR_SESSION:-UNSET}" "$*" >> "$CALLS"
+case "$1 $2" in
+  "agent list") printf '%s\n' '{"result":{"agents":[{"tab_id":"t1","pane_id":"wM:p9"}]}}' ;;
+  "tab list")   printf '%s\n' '{"result":{"tabs":[{"tab_id":"t1","label":"demo-fix-login"}]}}' ;;
+esac
+EOF
+chmod +x "$TMP/fakebin/herdr"
+outF=$(CALLS="$CALLS_F" PATH="$TMP/fakebin:$PATH" FM_HERDR_SESSION=fleet \
+  FIRSTMATE_ROLE=captain run_boot "$FMF" | ctx_of) || fail "case F: bootstrap must exit 0"
+grep -q '^session=fleet argv=agent list$' "$CALLS_F" \
+  || fail "case F: the digest queried the wrong session (got: $(head -1 "$CALLS_F"))"
+printf '%s' "$outF" | grep -q 'herdr: demo-fix-login' \
+  || fail "case F: a pinned fleet must be inventoried, not reported empty"
+pass "F: the fleet inventory resolves FM_HERDR_SESSION like the herdr verbs do"
+
 pass "g-boot-digest: boot-time reconciliation digest behaves as pinned"

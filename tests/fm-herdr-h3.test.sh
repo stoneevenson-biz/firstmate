@@ -157,6 +157,30 @@ test_a_derived_name_keeps_a_real_trailing_word() {
   pass "naming: the derived name drops a <letter><digit> suffix and keeps real words"
 }
 
+# The suffix is a CONTRACT stated where ids are minted (AGENTS.md section 2), so
+# an id outside it keeps its suffix rather than being guessed at - guessing is
+# what ate real words. And the one case that genuinely loses information, a work
+# half too long for the name budget, SAYS so instead of silently handing the
+# captain a truncated name.
+test_an_off_contract_id_keeps_its_suffix_and_truncation_speaks_up() {
+  reset
+  local home out
+  home="$TMP_ROOT/home-off-contract"; mkdir -p "$home/data"
+  run_spawn "$home" fix-login-ab >/dev/null
+  assert_grep "--label archify-fix-login-ab" "$CALLS" \
+    "an id outside the documented suffix shape must keep its suffix, not be guessed at"
+
+  reset
+  home="$TMP_ROOT/home-truncated"; mkdir -p "$home/data"
+  out=$(run_spawn "$home" long-x1 \
+    --name "a work name far too long for one pane label")
+  case "$out" in
+    *"does not fit a pane name"*"pass --name"*) ;;
+    *) fail "a truncated pane name degraded silently (got: $out)" ;;
+  esac
+  pass "naming: an off-contract id keeps its suffix, and truncation reports itself"
+}
+
 # --- the session pin reaches the AGENT ---------------------------------------
 
 # A pane's shell is forked by the herdr server at `tab create`, not by fm-spawn,
@@ -267,6 +291,7 @@ test_tab_is_named_for_the_work
 test_the_name_is_one_herdr_accepts
 test_name_defaults_from_the_task_id_without_its_suffix
 test_a_derived_name_keeps_a_real_trailing_word
+test_an_off_contract_id_keeps_its_suffix_and_truncation_speaks_up
 test_the_session_pin_reaches_the_launched_agent
 test_meta_records_the_target_and_its_driver
 test_the_task_id_lives_in_the_meta_not_the_name

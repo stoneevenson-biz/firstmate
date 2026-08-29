@@ -29,6 +29,17 @@ FM="${FM_HOME:-$HOME/firstmate}"
 # Helper scripts (fm-watch-arm.sh --status, fm-lock.sh status) resolve through
 # this script's own bin dir; FM_BOOTSTRAP_BIN overrides it (the test stub seam).
 FM_BIN="${FM_BOOTSTRAP_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+# The digest inventories the fleet by shelling out to herdr, and every herdr verb
+# takes its session from $HERDR_SESSION alone. bin/fm-herdr.sh owns turning the
+# firstmate-side pin FM_HERDR_SESSION into that export, and it only lands in a
+# shell that SOURCED the library - which this hook is not, being launched by the
+# harness rather than by fm-spawn. Without it a pinned fleet reads as empty:
+# the digest queries `default` and reports "nothing in flight" while crew are
+# live in the pinned session. Sourced from this script's OWN bin dir, never from
+# FM_BOOTSTRAP_BIN, which is the test stub seam and holds no library.
+FM_HERDR_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-herdr.sh"
+# shellcheck source=/dev/null
+[ -r "$FM_HERDR_LIB" ] && . "$FM_HERDR_LIB"
 # Capture the SessionStart hook payload from stdin into an env var: the python
 # program itself arrives on python's stdin via the heredoc, so the program reads
 # the hook JSON from the environment, not sys.stdin.

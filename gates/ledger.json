@@ -352,7 +352,7 @@
     "g-boot-digest": {
       "id": "g-boot-digest",
       "title": "Boot-time reconciliation digest in captain context; fm-watch-arm --status read-only",
-      "observable": "SessionStart captain block carries the reconciliation digest (lock-free wake-queue depth+records with torn-tail rule, verbatim fm-watch-arm --status and fm-lock status relays, in-flight metas with last status, afk flag, exact snapshot disclaimer, ~2000-char cap with explicit +N-more marker); non-captain unchanged; --status is one-line/exit-0 and side-effect-free",
+      "observable": "SessionStart captain block carries the reconciliation digest (lock-free wake-queue depth+records with torn-tail rule, verbatim fm-watch-arm --status and fm-lock status relays, in-flight metas with last status, afk flag, exact snapshot disclaimer, ~2000-char cap with explicit +N-more marker); non-captain unchanged; --status is one-line/exit-0 and side-effect-free; the fleet inventory resolves FM_HERDR_SESSION the way the herdr verbs do, so a pinned fleet is listed rather than reported empty",
       "origin_mode": "build",
       "spec_ref": "docs/specs/2026-07-08-boot-recon-digest.md",
       "blocked_by": [],
@@ -386,7 +386,7 @@
     "gate-h3-spawn-named-herdr-tab": {
       "id": "gate-h3-spawn-named-herdr-tab",
       "title": "fm-spawn lands a crewmate as a named herdr tab in the project workspace; an unreachable herdr stops it",
-      "observable": "fm-spawn creates a herdr tab scoped to the project's workspace, labels and addresses it <project>-<work> (a name herdr accepts), keeps the task id out of the name, and records window=/mux=/name= in the meta; with herdr unreachable the spawn fails non-zero and creates no window, tab or meta",
+      "observable": "fm-spawn creates a herdr tab scoped to the project's workspace, labels and addresses it <project>-<work> (a name herdr accepts), keeps the task id out of the name, and records window=/mux=/name= in the meta; with herdr unreachable the spawn fails non-zero and creates no window, tab or meta; the derived work half drops only a documented <letter><digit> task-id suffix, an off-contract id keeps its suffix, and a name too long for the budget reports its truncation instead of shortening silently",
       "origin_mode": "build",
       "spec_ref": "docs/plans/cmux-herdr-surface-split.md",
       "blocked_by": [],
