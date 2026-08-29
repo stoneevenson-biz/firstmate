@@ -693,8 +693,15 @@ fm_herdr_drain_pending() {  # <state-dir>
 # pins one. The export has to land in the CALLER's environment - a pin that
 # moved this file's probe but not the herdr verbs is exactly the divergence that
 # reported a fleet reachable while every verb aimed at a session that was not
-# up. So sourcing does mutate the environment, and HERDR_SESSION is inherited by
-# every child of the sourcing script, including a launched crewmate.
+# up. So sourcing does mutate the environment: HERDR_SESSION is inherited by
+# processes this script itself forks - the herdr verbs it runs.
+#
+# IT DOES NOT REACH AN AGENT IN A PANE. A crewmate's shell is forked by the
+# HERDR SERVER at `tab create`, not by fm-spawn, so no amount of exporting here
+# lands in it; that is the same reason fm-spawn has to prepend FM_HOME and the
+# operational overrides to the launch string rather than rely on inheritance.
+# HERDR_SESSION rides in that same prefix (bin/fm-spawn.sh), which is the one
+# way a pinned session reaches an agent that runs these scripts itself.
 
 fm_herdr_cli() {
   set -euo pipefail

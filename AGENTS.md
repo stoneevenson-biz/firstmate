@@ -610,6 +610,15 @@ scripts still address a crewmate as `fm-<id>`, which `state/<id>.meta` resolves.
 The workspace is resolved explicitly from the project name and created if absent - never
 left to whichever workspace happens to be focused; `FM_HERDR_WORKSPACE` overrides it.
 
+The herdr *session* is resolved the same way, and `FM_HERDR_SESSION` pins it. Every herdr
+verb takes its session from `HERDR_SESSION` and defaults to `default`, so the pin exports
+rather than merely filtering: a pin that moved the reachability probe but not the verbs is
+what once reported a fleet reachable while every verb aimed at a session that was not up.
+A pane's shell is forked by the herdr server, not by firstmate, so the pin cannot be
+inherited - `bin/fm-spawn.sh` prepends `HERDR_SESSION` to the launch string alongside the
+`FM_*` pins, which is what lets a secondmate (a full firstmate in its own home) probe the
+session its own pane lives in instead of `default`.
+
 **Pane naming: `<project-short>-<what-the-work-is>`, kebab-case, under 28 characters.**
 `afs-resource-registry`, `mac-config-cutover-guard`, `firstmate-fleet-view`,
 `archify-leak-fixes`. One hyphen joins the halves; **never a slash**. That is not a style

@@ -392,8 +392,16 @@ PROJ_LABEL=$(basename "$PROJ_ABS")
 # at a glance. Absent an explicit --name, the work half is derived from the id
 # by dropping its random suffix (`fix-login-k3` -> `fix-login`). The id itself
 # stays in state/<id>.meta, which is where an id belongs.
+#
+# The pattern is anchored on the SHAPE of a task-id suffix - one letter then one
+# digit - not on its length. A length rule (`-[a-z0-9]{1,3}$`) also eats real
+# trailing words: `add-api` became `add` and `fix-ui` became `fix`, dropping the
+# most specific word from the name the captain reads, which is the opposite of
+# what naming a pane for the work is for. It also collided names that share no
+# stem (`fix-api` and `fix-css` both reduced to `fix`), so the second spawn
+# hard-failed at the duplicate-label check below.
 if [ -z "$WORK_NAME" ]; then
-  WORK_NAME=$(printf '%s' "$ID" | sed -E 's/-[a-z0-9]{1,3}$//')
+  WORK_NAME=$(printf '%s' "$ID" | sed -E 's/-[a-z][0-9]$//')
 fi
 PANE_NAME=$(fm_herdr_pane_name "$PROJ_LABEL" "$WORK_NAME")
 [ -n "$PANE_NAME" ] || PANE_NAME=$(fm_herdr_pane_name "$PROJ_LABEL" "$ID")
@@ -554,9 +562,18 @@ sq_piext=$(shell_quote "$STATE/$ID.pi-ext.ts")
 LAUNCH=${LAUNCH//__BRIEF__/$sq_brief}
 LAUNCH=${LAUNCH//__TURNEND__/$sq_turnend}
 LAUNCH=${LAUNCH//__PIEXT__/$sq_piext}
+# The pane's shell is forked by the HERDR SERVER at `tab create`, not by this
+# script, so nothing in this process's environment reaches the agent. Every pin
+# the agent needs has to be prepended to the launch string itself — which is why
+# HERDR_SESSION rides here alongside the FM_* pins. Without it, an agent in a
+# pane resolves `${HERDR_SESSION:-default}` and probes a session that may not be
+# the one its own pane lives in: a secondmate is a full firstmate, so it would
+# print NEEDS_HERDR_SERVER while the captain's pinned session is plainly up, and
+# `fm_herdr_require` would then stop every spawn it tried.
+sq_session=$(shell_quote "$(fm_herdr_session)")
 if [ "$KIND" = secondmate ]; then
   sq_home=$(shell_quote "$PROJ_ABS")
-  LAUNCH="FM_ROOT_OVERRIDE= FM_STATE_OVERRIDE= FM_DATA_OVERRIDE= FM_PROJECTS_OVERRIDE= FM_CONFIG_OVERRIDE= FM_HOME=$sq_home $LAUNCH"
+  LAUNCH="FM_ROOT_OVERRIDE= FM_STATE_OVERRIDE= FM_DATA_OVERRIDE= FM_PROJECTS_OVERRIDE= FM_CONFIG_OVERRIDE= FM_HOME=$sq_home HERDR_SESSION=$sq_session $LAUNCH"
 else
   # Crew/scout: pin the launched session's FM_HOME to the SPAWNING home so its context
   # sentinels (ctx-<key>.json, written by the global statusLine/stop-hook) land in THIS
@@ -567,7 +584,7 @@ else
   # is its worktree, never the home, so it stays role=crew. Operational overrides are
   # cleared (as for secondmates) so the session resolves state purely from FM_HOME.
   sq_home=$(shell_quote "$FM_HOME")
-  LAUNCH="FM_ROOT_OVERRIDE= FM_STATE_OVERRIDE= FM_DATA_OVERRIDE= FM_PROJECTS_OVERRIDE= FM_CONFIG_OVERRIDE= FM_HOME=$sq_home $LAUNCH"
+  LAUNCH="FM_ROOT_OVERRIDE= FM_STATE_OVERRIDE= FM_DATA_OVERRIDE= FM_PROJECTS_OVERRIDE= FM_CONFIG_OVERRIDE= FM_HOME=$sq_home HERDR_SESSION=$sq_session $LAUNCH"
 fi
 # Never type a launch command into a shell that has not proven it is ready.
 # Inferring readiness from a cwd change is what left two secondmates as dead

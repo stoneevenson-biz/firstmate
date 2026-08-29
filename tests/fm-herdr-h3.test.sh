@@ -57,6 +57,8 @@ run_spawn() {  # <home> <id> [extra args...]
     FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
     FM_SPAWN_NO_GUARD=1 FM_LAUNCH_VERIFY_SLEEP=0 \
     HERDR_SERVER="${HERDR_SERVER:-running}" HERDR_NO_TAB="${HERDR_NO_TAB:-0}" \
+    FM_HERDR_SESSION="${FM_HERDR_SESSION:-}" \
+    HERDR_SESSION_NAME="${HERDR_SESSION_NAME:-default}" \
     HERDR_WORKSPACES="wJ=config,wM=archify" \
     HERDR_PANE_CWD="$WT" \
     HERDR_TABS="$TMP_ROOT/tabs" \
@@ -132,6 +134,47 @@ test_name_defaults_from_the_task_id_without_its_suffix() {
   assert_grep "--label archify-boot-activation" "$CALLS" \
     "the derived name kept the random task suffix"
   pass "naming: an absent --name derives archify-boot-activation from boot-activation-k3"
+}
+
+# The other direction, and the one a length rule gets wrong. Stripping any short
+# trailing segment ate REAL words - `add-api` became `add`, `fix-ui` became
+# `fix` - dropping the most specific word from the name the captain reads, and
+# collapsing ids that share no stem onto one label so the second spawn hard-
+# failed at the duplicate check. The suffix is a SHAPE (letter then digit), not
+# a length.
+test_a_derived_name_keeps_a_real_trailing_word() {
+  reset
+  local home
+  home="$TMP_ROOT/home-derive-word"; mkdir -p "$home/data"
+  run_spawn "$home" add-api >/dev/null
+  assert_grep "--label archify-add-api" "$CALLS" \
+    "the derived name ate a real trailing word - the work is 'add-api', not 'add'"
+  reset
+  home="$TMP_ROOT/home-derive-word2"; mkdir -p "$home/data"
+  run_spawn "$home" update-dns-k3 >/dev/null
+  assert_grep "--label archify-update-dns" "$CALLS" \
+    "the derived name did not drop a real task-id suffix"
+  pass "naming: the derived name drops a <letter><digit> suffix and keeps real words"
+}
+
+# --- the session pin reaches the AGENT ---------------------------------------
+
+# A pane's shell is forked by the herdr server at `tab create`, not by fm-spawn,
+# so nothing this process exports reaches the agent - which is why FM_HOME has
+# to be prepended to the launch string. HERDR_SESSION is in exactly the same
+# position: without it in the prefix, an agent that runs these scripts itself
+# resolves `default`. A secondmate is a full firstmate, so on a fleet pinned to
+# a named session it would print NEEDS_HERDR_SERVER while that session is
+# plainly up, and then refuse every spawn it tried.
+test_the_session_pin_reaches_the_launched_agent() {
+  reset
+  local home
+  home="$TMP_ROOT/home-session"; mkdir -p "$home/data"
+  FM_HERDR_SESSION=fleet HERDR_SESSION_NAME=fleet \
+    run_spawn "$home" session-pin-p2 --name "session pin" >/dev/null
+  assert_grep "HERDR_SESSION='fleet'" "$CALLS" \
+    "the launch command does not pin the agent's herdr session; it would probe 'default'"
+  pass "session: the pinned session rides the launch prefix into the agent's pane"
 }
 
 # --- the meta keeps the task id, and the routing -----------------------------
@@ -223,6 +266,8 @@ test_tab_is_scoped_to_the_project_workspace
 test_tab_is_named_for_the_work
 test_the_name_is_one_herdr_accepts
 test_name_defaults_from_the_task_id_without_its_suffix
+test_a_derived_name_keeps_a_real_trailing_word
+test_the_session_pin_reaches_the_launched_agent
 test_meta_records_the_target_and_its_driver
 test_the_task_id_lives_in_the_meta_not_the_name
 test_a_refused_pane_name_is_reported
