@@ -138,7 +138,9 @@ Classify each wake this way:
   `FM_STALE_ESCALATE_SECS` (default 240s), housekeeping escalates it as a
   possible wedge. This bounds wedge-detection latency to the threshold plus a
   tick: a delay, never a loss. Healthy crewmates are autonomous and do not wait
-  on firstmate mid-task.
+  on firstmate mid-task. Since the herdr cutover the watcher emits no stale wake
+  for a herdr pane, so this path covers only panes still draining on tmux; the
+  gap and what covers it instead are in AGENTS.md, "herdr workspace hygiene".
 - `heartbeat` -> self-handle. The daemon runs its own cheap bash fleet scan
   every `FM_HEARTBEAT_SCAN_SECS` (default 300s) as the catch-all for a
   captain-relevant status line the per-wake classifier might miss.

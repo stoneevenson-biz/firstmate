@@ -45,6 +45,8 @@ See the [no-mistakes quick start](https://kunchenguid.github.io/no-mistakes/star
 - Every suite in `tests/` must source `tests/lib.sh` (directly, or through a helper that does).
   That is what puts the refusing `herdr` and `tmux` first on PATH, so a suite that forgot to fake one fails loudly instead of silently creating tabs in, or killing windows out of, the captain's live fleet.
   A suite whose subject genuinely IS a real server it creates and destroys itself declares a `# HERMETICITY-WAIVER: <reason>` line instead; `tests/fm-test-hermeticity.test.sh` enforces one or the other, so the exemptions stay a short, readable list.
+  A suite that must drive a real binary opts out of one refuser without the other, by setting `FM_TEST_ALLOW_LIVE_HERDR=1` and/or `FM_TEST_ALLOW_LIVE_TMUX=1` before sourcing `tests/lib.sh`.
+  The tmux opt-in is still guarded: destructive verbs are allowed only against the throwaway session the suite exports in `FM_TEST_LIVE_TMUX_SESSION`, so a suite that names none has its kills refused rather than aimed at whatever session is current.
 - Changes to harness adapters (launch templates in `bin/fm-spawn.sh`, facts in `.agents/skills/harness-adapters/SKILL.md`) must be verified empirically against the real harness, never written from documentation alone.
 - In Markdown, put each full sentence on its own line.
 
@@ -121,6 +123,9 @@ tests/fm-boot-m4.test.sh                  # boot budget under wedged helpers: wa
 tests/fm-boot-m5.test.sh                  # boot context never fails silently: a raising section leaves an explicit UNAVAILABLE marker
 tests/fm-ci-declared-red.test.sh          # tests/run-all.sh skips a test only when its gate is both red and declared, announces every skip, and fails closed
 tests/fm-status-verb.test.sh              # bin/fm-status.sh appends one line to the right home, and briefs teach the verb instead of a redirect
+tests/fm-herdr-lib.test.sh                # bin/fm-herdr.sh library verbs: reachability and its escalation, workspace resolution, pane naming, meta-routed target resolution, and drain accounting
+tests/fm-herdr-cli.test.sh                # bin/fm-herdr.sh reconcile CLI: one workspace per project planned then applied, and --name applied to a live pane
+tests/fm-herdr-h*.test.sh                 # the herdr cutover gates: herdr as the only surface, explicit workspace scoping, named-tab spawn, meta-routed steer/peek, live acknowledged delivery, the open drain, teardown closing the pane, startup reporting an undispatchable fleet, and busy-agent acknowledgment
 tests/fm-test-hermeticity.test.sh         # the suites stay off the captain's live herdr and tmux: every suite is under the net or declares a HERMETICITY-WAIVER, both refusers on PATH, independent opt-outs, and a live-tmux opt-in whose kills are scoped to the suite's own throwaway session
 [ "$(readlink CLAUDE.md)" = "AGENTS.md" ]
 [ "$(readlink .claude/skills)" = "../.agents/skills" ]

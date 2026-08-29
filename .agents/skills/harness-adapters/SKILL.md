@@ -60,7 +60,7 @@ Firstmate launches every claude crewmate and secondmate with `CLAUDE_CODE_ENABLE
 The CLI's `--prompt-suggestions` flag is print/SDK-mode only and does not suppress the interactive composer ghost text, verified empirically on v2.1.186.
 As defense in depth for any pane that flag cannot reach, including the captain's own firstmate composer that away-mode reads, the pane reader in `bin/fm-tmux-lib.sh` captures only the composer line with ANSI styling, drops dim/faint SGR 2 runs, and ignores them, so only normal-intensity typed text counts as pending input.
 That styled capture is internal to the boolean detector only.
-`fm-peek` and every other human or LLM-facing capture path stays plain `tmux capture-pane` with no escape codes.
+`fm-peek` and every other human or LLM-facing capture path stays a plain, escape-code-free read: `herdr agent read` (falling back to `herdr pane read`) for a post-cutover pane, `tmux capture-pane` for one still draining.
 
 ## codex (VERIFIED 2026-06-11, codex-cli 0.139.0)
 
