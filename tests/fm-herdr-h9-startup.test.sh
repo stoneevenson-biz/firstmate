@@ -50,7 +50,7 @@ run_boot() {  # runs bootstrap against a throwaway home; echoes its output
 
 test_an_absent_herdr_binary_is_reported_as_missing() {
   local out clean
-  clean=$(fm_herdr_path_without_binary)
+  clean=$(fm_herdr_path_without_binary herdr)
   out=$(PATH="$clean" run_boot)
   assert_contains "$out" "MISSING: herdr" \
     "startup said nothing about an absent herdr; the host would pass and then dispatch nothing"
@@ -59,7 +59,7 @@ test_an_absent_herdr_binary_is_reported_as_missing() {
 
 test_the_missing_line_carries_an_install_command() {
   local out clean
-  clean=$(fm_herdr_path_without_binary)
+  clean=$(fm_herdr_path_without_binary herdr)
   out=$(PATH="$clean" run_boot)
   # The contract every other tool follows: MISSING: <tool> (install: <command>).
   printf '%s\n' "$out" | grep -qE 'MISSING: herdr \(install: .+\)' \

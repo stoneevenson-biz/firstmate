@@ -189,7 +189,7 @@ test_the_escalation_names_the_session_it_looked_for() {
 
 test_absent_binary_escalates_with_its_own_reason() {
   local out rc=0 clean
-  clean=$(fm_herdr_path_without_binary)
+  clean=$(fm_herdr_path_without_binary herdr)
   out=$(PATH="$clean" bash -c '. "$1"; fm_herdr_require "crewmate y"' _ "$LIB" 2>&1) || rc=$?
   if [ "$rc" = 0 ]; then fail "a missing herdr binary was treated as fine"; fi
   assert_contains "$out" "not on PATH" "an absent binary is not reported as its own distinct reason"

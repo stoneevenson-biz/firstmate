@@ -65,7 +65,7 @@ test_a_pre_cutover_window_is_still_closed_with_tmux() {
 # complete" is what let the tab leak unnoticed in the first place.
 test_a_failed_close_is_reported() {
   local out rc=0 clean
-  clean=$(fm_herdr_path_without_binary)
+  clean=$(fm_herdr_path_without_binary herdr)
   out=$(PATH="$clean" fm_herdr_close_pane "wM:p2" herdr 2>&1) || rc=$?
   if [ "$rc" = 0 ]; then fail "a close that could not run reported success"; fi
   assert_contains "$out" "wM:p2" "the failure does not name the pane that was left behind"

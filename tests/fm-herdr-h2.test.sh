@@ -77,7 +77,7 @@ test_creation_failure_is_fatal_not_a_silent_fallback() {
   local rc=0
   # No server: `workspace create` cannot succeed, and the seam must NOT quietly
   # proceed to an unscoped tab create - that is the original bug.
-  HERDR_WORKSPACES="" PATH="$(fm_herdr_path_without_binary)" fm_herdr_workspace_for nope /p/nope >/dev/null 2>&1 || rc=$?
+  HERDR_WORKSPACES="" PATH="$(fm_herdr_path_without_binary herdr)" fm_herdr_workspace_for nope /p/nope >/dev/null 2>&1 || rc=$?
   if [ "$rc" = 0 ]; then fail "a workspace that could not be resolved returned success"; fi
   pass "scope: an unresolvable workspace fails loudly instead of falling back to focus"
 }
