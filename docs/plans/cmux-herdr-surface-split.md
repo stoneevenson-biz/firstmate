@@ -1,6 +1,5 @@
 # cmux + herdr — the two-surface operating model
 
-
 > **Superseded in part (2026-08-28).** W1's driver seam (`fm-mux-lib.sh`, drivers behind
 > `FM_MUX`, tmux default) shipped and was then collapsed: herdr is the only surface, there is
 > no driver selection, and `bin/fm-herdr.sh` is the single herdr-native library. Headless is

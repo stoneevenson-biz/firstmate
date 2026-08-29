@@ -22,3 +22,15 @@ Escalate in order:
    A low context reading is not wedging; modern harnesses auto-compact and keep going.
    The worktree and commits persist, so relaunch is cheap.
 5. If a second relaunch fails too, write `failed` to the backlog and tell the captain with evidence.
+
+## Reading a steer's outcome
+
+Delivery to a herdr pane is acknowledged rather than inferred, so `bin/fm-send.sh` names which failure you hit instead of leaving you to guess.
+
+- **Refused at an approval dialog** - the crewmate is blocked and was not typed over.
+  Clear the dialog first with `bin/fm-send.sh <window> --key <choice>`, then send the corrective line.
+- **Refused because the pane holds no agent** - nothing was delivered, and deliberately nothing was executed, since a pane holding a shell would have run the steer as a command.
+  Peek it: the agent has exited or is still starting, which is step 4 territory, not another steer.
+- **Delivered but unconfirmed** - a warning, not an error.
+  Treat it as delivered and do not re-send it; re-sending a steer the crewmate already holds is the worse of the two errors.
+- For a pane that predates the herdr cutover the old rule still holds: only a positively confirmed swallow, with the text left in the composer, is a failure.

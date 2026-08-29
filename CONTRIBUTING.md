@@ -115,7 +115,7 @@ tests/fm-update.test.sh                   # fast-forward-only self-update, rerea
 tests/fm-secondmate-sync.test.sh          # local-HEAD secondmate sync, no-fetch, bootstrap nudge gating, and spawn hook tests
 tests/fm-secondmate-lifecycle-e2e.test.sh # persistent secondmate routing, seeding, backlog handoff, spawn, recovery, teardown, and FM_HOME flow tests
 tests/fm-secondmate-safety.test.sh        # secondmate home safety, idle charter, handoff validation, and teardown boundary tests
-tests/fm-teardown.test.sh                 # fm-teardown.sh safety and reminder checks: local-only fork-remote allow, truly-unpushed refuse, merged-to-main allow, no-mistakes regression, tasks-axi reminder, --force override
+tests/fm-teardown.test.sh                 # fm-teardown.sh safety, pane-close and reminder checks: local-only fork-remote allow, truly-unpushed refuse, merged-to-main allow, no-mistakes regression, tasks-axi reminder, --force override, and the orphan-pane record a failed close keeps, a clean close never writes, and a later successful close clears
 tests/fm-boot-m0.test.sh                  # gate ledger shape, and loud failure on a broken ledger, against isolated fixtures
 tests/fm-boot-m1.test.sh                  # boot-context hook registration; EXPECTED RED until the mac-config declaration is applied
 tests/fm-boot-m2.test.sh                  # boot-context emitter writes nothing: manifest identity, a chmod a-w tree, and a bare home

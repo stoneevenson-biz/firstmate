@@ -33,6 +33,7 @@ Its first tier is universal - this home's identity and one line per fleet instan
 The whole hook holds a wall-clock ceiling by running its helpers concurrently under one shared deadline and killing, as a process group, any that overruns it.
 Nothing degrades silently: a helper that is killed and a section that fails to build each leave an explicit marker in the output.
 Registering it is not a change in this repo: the harness settings file is rendered from control-plane desired state, so the hook is declared there and goes live when that declaration is applied; see [configuration.md](configuration.md).
+
 ## Where the crew runs
 
 Every crewmate runs in a herdr pane, and herdr is the only surface firstmate spawns onto.
