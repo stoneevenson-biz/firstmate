@@ -512,23 +512,32 @@ fi
 # outlive the pane it names: the same "sent hunting for something that is not
 # there" defect, pointed the other way. It is dropped below only on a close this
 # run actually proved, never merely because no record was written.
+#
+# Whether the close succeeded and whether the record got written are two
+# independent facts, and every report below is keyed on the first. Keying the
+# operator's summary on the file would let a failed record write print the
+# ordinary completion line over a pane teardown demonstrably could not close -
+# the plain-success-over-a-leaked-tab report this whole block exists to remove.
+# A record that could not be written leaves the operator with LESS to work with,
+# so that path is louder, never a quiet downgrade of the close report.
 ORPHAN_RECORD=""
+ORPHAN_PATH=""
 CLOSE_OK=1
 if ! fm_herdr_close_pane "$T" "$MUX"; then
   CLOSE_OK=0
-  ORPHAN_RECORD="$STATE/$ID.orphan-pane"
-  {
+  ORPHAN_PATH="$STATE/$ID.orphan-pane"
+  if {
     printf '# firstmate: teardown of %s could not close its pane; this record is kept\n' "$ID"
     printf '# so the leftover pane stays findable. Close it, then delete this file.\n'
     cat "$META"
     printf 'orphan-pane=%s\n' "$T"
     printf 'orphan-mux=%s\n' "${MUX:-tmux-drain}"
     printf 'orphan-since=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  } > "$ORPHAN_RECORD" || ORPHAN_RECORD=""
-  if [ -n "$ORPHAN_RECORD" ]; then
+  } > "$ORPHAN_PATH"; then
+    ORPHAN_RECORD="$ORPHAN_PATH"
     echo "warning: teardown could not close $T for $ID; kept the task record at $ORPHAN_RECORD so the leftover pane stays findable - close the pane, then delete that file" >&2
   else
-    echo "warning: teardown could not close $T for $ID; check for a leftover pane" >&2
+    echo "warning: teardown could not close $T for $ID, AND could not write the task record at $ORPHAN_PATH - anything left there is incomplete, so nothing durable names the leftover pane: close $T by hand now" >&2
   fi
 fi
 if [ "$KIND" = secondmate ]; then
@@ -541,8 +550,12 @@ if [ "$CLOSE_OK" = 1 ]; then rm -f "$STATE/$ID.orphan-pane"; fi
 if [ "$KIND" != scout ] && [ "$KIND" != secondmate ] && [ "$MODE" != local-only ]; then
   "$FM_ROOT/bin/fm-fleet-sync.sh" "$PROJ" || true
 fi
-if [ -n "$ORPHAN_RECORD" ]; then
-  echo "teardown $ID complete (worktree $WT); pane $T was NOT closed - record kept at $ORPHAN_RECORD"
+if [ "$CLOSE_OK" != 1 ]; then
+  if [ -n "$ORPHAN_RECORD" ]; then
+    echo "teardown $ID complete (worktree $WT); pane $T was NOT closed - record kept at $ORPHAN_RECORD"
+  else
+    echo "teardown $ID complete (worktree $WT); pane $T was NOT closed and no record could be written at $ORPHAN_PATH - close $T by hand"
+  fi
 else
   echo "teardown $ID complete (window $T, worktree $WT)"
 fi

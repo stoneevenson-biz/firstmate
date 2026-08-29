@@ -223,6 +223,33 @@ SH
   pass "a later successful close clears the record an earlier failed close kept"
 }
 
+# The record write is a second, independent failure: the close still failed, so
+# the summary line must still say so. Keying that line on the record file let a
+# failed write print the ordinary completion over a leaked pane - the exact
+# plain-success-over-a-leaked-tab report the kept record was added to remove.
+test_a_failed_close_reports_even_when_the_record_cannot_be_written() {
+  local case_dir rc
+  case_dir=$(make_case close-fails-record-unwritable)
+  write_meta "$case_dir" local-only ship
+  fail_the_close "$case_dir"
+  # A directory where the record goes: the redirect cannot write it.
+  mkdir -p "$case_dir/state/task-x1.orphan-pane"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "record-unwritable: teardown should still complete its own cleanup"
+  grep -qF 'was NOT closed' "$case_dir/stdout" \
+    || fail "record-unwritable: teardown reported a plain completion over a pane it could not close"
+  grep -qF 'no record could be written' "$case_dir/stdout" \
+    || fail "record-unwritable: the summary does not say the record is missing"
+  grep -qF 'could not write the task record' "$case_dir/stderr" \
+    || fail "record-unwritable: the failed record write is not its own warning"
+  pass "a failed close still reports as unclosed when the record cannot be written"
+}
+
 test_local_only_fork_remote_allows() {
   local case_dir rc
   case_dir=$(make_case fork-allow)
@@ -361,3 +388,4 @@ test_local_only_force_overrides_unpushed
 test_a_failed_close_keeps_the_task_record
 test_a_successful_close_leaves_no_orphan_record
 test_a_later_successful_close_clears_a_stale_record
+test_a_failed_close_reports_even_when_the_record_cannot_be_written
