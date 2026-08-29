@@ -34,6 +34,7 @@
 #   HERDR_PANE_CWD    what `pane get` reports as foreground_cwd
 #   HERDR_KEY_FAIL    1 -> both `agent send-keys` and `pane send-keys` refuse
 #   HERDR_PANE_FILE   file whose contents `agent read`/`pane read` return
+#   HERDR_READ_FAIL   1 -> both `agent read` and `pane read` refuse
 #   CALLS             file every invocation's argv is appended to
 fm_herdr_fake_server() {  # <dir>
   local fb="$1/fakebin"; mkdir -p "$fb"
@@ -67,7 +68,11 @@ agent_get_json() {  # <agent_status>
 }
 case "$1 $2" in
   "session list")
-    printf 'name                 status   directory\ndefault              %s  /x\n' "${HERDR_SERVER:-running}" ;;
+    # herdr manages NAMED persistent sessions, so the fake must be able to run
+    # one that is not called `default` - a reachability predicate pinned to that
+    # name reported a plainly-running fleet as unreachable.
+    printf 'name                 status   directory\n%-20s %s  /x\n' \
+      "${HERDR_SESSION_NAME:-default}" "${HERDR_SERVER:-running}" ;;
   "workspace list") ws_json ;;
   "workspace create")
     # A created workspace joins the live set for the rest of this process tree.
@@ -142,7 +147,15 @@ case "$1 $2" in
       "printf '%s\n' "*) printf '%s\n' "${3##*\' }" >> "${HERDR_PANE_FILE:-/dev/null}" ;;
     esac
     printf '{"id":"cli:pane:run","result":{"type":"ok"}}\n' ;;
-  "pane read"|"agent read") cat "${HERDR_PANE_FILE:-/dev/null}" 2>/dev/null ;;
+  "pane read"|"agent read")
+    # HERDR_READ_FAIL=1 refuses BOTH read verbs. A read is the first step of the
+    # stale-wake and stuck-crewmate playbooks, so a dead pane and a quiet
+    # crewmate must not look identical.
+    if [ "${HERDR_READ_FAIL:-0}" = 1 ]; then
+      echo '{"error":{"code":"pane_not_found","message":"no such pane"}}' >&2
+      exit 1
+    fi
+    cat "${HERDR_PANE_FILE:-/dev/null}" 2>/dev/null ;;
   "pane close")  printf '{"id":"cli:pane:close","result":{"type":"ok"}}\n' ;;
   "agent list")
     # THE SHAPE THE REAL BINARY EMITS. herdr 0.8.2's AgentInfo has NO name field

@@ -166,6 +166,56 @@ test_read_is_scrollback_backed_by_default() {
   pass "read: scrollback-backed by default, viewport only when asked for"
 }
 
+# THE DEFECT THIS FREEZES. Both read verbs were redirected to /dev/null and the
+# call was the last statement in fm-peek's herdr branch, so under `set -eu` a
+# peek at a dead pane exited non-zero with NO output - indistinguishable from a
+# quiet crewmate. Peek is the first step of the stale-wake and stuck-crewmate
+# playbooks, so that is the one thing it must never be ambiguous about.
+test_a_failed_read_is_reported_not_swallowed() {
+  local err rc=0
+  err=$(HERDR_READ_FAIL=1 fm_herdr_read w9:p2 40 2>&1) || rc=$?
+  expect_code 1 "$rc" "a failed read did not fail"
+  case "$err" in
+    "") fail "a failed read produced no output at all; a dead pane looks like a quiet one" ;;
+    *"could not read"*) : ;;
+    *) fail "the failure does not say a pane could not be read: '$err'" ;;
+  esac
+  case "$err" in
+    *pane_not_found*) : ;;
+    *) fail "the failure drops herdr's own reason: '$err'" ;;
+  esac
+  pass "read: a failed read is reported with herdr's reason, not swallowed"
+}
+
+# The probes poll and treat a failed read as "not ready yet", so they must stay
+# QUIET - a readiness loop that printed an error per poll would bury the spawn.
+test_the_probe_read_stays_quiet() {
+  local err rc=0
+  err=$(HERDR_READ_FAIL=1 fm_herdr_read_quiet w9:p2 40 2>&1) || rc=$?
+  expect_code 1 "$rc" "the quiet read did not report failure through its exit status"
+  assert_eq "$err" "" "the quiet probe read is noisy; a polling loop would bury the spawn"
+  pass "read: the probe variant fails through its status, silently"
+}
+
+# THE DEFECT THIS FREEZES. Making `recent` the peek default swept up
+# fm_herdr_launch_failed, which asks a question about the PRESENT: does the pane
+# show a shell error right now. Read from scrollback, pre-launch noise -
+# treehouse output, the readiness marker echoes, a shell-rc error - stays within
+# the last 15 lines and produces a false "launch did not start an agent" that
+# aborts a spawn whose agent in fact came up. The two sources are not
+# interchangeable; do not unify them.
+test_launch_verification_reads_the_viewport_not_scrollback() {
+  reset_calls
+  HERDR_PANE_FILE="$TMP_ROOT/pane.txt"; export HERDR_PANE_FILE
+  : > "$HERDR_PANE_FILE"
+  fm_herdr_launch_failed w9:p2 >/dev/null 2>&1
+  grep -q -- "--source visible" "$CALLS" \
+    || fail "the post-launch check read scrollback, where stale noise can abort a good spawn: $(cat "$CALLS")"
+  grep -q -- "--source recent" "$CALLS" \
+    && fail "the post-launch check asked for scrollback"
+  pass "launch check: reads the current viewport, never scrollback"
+}
+
 # THE DEFECT THIS FREEZES (Quarterdeck reject, attempt 1). fm_herdr_prompt ran
 # `herdr agent prompt ... || true`, discarding the exit status, then matched
 # stdout against a short list of known error strings. Anything unmatched fell
@@ -238,5 +288,8 @@ test_an_undetected_agent_never_executes_the_steer_as_a_shell_command
 test_is_busy_reads_a_real_state
 test_read_returns_pane_text
 test_read_is_scrollback_backed_by_default
+test_a_failed_read_is_reported_not_swallowed
+test_the_probe_read_stays_quiet
+test_launch_verification_reads_the_viewport_not_scrollback
 test_a_refused_key_is_reported_not_swallowed
 test_a_failed_create_is_reported

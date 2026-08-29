@@ -86,6 +86,36 @@ test_reachability_is_only_ever_a_diagnostic() {
   pass "reachability: answers honestly, and nothing selects a surface from it"
 }
 
+# A false negative here strands the WHOLE fleet: this predicate is the single
+# gate on all dispatch, so a running server it refuses to see makes bootstrap
+# print NEEDS_HERDR_SERVER and every spawn stop at the escalation. herdr manages
+# named persistent sessions, so pinning the name `default` did exactly that.
+test_a_named_session_is_a_running_server() {
+  local rc=0
+  HERDR_SESSION_NAME=fleet HERDR_SERVER=running \
+    bash -c '. "$1"; fm_herdr_up' _ "$LIB" >/dev/null 2>&1 || rc=$?
+  expect_code 0 "$rc" "a running session not called 'default' was reported as unreachable"
+  rc=0
+  HERDR_SESSION_NAME=fleet HERDR_SERVER=stopped \
+    bash -c '. "$1"; fm_herdr_up' _ "$LIB" >/dev/null 2>&1 || rc=$?
+  if [ "$rc" = 0 ]; then fail "a stopped named session was reported as up"; fi
+  pass "reachability: any running session counts, whatever it is named"
+}
+
+# The override is for pinning ONE session deliberately. It must actually
+# discriminate, or it is decoration.
+test_the_session_override_pins_one_session() {
+  local rc=0
+  FM_HERDR_SESSION=fleet HERDR_SESSION_NAME=fleet HERDR_SERVER=running \
+    bash -c '. "$1"; fm_herdr_up' _ "$LIB" >/dev/null 2>&1 || rc=$?
+  expect_code 0 "$rc" "the override did not match the session it names"
+  rc=0
+  FM_HERDR_SESSION=other HERDR_SESSION_NAME=fleet HERDR_SERVER=running \
+    bash -c '. "$1"; fm_herdr_up' _ "$LIB" >/dev/null 2>&1 || rc=$?
+  if [ "$rc" = 0 ]; then fail "the override matched a session it does not name"; fi
+  pass "reachability: FM_HERDR_SESSION pins one named session"
+}
+
 # --- an unreachable herdr ESCALATES -----------------------------------------
 
 # The message has to be one the captain can act on: what is wrong, and that the
@@ -123,6 +153,8 @@ test_there_is_no_driver_selector
 test_fm_mux_no_longer_selects_anything
 test_the_old_override_cannot_divert_anything
 test_reachability_is_only_ever_a_diagnostic
+test_a_named_session_is_a_running_server
+test_the_session_override_pins_one_session
 test_unreachable_herdr_escalates_with_an_actionable_message
 test_absent_binary_escalates_with_its_own_reason
 test_reachable_herdr_passes_silently

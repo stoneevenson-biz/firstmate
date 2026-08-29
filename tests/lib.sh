@@ -48,8 +48,13 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # The live gates need the real binary. They set FM_TEST_ALLOW_LIVE_HERDR=1 BEFORE
 # sourcing this file, which is deliberate and visible at the top of those files.
 
+# The shim dir is PER RUN, not per file: mktemp -d here ran at source time in
+# every suite and nothing removed it, so a full pass left one stray directory
+# per test FILE on the captain's machine, forever. One fixed path derived from
+# the run needs no trap and cannot accumulate.
 if [ "${FM_TEST_ALLOW_LIVE_HERDR:-0}" != 1 ]; then
-  FM_TEST_DENY_BIN=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-deny.XXXXXX")
+  FM_TEST_DENY_BIN="${TMPDIR:-/tmp}/fm-test-deny.$(id -u)"
+  mkdir -p "$FM_TEST_DENY_BIN"
   cat > "$FM_TEST_DENY_BIN/herdr" <<'DENY'
 #!/usr/bin/env bash
 echo "fm-test: this suite reached the REAL herdr binary." >&2

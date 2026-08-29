@@ -325,8 +325,8 @@ Registered projects:
 Secondmates:
 {secondmates or '(none registered)'}
 
-Open 'firstmate' tmux windows:
-{wins or '(none — no session yet)'}
+Live crew panes:
+{wins or '(none — nothing in flight)'}
 
 Recent backlog:
 {backlog or '(empty)'}

@@ -33,5 +33,11 @@ if [ "$FM_HERDR_DRAIN" = 1 ]; then
   # fm_herdr_drain_pending reports no pre-cutover meta is left in any home.
   tmux capture-pane -p -t "$FM_HERDR_TARGET" -S -"$N"
 else
-  fm_herdr_read "$FM_HERDR_TARGET" "$N"
+  # A failed read must not look like a quiet crewmate. Peek is the first step of
+  # the stale-wake and stuck-crewmate playbooks, so exiting non-zero with no
+  # output told the operator nothing about a pane that may simply be gone.
+  if ! fm_herdr_read "$FM_HERDR_TARGET" "$N"; then
+    echo "error: could not read $FM_HERDR_TARGET; the pane may be gone, the id wrong, or the server down" >&2
+    exit 1
+  fi
 fi

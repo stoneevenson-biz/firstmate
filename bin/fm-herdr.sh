@@ -42,9 +42,18 @@
 # and the captain is watching it, so this is the only correct way to ask.
 #
 # It is a DIAGNOSTIC. Nothing in this file selects anything from its answer.
+#
+# ANY RUNNING SESSION COUNTS. herdr manages named persistent sessions, not one
+# fixed `default`, so pinning the name here reported a plainly-running fleet as
+# unreachable: bootstrap printed NEEDS_HERDR_SERVER and every spawn stopped at
+# the escalation. This predicate is the single gate on all dispatch, so a false
+# negative strands the whole fleet. FM_HERDR_SESSION pins one session by name
+# when that is genuinely what is meant.
 fm_herdr_up() {
   command -v herdr >/dev/null 2>&1 || return 1
-  herdr session list 2>/dev/null | awk '$1=="default"{print $2}' | grep -q running
+  herdr session list 2>/dev/null | awk -v want="${FM_HERDR_SESSION:-}" '
+    NR > 1 && $2 == "running" && (want == "" || $1 == want) { found = 1 }
+    END { exit !found }'
 }
 
 # Precondition for putting an AGENT anywhere. Call it before creating a pane.
@@ -353,16 +362,41 @@ fm_herdr_send_key() {  # <pane> <key>
   return 1
 }
 
-# SOURCE MATTERS. `visible` is the current viewport, so it silently caps a read
-# at one screen however many lines were asked for - and a peek that comes back
-# short is indistinguishable from a quiet crewmate. `recent` is herdr's
-# scrollback-backed source and is the equivalent of the `capture-pane -S -$N`
-# this replaced, so it is the default. Callers that genuinely want the viewport
-# (the readiness marker probe) ask for `visible` explicitly.
-fm_herdr_read() {  # <pane> [lines] [source]
+# SOURCE MATTERS, and the two sources are NOT interchangeable - do not unify
+# them. `visible` is the current viewport, so it silently caps a read at one
+# screen however many lines were asked for, and a peek that comes back short is
+# indistinguishable from a quiet crewmate. `recent` is herdr's scrollback-backed
+# source and is the equivalent of the `capture-pane -S -$N` this replaced, so it
+# is the default for peeking. The probes that ask "what does the pane show RIGHT
+# NOW" - the readiness marker, and the post-launch shell-error check - pass
+# `visible` explicitly, because scrollback would let stale pre-launch noise
+# answer a question about the present.
+#
+# The quiet variant is for those probes only: they poll, and a read that fails
+# means "not ready yet" rather than something worth printing.
+fm_herdr_read_quiet() {  # <pane> [lines] [source]
   local pane=$1 lines=${2:-40} src=${3:-recent}
   herdr agent read "$pane" --source "$src" --lines "$lines" --format text 2>/dev/null \
     || herdr pane read "$pane" --source "$src" --lines "$lines" --format text 2>/dev/null
+}
+
+# A read is the first step of the stale-wake and stuck-crewmate playbooks, so a
+# failure has to SAY so - exactly as fm_herdr_send_key does. Swallowing both
+# attempts left `fm-peek.sh <pane>` exiting non-zero with no output under
+# `set -eu`, which made a dead pane and a quiet crewmate look identical to a
+# supervisor.
+fm_herdr_read() {  # <pane> [lines] [source]
+  local pane=$1 lines=${2:-40} src=${3:-recent} out
+  if out=$(herdr agent read "$pane" --source "$src" --lines "$lines" --format text 2>/dev/null); then
+    [ -z "$out" ] || printf '%s\n' "$out"
+    return 0
+  fi
+  if out=$(herdr pane read "$pane" --source "$src" --lines "$lines" --format text 2>&1); then
+    [ -z "$out" ] || printf '%s\n' "$out"
+    return 0
+  fi
+  echo "fm-herdr: could not read $pane: ${out:-herdr gave no output}" >&2
+  return 1
 }
 
 fm_herdr_cwd() {  # <pane>
@@ -394,7 +428,7 @@ fm_herdr_wait_shell_ready() {  # <pane> [timeout-seconds]
     while [ "$waited" -lt 10 ]; do
       sleep "$poll"
       waited=$((waited + 1))
-      if fm_herdr_read "$pane" 40 visible | grep -qx "$marker"; then return 0; fi
+      if fm_herdr_read_quiet "$pane" 40 visible | grep -qx "$marker"; then return 0; fi
     done
   done
   return 1
@@ -403,8 +437,14 @@ fm_herdr_wait_shell_ready() {  # <pane> [timeout-seconds]
 # Post-launch verification. If the launch string reached the shell as text
 # instead of starting the agent, the shell says so — and firstmate should fail
 # loudly rather than record a meta for a pane that holds nothing.
+#
+# `visible`, deliberately, NOT the `recent` default: this asks what the pane
+# shows right now. Read from scrollback, pre-launch noise - treehouse output,
+# the readiness marker echoes, a shell-rc error - stays within the last 15 lines
+# and produces a false "launch did not start an agent" that aborts a spawn whose
+# agent in fact came up. This one is not the same question fm-peek asks.
 fm_herdr_launch_failed() {  # <pane>
-  fm_herdr_read "$1" 15 \
+  fm_herdr_read_quiet "$1" 15 visible \
     | grep -qiE 'parse error|command not found|syntax error near|no such file or directory'
 }
 
@@ -515,13 +555,29 @@ fm_herdr_resolve() {  # <window-or-target> <state-dir>
       # An explicit target, checked FIRST exactly as the pre-collapse resolve
       # had it, so a session literally named `fm-something` still addresses
       # `fm-something:window` rather than being looked up as a task id.
-      # A herdr pane id is `<workspace>:p<n>`; anything else with a colon is a
-      # tmux session:window, which is drain-only.
       FM_HERDR_TARGET=$want
-      case "$want" in
-        *:p[0-9]*) FM_HERDR_DRAIN=0 ;;
-        *)         FM_HERDR_DRAIN=1 ;;
-      esac
+      # THE META FIRST. A recorded target is not a shape to be guessed at: if
+      # this home has a meta whose window= is exactly this target, its mux= says
+      # which surface minted it, and that is the answer. The shape test below is
+      # the LAST RESORT, for a pane in another home that this home has no record
+      # of.
+      meta=$(grep -lFx "window=$want" "$state"/*.meta 2>/dev/null | head -1 || true)
+      if [ -n "$meta" ]; then
+        mux=$(grep '^mux=' "$meta" 2>/dev/null | tail -1 | cut -d= -f2- || true)
+        if [ "$mux" = herdr ]; then FM_HERDR_DRAIN=0; else FM_HERDR_DRAIN=1; fi
+      else
+        # A herdr pane id is `w<id>:p<id>`, and BOTH halves are base-36, not
+        # decimal: the pane counter rolls into letters at the tenth pane, so a
+        # live server holds `wM:p9` and `wM:pA` side by side. Matching only
+        # digits sent every pane past the ninth down the tmux path, at a session
+        # that does not exist - peek and steer broke for exactly the crewmates a
+        # busy fleet has most of. Anything else with a colon is a tmux
+        # session:window, which is drain-only.
+        case "$want" in
+          w[0-9A-Za-z]*:p[0-9A-Za-z]*) FM_HERDR_DRAIN=0 ;;
+          *)                           FM_HERDR_DRAIN=1 ;;
+        esac
+      fi
       ;;
     fm-*)
       meta="$state/${want#fm-}.meta"

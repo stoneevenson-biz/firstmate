@@ -81,7 +81,7 @@ projects/            cloned repos; gitignored; READ-ONLY for you
 state/               volatile runtime signals; gitignored
   <id>.status        appended by crewmates through bin/fm-status.sh: "<state>: <note>" lines
   <id>.turn-ended    touched by turn-end hooks
-  <id>.meta          written by fm-spawn: window=, worktree=, project=, harness=, mux=, name=, kind=, mode=, yolo=; window= is the OPAQUE multiplexer target and mux= the driver that minted it (section 8); kind=secondmate also records home= and projects= (fm-pr-check appends pr=)
+  <id>.meta          written by fm-spawn: window=, worktree=, project=, harness=, mux=, name=, kind=, mode=, yolo=; `bin/fm-herdr.sh` owns what window= and mux= mean (section 8); kind=secondmate also records home= and projects= (fm-pr-check appends pr=)
   <id>.check.sh      optional slow poll you write per task (e.g. merged-PR check)
   .wake-queue        durable queued wakes: epoch<TAB>seq<TAB>kind<TAB>key<TAB>payload
   .afk               durable away-mode flag; present = sub-supervisor may inject escalations (set by /afk, cleared on user return)
@@ -621,8 +621,8 @@ plan that changes nothing, `--apply` to create the missing workspaces, and
 `--name <pane> <project> <work>` to name a live pane. It is deliberately not called `herdr`,
 which would shadow the real binary and make every call site depend on `PATH` order.
 
-Not yet migrated, and the two gaps are NOT equally covered - know which is which before
-relying on either:
+Not yet migrated, and the gaps are NOT equally covered - know which is which before
+relying on any of them:
 
 - `bin/fm-watch.sh` and `bin/fm-ff-lib.sh` still read `window=` and call tmux on it, which
   is what keeps the drain working. For a herdr crewmate, stale-pane detection is inert, so
@@ -634,7 +634,43 @@ relying on either:
   checkpoint. A crewmate that reaches its context ceiling simply dies with no handoff
   written. Until this moves, watch context on long crewmates yourself.
 
-Both should move onto `fm-herdr.sh` once the drain is empty, and the watchdog first.
+Four more are known and deliberately deferred. Each errs toward a false negative or a
+loud refusal - none of them loses work - but each is worth acting on:
+
+- **A steer to an idle crewmate reports "did not acknowledge" almost every time.**
+  `fm_herdr_prompt`'s idle path submits with `--wait --until idle|done|blocked`, and
+  `--wait` blocks until the agent SETTLES into one of those states, i.e. until the turn
+  finishes. A real steer runs for minutes, so herdr times out at 15s and `fm-send.sh`
+  prints the unconfirmed warning for a steer that landed - which makes the genuine
+  unconfirmed signal meaningless. The state that means "consumed" is `working`; wait for
+  the agent to START working, the same signal the busy path already uses.
+- **The busy-crewmate acknowledgment can miss the settle.** It polls `agent get` every
+  `FM_HERDR_ACK_POLL` (0.25s) and needs to see an `idle`/`done` sample before a `working`
+  one, but herdr queues the prompt and the harness starts the next turn immediately, so
+  that window is often shorter than the poll. The miss costs a 16s stall and an
+  unconfirmed report for a steer that landed. The agent record carries monotonic
+  `revision` and `state_change_seq`; capture the seq before submitting and treat any
+  advance as the transition - a counter cannot be missed by a sampling gap.
+- **Pane-name uniqueness replaced task-id uniqueness.** `fm-spawn.sh` derives the pane
+  name by stripping the id's random suffix, and refuses a duplicate label in the
+  workspace, so two concurrent tasks whose ids share a stem (`fix-login-k3` and
+  `fix-login-m9`) collide and the second spawn hard-fails - which contradicts "there is
+  no concurrency cap" in section 7. It fails loudly and creates nothing, so no work is
+  lost; pass `--name <work>` to disambiguate until it either appends the id suffix on
+  collision or says so in the refusal.
+- **The key vocabulary is still tmux's.** `--key Enter` / `--key Escape` / `C-c` appear
+  in the harness-adapters and stuck-crewmate-recovery skills, `fm-send.sh`'s header, and
+  `docs/scripts.md`, while herdr documents `esc` and `ctrl+c`. Verified against herdr
+  0.8.2: it accepts all of them, so the documented procedures work today and no crewmate
+  can be stranded by it. Tidiness, not correctness.
+
+- **The captain's boot digest inventories every agent on the machine.** `_herdr_names()`
+  in `bin/fm-captain-bootstrap.sh` lists every herdr agent whose tab label looks like a
+  name, so the captain's own non-fleet panes read as fleet, where the tmux inventory it
+  replaced was scoped to the `firstmate` session. Whether to scope it to the workspaces
+  in `data/projects.md` is the captain's call about what he wants to see at boot.
+
+The first two should move onto `fm-herdr.sh` once the drain is empty, and the watchdog first.
 `bin/fm-teardown.sh` HAS moved: it closes through `fm_herdr_close_pane`, which routes a
 herdr pane to herdr and a draining window to tmux.
 

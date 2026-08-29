@@ -160,6 +160,58 @@ test_drain_pending_is_computed_from_metas() {
   pass "drain: pending is computed from the metas, and closes when the last one is gone"
 }
 
+# --- an EXPLICIT target, which no gate covered at all -----------------------
+#
+# The documented cross-home path: AGENTS.md tells firstmate to pass an explicit
+# target to reach a pane outside this home, and fm-peek/fm-send both advertise
+# it. Misclassifying one aims tmux verbs at a session that does not exist, so
+# peek and steer break silently for that crewmate.
+
+# BOTH halves of a herdr pane id are base-36, not decimal: the pane counter
+# rolls into letters at the tenth pane, so a live server holds `wM:p9` and
+# `wM:pA` side by side. Matching only digits sent every pane past the ninth
+# down the drain - i.e. exactly the crewmates a busy fleet has most of.
+test_a_letter_suffixed_pane_id_is_not_drained() {
+  local id
+  for id in wM:p9 wM:pA wN:p1 wZ:p10 wAB:pZZ; do
+    fm_herdr_resolve "$id" "$STATE" || fail "explicit target $id would not resolve"
+    assert_eq "$FM_HERDR_TARGET" "$id" "the explicit target was rewritten"
+    assert_eq "$FM_HERDR_DRAIN" "0" "herdr pane id $id was misclassified as a draining tmux window"
+  done
+  pass "explicit: a base-36 herdr pane id is addressed as herdr, never drained"
+}
+
+test_an_explicit_tmux_target_still_drains() {
+  local t
+  for t in firstmate:fm-drainer other:fm-thing firstmate:pending-fix; do
+    fm_herdr_resolve "$t" "$STATE" || fail "explicit target $t would not resolve"
+    assert_eq "$FM_HERDR_TARGET" "$t" "the explicit target was rewritten"
+    assert_eq "$FM_HERDR_DRAIN" "1" "tmux target $t was misclassified as a herdr pane"
+  done
+  pass "explicit: a session:window target still takes the drain path"
+}
+
+# The META, not the shape. A recorded target is not something to guess at: when
+# this home has a meta whose window= is exactly this target, its mux= is the
+# answer and the shape test is never consulted.
+test_an_explicit_target_is_classified_by_its_meta_first() {
+  fm_herdr_resolve "wM:p4" "$STATE" || fail "a recorded herdr target would not resolve"
+  assert_eq "$FM_HERDR_DRAIN" "0" "a recorded mux=herdr target was drained"
+  # The adversarial case: a pre-cutover window whose NAME happens to take the
+  # herdr shape. The meta says tmux, so the shape must not get a vote.
+  cat > "$STATE/oddly.meta" <<META
+window=w9:p9
+worktree=/wt
+project=/p/thing
+harness=claude
+kind=ship
+META
+  fm_herdr_resolve "w9:p9" "$STATE" || fail "a recorded pre-cutover target would not resolve"
+  assert_eq "$FM_HERDR_DRAIN" "1" "the shape test overrode a meta that says this is a tmux window"
+  rm -f "$STATE/oddly.meta"
+  pass "explicit: the meta decides where one exists; the shape test is the last resort"
+}
+
 # An empty or absent state dir is not a drain - it is nothing to drain.
 test_an_empty_home_has_no_drain() {
   mkdir -p "$TMP_ROOT/empty-state"
@@ -178,5 +230,8 @@ test_a_pre_cutover_meta_resolves_to_the_drain
 test_a_post_cutover_meta_does_not
 test_the_drain_keeps_read_send_and_close_reachable
 test_the_drain_library_is_retired_not_deleted
+test_a_letter_suffixed_pane_id_is_not_drained
+test_an_explicit_tmux_target_still_drains
+test_an_explicit_target_is_classified_by_its_meta_first
 test_drain_pending_is_computed_from_metas
 test_an_empty_home_has_no_drain
