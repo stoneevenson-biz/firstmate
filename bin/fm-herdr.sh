@@ -43,21 +43,40 @@
 #
 # It is a DIAGNOSTIC. Nothing in this file selects anything from its answer.
 #
-# ANY RUNNING SESSION COUNTS. herdr manages named persistent sessions, not one
-# fixed `default`, so pinning the name here reported a plainly-running fleet as
-# unreachable: bootstrap printed NEEDS_HERDR_SERVER and every spawn stopped at
-# the escalation. This predicate is the single gate on all dispatch, so a false
-# negative strands the whole fleet. FM_HERDR_SESSION pins one session by name
-# when that is genuinely what is meant.
+# IT PROBES THE SESSION THE VERBS WILL ACTUALLY USE, which is neither a fixed
+# `default` nor "any running session". Verified against herdr 0.8.2: every verb
+# that matters — workspace list, tab create, agent list, pane read, agent prompt
+# — takes its session from $HERDR_SESSION and defaults to `default`, and none of
+# them accepts a --session flag; meanwhile `herdr session list` IGNORES
+# $HERDR_SESSION and lists every session on the machine. So the two ends of this
+# predicate answer different questions unless the name is matched explicitly.
 #
-# Nothing is skipped by POSITION either: the header's second field is the
-# literal `status`, so the predicate already excludes it, and a herdr that
-# stopped printing a header would otherwise hide the fleet's only running
-# session behind exactly the false negative this predicate exists to avoid.
+# Both directions have been live defects on this branch, and they are opposite:
+#   * pinning `default` reported a fleet running under a named session as
+#     unreachable — bootstrap printed NEEDS_HERDR_SERVER and every spawn stopped;
+#   * matching ANY running row reported the fleet reachable while the verbs were
+#     aimed at a session that is not up — the spawn then died later at `tab
+#     create` with a worse, less actionable diagnostic than this one.
+# Matching the one session the verbs will reach is honest in both directions.
+#
+# Nothing is skipped by POSITION: a herdr that stopped printing its header would
+# otherwise hide the fleet's only running session behind a false negative, and
+# the header's own fields cannot collide with a real session named `<want>` that
+# is `running`.
+fm_herdr_session() {
+  [ -z "${FM_HERDR_SESSION:-}" ] || export HERDR_SESSION="$FM_HERDR_SESSION"
+  printf '%s' "${HERDR_SESSION:-default}"
+}
+# FM_HERDR_SESSION EXPORTS rather than merely filtering the probe. A pin that
+# moved this predicate but not the verbs would re-open the very divergence above.
+fm_herdr_session >/dev/null
+
 fm_herdr_up() {
   command -v herdr >/dev/null 2>&1 || return 1
-  herdr session list 2>/dev/null | awk -v want="${FM_HERDR_SESSION:-}" '
-    $2 == "running" && (want == "" || $1 == want) { found = 1 }
+  local want
+  want=$(fm_herdr_session)
+  herdr session list 2>/dev/null | awk -v want="$want" '
+    $1 == want && $2 == "running" { found = 1 }
     END { exit !found }'
 }
 
@@ -68,13 +87,21 @@ fm_herdr_up() {
 # the captain reserved for himself. The message says what is wrong, whose call
 # it is, and that a headless run needs his word — a tier recommends headless by
 # printing this and stopping, never by choosing it.
+#
+# It NAMES THE SESSION it looked for. A bare "no herdr server is running" is
+# actively misleading when another session is plainly up and only the one the
+# verbs target is missing — the captain would go looking for a dead server he
+# can see running.
 fm_herdr_require() {  # [what-for]
-  local what=${1:-this agent}
+  local what=${1:-this agent} sess
   if fm_herdr_up; then return 0; fi
+  sess=$(fm_herdr_session)
   {
-    echo "fm-herdr: cannot place $what - no herdr server is reachable."
+    echo "fm-herdr: cannot place $what - no herdr server is reachable for session '$sess'."
     if command -v herdr >/dev/null 2>&1; then
-      echo "  herdr is installed but no server is running. Start or attach one with \`herdr\`."
+      echo "  herdr is installed but session '$sess' is not running. Start or attach it with"
+      echo "  \`herdr session attach $sess\` (or \`herdr\` for the default session). Every herdr"
+      echo "  verb targets \$HERDR_SESSION only, so another session being up does not help."
     else
       echo "  herdr is not on PATH. Install it, or run this where a server is reachable."
     fi
@@ -504,11 +531,30 @@ fm_herdr_label() {  # <pane> <name>
   return 0
 }
 
+# ALREADY GONE IS A SUCCESSFUL CLOSE. The desired end state is "no such pane",
+# and a pane the captain closed by hand — or one herdr already reaped with its
+# agent — reaches it without us. Verified against herdr 0.8.2: `pane get`,
+# `tab close` and `pane close` ALL return rc=1 for an id that does not exist, so
+# reading the exit code alone made an ordinary path fire teardown's "check for a
+# leftover pane" warning and send firstmate hunting a tab that is not there.
+# That dilutes the one signal this helper exists to produce. The envelope, not
+# the exit code, is what distinguishes gone from unclosable.
 fm_herdr_close() {  # <pane>
-  local tab
-  tab=$(fm_herdr_field "$(herdr pane get "$1" 2>/dev/null)" tab_id)
-  if [ -n "$tab" ]; then herdr tab close "$tab" >/dev/null 2>&1 && return 0; fi
-  herdr tab close "$1" >/dev/null 2>&1 || herdr pane close "$1" >/dev/null 2>&1
+  local pane=$1 get tab out rc=0
+  get=$(herdr pane get "$pane" 2>&1) || rc=$?
+  if [ "$rc" != 0 ]; then
+    case "$get" in *pane_not_found*|*tab_not_found*) return 0 ;; esac
+    get=""
+  fi
+  tab=$(fm_herdr_field "$get" tab_id)
+  if [ -n "$tab" ]; then
+    out=$(herdr tab close "$tab" 2>&1) && return 0
+    case "$out" in *pane_not_found*|*tab_not_found*) return 0 ;; esac
+  fi
+  out=$(herdr tab close "$pane" 2>&1) && return 0
+  out=$(herdr pane close "$pane" 2>&1) && return 0
+  case "$out" in *pane_not_found*|*tab_not_found*) return 0 ;; esac
+  return 1
 }
 
 # Close the pane a meta recorded, on the surface that CREATED it.

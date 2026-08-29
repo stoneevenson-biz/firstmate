@@ -28,6 +28,10 @@ set -u
 # shellcheck source=bin/fm-herdr.sh
 . "$ROOT/bin/fm-herdr.sh"
 
+# The reachability cases below assert what the session probe resolves to, so an
+# ambient HERDR_SESSION in the runner's shell would silently change the answer.
+unset HERDR_SESSION FM_HERDR_SESSION
+
 TMP_ROOT=$(fm_test_tmproot fm-herdr-h1)
 FB=$(fm_herdr_fake_server "$TMP_ROOT")
 PATH="$FB:$PATH"; export PATH
@@ -89,17 +93,35 @@ test_reachability_is_only_ever_a_diagnostic() {
 # A false negative here strands the WHOLE fleet: this predicate is the single
 # gate on all dispatch, so a running server it refuses to see makes bootstrap
 # print NEEDS_HERDR_SERVER and every spawn stop at the escalation. herdr manages
-# named persistent sessions, so pinning the name `default` did exactly that.
+# named persistent sessions, so a fleet running under one must be reachable -
+# reached the way the verbs reach it, through $HERDR_SESSION.
 test_a_named_session_is_a_running_server() {
   local rc=0
-  HERDR_SESSION_NAME=fleet HERDR_SERVER=running \
+  HERDR_SESSION=fleet HERDR_SESSION_NAME=fleet HERDR_SERVER=running \
     bash -c '. "$1"; fm_herdr_up' _ "$LIB" >/dev/null 2>&1 || rc=$?
   expect_code 0 "$rc" "a running session not called 'default' was reported as unreachable"
   rc=0
-  HERDR_SESSION_NAME=fleet HERDR_SERVER=stopped \
+  HERDR_SESSION=fleet HERDR_SESSION_NAME=fleet HERDR_SERVER=stopped \
     bash -c '. "$1"; fm_herdr_up' _ "$LIB" >/dev/null 2>&1 || rc=$?
   if [ "$rc" = 0 ]; then fail "a stopped named session was reported as up"; fi
-  pass "reachability: any running session counts, whatever it is named"
+  pass "reachability: the session the verbs target counts, whatever it is named"
+}
+
+# THE OPPOSITE ERROR, and the one no gate covered - which is how it shipped.
+# Matching ANY running row answers a different question from the one dispatch
+# depends on: `herdr session list` ignores $HERDR_SESSION and lists every
+# session on the machine, while every verb targets $HERDR_SESSION only. So a
+# machine with `fleet` up and nothing on `default` reported REACHABLE, bootstrap
+# stayed silent, and the spawn died later at `tab create` with a worse, less
+# actionable diagnostic than the escalation this predicate exists to produce.
+test_a_running_session_the_verbs_cannot_reach_is_not_up() {
+  local rc=0
+  env -u HERDR_SESSION -u FM_HERDR_SESSION HERDR_SESSION_NAME=fleet HERDR_SERVER=running \
+    bash -c '. "$1"; fm_herdr_up' _ "$LIB" >/dev/null 2>&1 || rc=$?
+  if [ "$rc" = 0 ]; then
+    fail "a running session the verbs will never target was reported as reachable"
+  fi
+  pass "reachability: a running session the verbs cannot reach is not a reachable fleet"
 }
 
 # The override is for pinning ONE session deliberately. It must actually
@@ -116,6 +138,20 @@ test_the_session_override_pins_one_session() {
   pass "reachability: FM_HERDR_SESSION pins one named session"
 }
 
+# The pin has to move the VERBS, not just the probe. Filtering this predicate
+# while every verb still hit `default` is exactly the divergence above, dressed
+# up as an override that appeared to work.
+test_the_session_override_moves_the_verbs_too() {
+  local out
+  out=$(env -u HERDR_SESSION FM_HERDR_SESSION=fleet \
+    bash -c '. "$1"; printf "%s" "${HERDR_SESSION:-unset}"' _ "$LIB" 2>/dev/null)
+  assert_eq "$out" "fleet" "FM_HERDR_SESSION did not export HERDR_SESSION for the verbs"
+  out=$(env -u HERDR_SESSION -u FM_HERDR_SESSION \
+    bash -c '. "$1"; fm_herdr_session' _ "$LIB" 2>/dev/null)
+  assert_eq "$out" "default" "the probed session is not herdr's own default"
+  pass "reachability: the session pin moves the verbs, not only the probe"
+}
+
 # --- an unreachable herdr ESCALATES -----------------------------------------
 
 # The message has to be one the captain can act on: what is wrong, and that the
@@ -130,6 +166,18 @@ test_unreachable_herdr_escalates_with_an_actionable_message() {
   assert_contains "$out" "captain" "the escalation does not say whose decision this is"
   assert_contains "$out" "NOT falling back" "the escalation does not say it refused to degrade"
   pass "escalation: an unreachable herdr stops and asks, naming the problem and the decision"
+}
+
+# It must name WHICH session was missing. Another session can be plainly running
+# while the one the verbs target is not, and "no herdr server is running" would
+# send the captain to restart a server he can already see.
+test_the_escalation_names_the_session_it_looked_for() {
+  local out rc=0
+  out=$(FM_HERDR_SESSION=fleet HERDR_SESSION_NAME=other HERDR_SERVER=running \
+    bash -c '. "$1"; fm_herdr_require "crewmate z"' _ "$LIB" 2>&1) || rc=$?
+  if [ "$rc" = 0 ]; then fail "a session the verbs cannot reach passed the precondition"; fi
+  assert_contains "$out" "fleet" "the escalation does not name the session it looked for"
+  pass "escalation: the message names the session the verbs would have used"
 }
 
 test_absent_binary_escalates_with_its_own_reason() {
@@ -154,7 +202,10 @@ test_fm_mux_no_longer_selects_anything
 test_the_old_override_cannot_divert_anything
 test_reachability_is_only_ever_a_diagnostic
 test_a_named_session_is_a_running_server
+test_a_running_session_the_verbs_cannot_reach_is_not_up
 test_the_session_override_pins_one_session
+test_the_session_override_moves_the_verbs_too
 test_unreachable_herdr_escalates_with_an_actionable_message
+test_the_escalation_names_the_session_it_looked_for
 test_absent_binary_escalates_with_its_own_reason
 test_reachable_herdr_passes_silently

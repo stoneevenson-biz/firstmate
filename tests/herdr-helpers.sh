@@ -66,6 +66,21 @@ agent_get_json() {  # <agent_status>
     "${HERDR_TITLE:-i want to start working on our fm-herdr script}" \
     "${HERDR_TITLE:-i want to start working on our fm-herdr script}"
 }
+# HERDR_GONE=1 is the pane that is ALREADY CLOSED - the captain shut the tab by
+# hand, or herdr reaped it with its agent. Verified against herdr 0.8.2: every
+# one of these verbs returns rc=1 with a *_not_found envelope for an id that no
+# longer exists, which is indistinguishable by exit code alone from a close that
+# genuinely could not happen.
+if [ "${HERDR_GONE:-0}" = 1 ]; then
+  case "$1 $2" in
+    "pane get"|"pane close")
+      echo '{"error":{"code":"pane_not_found","message":"pane not found"},"id":"cli:pane"}' >&2
+      exit 1 ;;
+    "tab close")
+      echo '{"error":{"code":"tab_not_found","message":"tab not found"},"id":"cli:tab:close"}' >&2
+      exit 1 ;;
+  esac
+fi
 case "$1 $2" in
   "session list")
     # herdr manages NAMED persistent sessions, so the fake must be able to run

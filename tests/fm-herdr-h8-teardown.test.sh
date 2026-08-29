@@ -19,6 +19,7 @@
 #   * a post-cutover meta (mux=herdr) is closed with herdr verbs
 #   * a pre-cutover meta (no mux= line) is still closed with tmux - the drain
 #   * a close that FAILS is reported, not swallowed under a success message
+#   * a pane that is ALREADY GONE is a success, not a false leftover-pane alarm
 #   * LIVE: a real herdr tab created by the library is really gone afterwards
 set -u
 
@@ -69,6 +70,20 @@ test_a_failed_close_is_reported() {
   if [ "$rc" = 0 ]; then fail "a close that could not run reported success"; fi
   assert_contains "$out" "wM:p2" "the failure does not name the pane that was left behind"
   pass "teardown: a close that fails is reported, not swallowed"
+}
+
+# THE OTHER HALF, and the one that makes the warning above worth reading. A pane
+# the captain closed by hand is an ordinary path, and herdr answers rc=1 for it
+# on every close verb - so reading the exit code alone sent firstmate hunting a
+# leaked tab that does not exist, on every hand-closed crewmate. A warning that
+# cries wolf is a warning nobody acts on.
+test_an_already_closed_pane_is_a_successful_close() {
+  local fb out rc=0
+  fb=$(fm_herdr_fake_server "$TMP_ROOT/gone")
+  out=$(PATH="$fb:$PATH" HERDR_GONE=1 fm_herdr_close_pane "wM:p2" herdr 2>&1) || rc=$?
+  expect_code 0 "$rc" "a pane that is already gone was reported as a close that failed"
+  assert_eq "$out" "" "an already-gone pane produced a leftover-pane warning"
+  pass "teardown: a pane that is already gone is a successful close, not a leak"
 }
 
 # --- teardown itself calls it ----------------------------------------------
@@ -160,5 +175,6 @@ test_strict_mode_does_not_fire_against_a_live_server
 test_a_herdr_pane_is_closed_with_herdr
 test_a_pre_cutover_window_is_still_closed_with_tmux
 test_a_failed_close_is_reported
+test_an_already_closed_pane_is_a_successful_close
 test_fm_teardown_closes_through_the_surface
 test_live_a_real_herdr_tab_is_really_closed

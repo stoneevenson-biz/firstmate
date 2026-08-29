@@ -177,7 +177,8 @@ gh auth status >/dev/null 2>&1 || echo "NEEDS_GH_AUTH"
 # is checked; the MISSING sweep above already covers an absent binary, and
 # reporting both would read as two problems when there is one.
 if command -v herdr >/dev/null 2>&1 && ! fm_herdr_up; then
-  echo "NEEDS_HERDR_SERVER: no herdr server is running - crewmates cannot be spawned until one is. Start or attach it with \`herdr\`, then retry."
+  herdr_sess=$(fm_herdr_session)
+  echo "NEEDS_HERDR_SERVER: herdr session '$herdr_sess' is not running - crewmates cannot be spawned until it is, and every herdr verb targets that session only, so another session being up does not help. Start or attach it with \`herdr session attach $herdr_sess\` (or \`herdr\` for the default session), then retry."
 fi
 # Worktree-tangle check: the firstmate primary checkout (FM_ROOT) must sit on its
 # default branch, not a feature branch (see fm-tangle-lib.sh). Scoped to the

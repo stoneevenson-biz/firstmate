@@ -231,7 +231,7 @@ test_a_raw_target_is_a_tmux_address() {
   out=$(run "$PEEK" "sess:win" 20)
   assert_contains "$out" "raw pane content" "a raw session:window peek returned nothing"
   assert_grep "capture-pane" "$CALLS" "a raw session:window was not read with tmux"
-  pass "routing: a raw session:window is a tmux address unless FM_MUX says otherwise"
+  pass "routing: a raw session:window is a tmux address; nothing overrides that"
 }
 
 test_send_to_a_herdr_crewmate_is_acknowledged
