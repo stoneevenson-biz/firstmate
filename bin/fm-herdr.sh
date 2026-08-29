@@ -579,6 +579,15 @@ fm_herdr_close_pane() {  # <target> <mux>
   # DRAIN ONLY - a window that predates the cutover. Delete this branch when
   # fm_herdr_drain_pending reports nothing left in any home.
   if tmux kill-window -t "$target" 2>/dev/null; then return 0; fi
+  # ALREADY GONE IS A SUCCESSFUL CLOSE, on this branch exactly as on the herdr
+  # one above: kill-window fails for a window that no longer exists, and the
+  # captain closing a finished window by hand is an ordinary path, not a leak.
+  # Warning about it would send firstmate hunting a window that is not there and
+  # dilute the one signal this helper exists to produce.
+  if ! tmux list-windows -a -F '#{session_name}:#{window_name}' 2>/dev/null \
+    | grep -qFx -- "$target"; then
+    return 0
+  fi
   echo "fm-herdr: could not close tmux window $target; it may still be open" >&2
   return 1
 }
@@ -676,8 +685,16 @@ fm_herdr_drain_pending() {  # <state-dir>
 
 # --- the reconcile CLI ------------------------------------------------------
 #
-# Everything above is a library. Below runs only when this file is EXECUTED, so
-# sourcing it never trips the caller's shell options or runs a command.
+# Everything above is a library, and below runs only when this file is EXECUTED,
+# so sourcing it never trips the caller's shell options.
+#
+# ONE DELIBERATE EXCEPTION, and it is not an oversight: sourcing runs
+# `fm_herdr_session` once, which exports HERDR_SESSION when FM_HERDR_SESSION
+# pins one. The export has to land in the CALLER's environment - a pin that
+# moved this file's probe but not the herdr verbs is exactly the divergence that
+# reported a fleet reachable while every verb aimed at a session that was not
+# up. So sourcing does mutate the environment, and HERDR_SESSION is inherited by
+# every child of the sourcing script, including a launched crewmate.
 
 fm_herdr_cli() {
   set -euo pipefail

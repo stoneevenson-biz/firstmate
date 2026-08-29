@@ -437,7 +437,7 @@
     "gate-h1-herdr-only-surface": {
       "id": "gate-h1-herdr-only-surface",
       "title": "Selection: herdr is the only surface - no driver selector, no FM_MUX; an unreachable herdr escalates",
-      "observable": "no driver selector or dispatch layer exists in bin/, FM_MUX is read by no script, fm_herdr_up probes the one session the herdr verbs will actually use - a named session it can reach counts, a running session it cannot reach does not, and FM_HERDR_SESSION exports HERDR_SESSION so probe and verbs cannot diverge - and fm_herdr_require escalates non-zero naming the problem, the session it looked for, and the captain when no herdr server is reachable",
+      "observable": "no driver selector or dispatch layer exists in bin/, FM_MUX is read by no script, fm_herdr_up probes the one session the herdr verbs will actually use - a named session it can reach counts, a running session it cannot reach does not, and FM_HERDR_SESSION exports HERDR_SESSION so probe and verbs cannot diverge - and fm_herdr_require escalates non-zero naming the problem, the session it looked for, and the captain when no herdr server is reachable, and the fake-server suites are hermetic against an ambient session pin so the fake always models the session the probe asks about",
       "origin_mode": "build",
       "spec_ref": "data/captain.md#where-agents-run",
       "blocked_by": [],
@@ -488,7 +488,7 @@
     "gate-h8-teardown-closes-the-pane": {
       "id": "gate-h8-teardown-closes-the-pane",
       "title": "Teardown closes the pane on the surface that created it, and reports a close it could not do",
-      "observable": "fm_herdr_close_pane closes a mux=herdr pane with herdr verbs and a pre-cutover window with tmux, reports a close that cannot run while treating an already-gone pane as a successful close rather than a leftover-pane alarm, fm-teardown.sh routes both its own and its child closes through it, and a real herdr tab created by the library is really gone afterwards (live half proven on a machine with the real server; FM_TEST_REQUIRE_LIVE=1 turns a skip into a failure so it cannot be mistaken for proof)",
+      "observable": "fm_herdr_close_pane closes a mux=herdr pane with herdr verbs and a pre-cutover window with tmux, reports a close that cannot run while treating an already-gone pane OR an already-gone drained window as a successful close rather than a leftover-pane alarm, fm-teardown.sh routes both its own and its child closes through it, and a real herdr tab created by the library is really gone afterwards (live half proven on a machine with the real server; FM_TEST_REQUIRE_LIVE=1 turns a skip into a failure so it cannot be mistaken for proof)",
       "origin_mode": "build",
       "spec_ref": "data/captain.md#where-agents-run",
       "blocked_by": [],

@@ -86,8 +86,15 @@ case "$1 $2" in
     # herdr manages NAMED persistent sessions, so the fake must be able to run
     # one that is not called `default` - a reachability predicate pinned to that
     # name reported a plainly-running fleet as unreachable.
+    #
+    # The DEFAULT is the session the verbs would reach, resolved the same way
+    # fm_herdr_session resolves it, so a fake server always models a server that
+    # is actually reachable. Hardcoding `default` here made the fake disagree
+    # with the real binary the moment a session was pinned - the fake reported
+    # `default running` while the probe asked for the pinned name. A case that
+    # wants them to DIVERGE says so by setting HERDR_SESSION_NAME explicitly.
     printf 'name                 status   directory\n%-20s %s  /x\n' \
-      "${HERDR_SESSION_NAME:-default}" "${HERDR_SERVER:-running}" ;;
+      "${HERDR_SESSION_NAME:-${HERDR_SESSION:-default}}" "${HERDR_SERVER:-running}" ;;
   "workspace list") ws_json ;;
   "workspace create")
     # A created workspace joins the live set for the rest of this process tree.

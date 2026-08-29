@@ -605,7 +605,8 @@ reports nothing pending in every home the legacy library can go.
 
 Beyond spawning, the fleet stays legible only if it is organised:
 **one workspace per project, and every agent pane named for the work it is doing**,
-not for its task id. herdr addresses agents by name, so the name is the address.
+not for its task id. The name is what herdr itself addresses an agent by; firstmate's own
+scripts still address a crewmate as `fm-<id>`, which `state/<id>.meta` resolves.
 The workspace is resolved explicitly from the project name and created if absent - never
 left to whichever workspace happens to be focused; `FM_HERDR_WORKSPACE` overrides it.
 
@@ -624,17 +625,24 @@ which would shadow the real binary and make every call site depend on `PATH` ord
 Not yet migrated, and the gaps are NOT equally covered - know which is which before
 relying on any of them:
 
-- `bin/fm-watch.sh` and `bin/fm-ff-lib.sh` still read `window=` and call tmux on it, which
-  is what keeps the drain working. For a herdr crewmate, stale-pane detection is inert, so
-  a wedged crewmate is caught by its status file and the heartbeat review instead. That is
-  a degraded path with a real fallback.
+- `bin/fm-watch.sh` still reads `window=` and calls tmux on it, which is what keeps the
+  drain working. For a herdr crewmate, stale-pane detection is inert, so a wedged crewmate
+  is caught by its status file and the heartbeat review instead. That is a degraded path
+  with a real fallback. (`bin/fm-ff-lib.sh` is NOT part of this gap - it only collects
+  `window=` values into `FF_NUDGE_WINDOWS` for `bin/fm-send.sh`, which resolves a herdr
+  pane id correctly; it calls tmux nowhere.) Whoever migrates fm-watch must move
+  `window_for_task` in `bin/fm-supervise-daemon.sh` in the same change: it enumerates
+  `tmux list-windows -a` for `:fm-` names, and away-mode's stale recheck reads an empty
+  result as "task torn down, nothing to escalate". That path is dormant only because
+  fm-watch never emits a stale wake for a herdr pane; the moment it does, a wedged
+  crewmate would be silently dropped instead of escalated.
 - **The context watchdog has NO fallback.** `bin/fm-ctx-statusline.sh` stamps a session
   `managed:false` when `TMUX_PANE` is unset, and `fm-context-watch.sh` re-confirms the
   target through tmux at fire time, so no herdr crewmate is ever selected for a compaction
   checkpoint. A crewmate that reaches its context ceiling simply dies with no handoff
   written. Until this moves, watch context on long crewmates yourself.
 
-Five more are known and deliberately deferred. Each errs toward a false negative or a
+Six more are known and deliberately deferred. Each errs toward a false negative or a
 loud refusal - none of them loses work - but each is worth acting on:
 
 - **A steer to an idle crewmate reports "did not acknowledge" almost every time.**
@@ -668,9 +676,17 @@ loud refusal - none of them loses work - but each is worth acting on:
   name, so the captain's own non-fleet panes read as fleet, where the tmux inventory it
   replaced was scoped to the `firstmate` session. Whether to scope it to the workspaces
   in `data/projects.md` is the captain's call about what he wants to see at boot.
+- **A pane name is not a resolvable target for firstmate's own scripts.** herdr addresses
+  an agent by name and `fm-spawn.sh` records `name=<project>-<work>` in the meta, but
+  `fm_herdr_resolve`'s catch-all branch is drain-only: a bare argument that carries no
+  colon and no `fm-` prefix is looked up with `tmux list-windows`, so
+  `bin/fm-peek.sh afs-resource-registry` fails with `no window named ...`. It fails
+  loudly and `fm-<id>` still works, so nothing is stranded; resolve a name against this
+  home's metas (`grep -lFx "name=<want>"`) before falling through to tmux.
 
-The two "not yet migrated" gaps - `fm-watch.sh`/`fm-ff-lib.sh` and the context watchdog -
-should move onto `fm-herdr.sh` once the drain is empty, and the watchdog first.
+The two "not yet migrated" gaps above - `fm-watch.sh` (with the away-mode daemon's
+`window_for_task`) and the context watchdog - should move onto `fm-herdr.sh` once the
+drain is empty, and the watchdog first.
 `bin/fm-teardown.sh` HAS moved: it closes through `fm_herdr_close_pane`, which routes a
 herdr pane to herdr and a draining window to tmux.
 

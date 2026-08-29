@@ -189,6 +189,37 @@ test_absent_binary_escalates_with_its_own_reason() {
   pass "escalation: an absent binary escalates too - installing it is not this script's call"
 }
 
+# A SUITE MUST NOT DEPEND ON THE CAPTAIN'S OWN SHELL. The probe resolves
+# ${HERDR_SESSION:-default}, so an ambient pin - the very configuration the
+# override exists to support - would make every fake-server suite ask for a
+# session its fake does not model, and each would go red for a reason unrelated
+# to what it tests. tests/lib.sh neutralises the pin for every non-live suite,
+# which is a property; leaving each file to remember was a hope, and six of them
+# did not. A case that wants a named session still sets it per invocation.
+test_a_fake_server_suite_is_hermetic_against_an_ambient_pin() {
+  local rc=0 out
+  out=$(HERDR_SESSION=fleet FM_HERDR_SESSION=fleet HERDR_SERVER=running FB="$FB" \
+    bash -c '. "$1"; PATH="$FB:$PATH"; . "$2"; printf "%s" "${HERDR_SESSION:-unset}"' \
+    _ "$ROOT/tests/lib.sh" "$LIB" 2>/dev/null)
+  assert_eq "$out" "unset" "tests/lib.sh left the captain's session pin in the suite's environment"
+  HERDR_SESSION=fleet FM_HERDR_SESSION=fleet HERDR_SERVER=running FB="$FB" \
+    bash -c '. "$1"; PATH="$FB:$PATH"; . "$2"; fm_herdr_up' \
+    _ "$ROOT/tests/lib.sh" "$LIB" >/dev/null 2>&1 || rc=$?
+  expect_code 0 "$rc" "an ambient session pin made a fake-server suite see an unreachable fleet"
+  pass "reachability: a fake-server suite is hermetic against an ambient session pin"
+}
+
+# The fake must model a server the verbs would actually reach, or it proves
+# nothing about them. When a case pins a session deliberately, the fake's
+# default follows that pin rather than answering for `default`.
+test_the_fake_server_models_the_session_the_verbs_target() {
+  local rc=0
+  HERDR_SESSION=fleet HERDR_SERVER=running \
+    bash -c '. "$1"; fm_herdr_up' _ "$LIB" >/dev/null 2>&1 || rc=$?
+  expect_code 0 "$rc" "the fake answered for a session the probe would never ask about"
+  pass "reachability: the fake server models the session the verbs target"
+}
+
 test_reachable_herdr_passes_silently() {
   local out rc=0
   out=$(HERDR_SERVER=running bash -c '. "$1"; fm_herdr_require' _ "$LIB" 2>&1) || rc=$?
@@ -205,6 +236,8 @@ test_a_named_session_is_a_running_server
 test_a_running_session_the_verbs_cannot_reach_is_not_up
 test_the_session_override_pins_one_session
 test_the_session_override_moves_the_verbs_too
+test_a_fake_server_suite_is_hermetic_against_an_ambient_pin
+test_the_fake_server_models_the_session_the_verbs_target
 test_unreachable_herdr_escalates_with_an_actionable_message
 test_the_escalation_names_the_session_it_looked_for
 test_absent_binary_escalates_with_its_own_reason

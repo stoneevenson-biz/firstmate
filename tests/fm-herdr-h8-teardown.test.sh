@@ -86,6 +86,33 @@ test_an_already_closed_pane_is_a_successful_close() {
   pass "teardown: a pane that is already gone is a successful close, not a leak"
 }
 
+# The same truth on the OTHER branch. `tmux kill-window` also fails for a window
+# that no longer exists, so the drain path cried the same wolf for a pre-cutover
+# window the captain had closed himself. Both surfaces answer the same question:
+# is the window still there?
+test_an_already_closed_drain_window_is_a_successful_close() {
+  local fb out rc=0
+  fb=$(fm_herdr_fake_tmux "$TMP_ROOT/drain-gone")
+  out=$(PATH="$fb:$PATH" CALLS="$TMP_ROOT/drain-gone-calls" TMUX_RC=1 TMUX_WINDOWS="" \
+    fm_herdr_close_pane "firstmate:fm-old" "" 2>&1) || rc=$?
+  expect_code 0 "$rc" "a drained window that is already gone was reported as a close that failed"
+  assert_eq "$out" "" "an already-gone tmux window produced a leftover-window warning"
+  pass "teardown: a drained window that is already gone is a successful close, not a leak"
+}
+
+# And the warning still means something: a window that IS there and would not
+# close is the case teardown must not swallow.
+test_a_drain_window_that_will_not_close_is_reported() {
+  local fb out rc=0
+  fb=$(fm_herdr_fake_tmux "$TMP_ROOT/drain-stuck")
+  out=$(PATH="$fb:$PATH" CALLS="$TMP_ROOT/drain-stuck-calls" TMUX_RC=1 \
+    TMUX_WINDOWS="firstmate:fm-old" \
+    fm_herdr_close_pane "firstmate:fm-old" "" 2>&1) || rc=$?
+  if [ "$rc" = 0 ]; then fail "a drained window that is still open reported a successful close"; fi
+  assert_contains "$out" "firstmate:fm-old" "the failure does not name the window left behind"
+  pass "teardown: a drained window that will not close is still reported"
+}
+
 # --- teardown itself calls it ----------------------------------------------
 
 # The routing being right is worthless if teardown never reaches it. This is the
@@ -176,5 +203,7 @@ test_a_herdr_pane_is_closed_with_herdr
 test_a_pre_cutover_window_is_still_closed_with_tmux
 test_a_failed_close_is_reported
 test_an_already_closed_pane_is_a_successful_close
+test_an_already_closed_drain_window_is_a_successful_close
+test_a_drain_window_that_will_not_close_is_reported
 test_fm_teardown_closes_through_the_surface
 test_live_a_real_herdr_tab_is_really_closed

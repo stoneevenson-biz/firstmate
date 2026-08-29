@@ -116,6 +116,26 @@ if [ "${FM_TEST_ALLOW_LIVE_HERDR:-0}" != 1 ]; then
   export PATH
 fi
 
+# --- hermetic against the captain's own session pin -------------------------
+#
+# fm_herdr_up probes ${HERDR_SESSION:-default} because that is the session every
+# herdr verb targets, and FM_HERDR_SESSION exports it. So a captain who runs his
+# fleet under a named session - the configuration that pin exists for - would
+# otherwise change what every fake-server suite asserts: the probe asks for
+# `fleet` while a fake modelling `default` answers, and suites go red for a
+# reason that has nothing to do with the behavior under test.
+#
+# Neutralising it here rather than per file is deliberate. "Remember to unset
+# it" is a hope, not a property: one suite remembered and six did not, which is
+# exactly how the divergence stayed invisible. A case that WANTS a named session
+# sets it per invocation (env VAR=... or a prefix), which still works.
+#
+# The live gates are excluded on purpose: they drive the real binary, so the
+# captain's pin is the session they must actually reach.
+if [ "${FM_TEST_ALLOW_LIVE_HERDR:-0}" != 1 ]; then
+  unset HERDR_SESSION FM_HERDR_SESSION
+fi
+
 # --- fakebin / PATH shims ---------------------------------------------------
 #
 # fm_fakebin <dir> creates <dir>/fakebin and echoes it; prepend it to PATH to
