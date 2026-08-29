@@ -654,10 +654,19 @@ fm_herdr_resolve() {  # <window-or-target> <state-dir>
         # that does not exist - peek and steer broke for exactly the crewmates a
         # busy fleet has most of. Anything else with a colon is a tmux
         # session:window, which is drain-only.
-        case "$want" in
-          w[0-9A-Za-z]*:p[0-9A-Za-z]*) FM_HERDR_DRAIN=0 ;;
-          *)                           FM_HERDR_DRAIN=1 ;;
-        esac
+        #
+        # The match is ANCHORED to the shape the binary actually emits, because
+        # the same test errs both ways: a glob whose tails are `*` also swallows
+        # `work:prod-fix`, `web:pane1` and `wide:print`, which are tmux
+        # session:window pairs, and sends herdr verbs at them. Base-36 here
+        # means UPPERCASE - verified against herdr 0.8.2, whose counters read
+        # `wM:p9`, `wM:pA`, `wN:p1`, never a lowercase digit - so the lowercase
+        # words that make a plausible tmux session stay on the drain path.
+        if [[ $want =~ ^w[0-9A-Z]+:p[0-9A-Z]+$ ]]; then
+          FM_HERDR_DRAIN=0
+        else
+          FM_HERDR_DRAIN=1
+        fi
       fi
       ;;
     fm-*)

@@ -57,17 +57,59 @@ in_fresh() {  # <env-assignments...> -- <snippet>
 # for a suite whose subject IS a real server it creates and destroys itself; it
 # is greppable, so the exemptions are a list someone can read and shrink rather
 # than an absence nobody can see.
+#
+# "through a helper that does" is FOLLOWED, not assumed. Accepting any sourced
+# helper as proof would make this check vacuous one helper from now: a
+# `tests/foo-helpers.sh` that never reaches lib.sh would mark every suite
+# sourcing it as guarded while those suites queried the captain's live servers
+# - the fails-open direction, in the gate whose whole job is to close it. So
+# the chain is walked to lib.sh, which is where it terminates because lib.sh IS
+# the net.
+reaches_the_net() {  # <file> [<depth>]
+  local file=$1 depth=${2:-0} dir helper
+  [ "$depth" -lt 8 ] || return 1          # a source cycle is not proof
+  [ -f "$file" ] || return 1
+  [ "$(basename "$file")" = lib.sh ] && return 0
+  dir=$(dirname "$file")
+  while read -r helper; do
+    [ -n "$helper" ] || continue
+    reaches_the_net "$dir/$helper" "$((depth + 1))" && return 0
+  done < <(sed -nE 's/^\. "\$\(dirname "\$\{BASH_SOURCE\[0\]\}"\)\/([A-Za-z0-9._-]+\.sh)".*/\1/p' "$file")
+  return 1
+}
+
 test_every_suite_is_under_the_net_or_declares_that_it_is_not() {
   local f base unguarded=()
   for f in "$ROOT"/tests/*.test.sh; do
     base=$(basename "$f")
-    grep -qE '^\. "\$\(dirname "\$\{BASH_SOURCE\[0\]\}"\)/[a-z.-]+\.sh"' "$f" && continue
+    reaches_the_net "$f" && continue
     grep -q '^# HERMETICITY-WAIVER:' "$f" && continue
     unguarded+=("$base")
   done
   [ "${#unguarded[@]}" -eq 0 ] || fail \
     "these suites neither source tests/lib.sh nor declare a HERMETICITY-WAIVER, so they can reach the captain's live servers unnoticed: ${unguarded[*]}"
-  pass "hermeticity: every suite is under the net or declares in-file why it is not"
+  pass "hermeticity: every suite reaches tests/lib.sh through its own source chain, or declares in-file why it does not"
+}
+
+# The check above is only worth having if it actually FOLLOWS the chain, so the
+# walker is exercised against a helper that sources nothing. Before this, such a
+# helper read as proof of guarding for every suite that sourced it.
+# shellcheck disable=SC2016  # the source lines below are written out verbatim, not expanded
+test_a_helper_that_never_reaches_lib_is_not_proof() {
+  local sandbox
+  sandbox=$(fm_test_tmproot fm-herm-chain)
+  printf '%s\n' '# a helper that reaches nothing' > "$sandbox/orphan-helpers.sh"
+  printf '%s\n' '. "$(dirname "${BASH_SOURCE[0]}")/orphan-helpers.sh"' > "$sandbox/a.test.sh"
+  reaches_the_net "$sandbox/a.test.sh" \
+    && fail "a suite sourcing a helper that never reaches lib.sh was accepted as guarded"
+
+  # ... and a helper that DOES reach it, two hops out, still counts.
+  cp "$ROOT/tests/lib.sh" "$sandbox/lib.sh"
+  printf '%s\n' '. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"' > "$sandbox/mid-helpers.sh"
+  printf '%s\n' '. "$(dirname "${BASH_SOURCE[0]}")/mid-helpers.sh"' > "$sandbox/b.test.sh"
+  reaches_the_net "$sandbox/b.test.sh" \
+    || fail "a suite reaching lib.sh through two helpers was reported unguarded"
+  pass "hermeticity: the under-the-net check follows the source chain rather than trusting its first hop"
 }
 
 # A waiver must not become a way to opt out of thinking. Each one has to say
@@ -80,6 +122,35 @@ test_every_waiver_states_a_reason() {
     [ "${#line}" -gt 40 ] || fail "$base carries a bare HERMETICITY-WAIVER with no reason"
   done
   pass "hermeticity: every waiver names the real server it is exempt for"
+}
+
+# --- the fixtures themselves have to do what they claim ---------------------
+#
+# THE DEFECT THIS EXISTS FOR. Every suite in tests/ opens with
+# `TMP_ROOT=$(fm_test_tmproot ...)`, and a command substitution is a SUBSHELL.
+# A version of that helper which installed its own EXIT trap on first use
+# installed it inside that subshell, so the trap fired as the substitution
+# closed and deleted the directory it had just handed back. The caller silently
+# re-created the path with mkdir -p, nothing was ever registered in the parent,
+# and every suite leaked its temp root on every run - the precise accumulation
+# the helper was written to prevent, passing green the whole time because a
+# leak is invisible from inside the suite that causes it. Both halves are
+# pinned here: the directory must still exist to the caller, and it must be
+# gone once the shell that made it has exited.
+test_the_temp_root_survives_a_subshell_and_is_cleaned_on_exit() {
+  local path
+  # shellcheck disable=SC2016  # the snippet is evaluated in the fresh shell, not here
+  path=$(in_fresh -- '
+    p=$(fm_test_tmproot fm-herm-probe)
+    [ -d "$p" ] || { echo "GONE-TOO-EARLY"; exit 1; }
+    printf "%s\n" "$p"')
+  case "$path" in
+    GONE-TOO-EARLY*) fail "fm_test_tmproot deleted its own directory as the command substitution closed" ;;
+    /*) : ;;
+    *) fail "fm_test_tmproot returned no usable path: $path" ;;
+  esac
+  [ -e "$path" ] && fail "the temp root outlived the shell that created it, so every suite leaks one per run: $path"
+  pass "fixtures: a temp root taken with \$( ) is usable by the caller and removed when the suite exits"
 }
 
 # --- the default: neither binary is reachable -------------------------------
@@ -262,6 +333,8 @@ test_an_absent_real_binary_is_reported_not_execed() {
 }
 
 test_every_suite_is_under_the_net_or_declares_that_it_is_not
+test_a_helper_that_never_reaches_lib_is_not_proof
+test_the_temp_root_survives_a_subshell_and_is_cleaned_on_exit
 test_every_waiver_states_a_reason
 test_a_forgetful_suite_cannot_reach_either_binary
 test_the_two_opt_outs_are_independent

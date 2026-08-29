@@ -181,9 +181,15 @@ test_a_letter_suffixed_pane_id_is_not_drained() {
   pass "explicit: a base-36 herdr pane id is addressed as herdr, never drained"
 }
 
+# The same shape test errs in BOTH directions, so both are pinned. Matching too
+# narrowly drained real panes; matching with unanchored tails swallows tmux
+# targets that merely start `w...:p...` - `work:prod-fix` and `web:pane1` are
+# session:window pairs, and sending herdr verbs at them is the same misrouting
+# with the surfaces swapped.
 test_an_explicit_tmux_target_still_drains() {
   local t
-  for t in firstmate:fm-drainer other:fm-thing firstmate:pending-fix; do
+  for t in firstmate:fm-drainer other:fm-thing firstmate:pending-fix \
+           work:prod-fix web:pane1 wide:print; do
     fm_herdr_resolve "$t" "$STATE" || fail "explicit target $t would not resolve"
     assert_eq "$FM_HERDR_TARGET" "$t" "the explicit target was rewritten"
     assert_eq "$FM_HERDR_DRAIN" "1" "tmux target $t was misclassified as a herdr pane"
