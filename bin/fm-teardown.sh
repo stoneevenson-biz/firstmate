@@ -20,6 +20,9 @@
 # leased home releases its durable treehouse lease so the pool slot is freed,
 # never left leased forever. If the treehouse return fails, teardown leaves the
 # leased home and state in place instead of hiding a still-held lease.
+# A pane that could NOT be closed is warned about AND recorded: the task's meta
+# is kept aside as state/<id>.orphan-pane so the leftover pane stays findable
+# after the volatile state is cleared.
 # Usage: fm-teardown.sh <task-id> [--force]
 #   --force skips the unpushed-work check for ordinary tasks and discards
 #   secondmate child work for kind=secondmate. Only use it when the captain has
@@ -486,7 +489,37 @@ fi
 # Close the pane on the surface that created it, and say so if it could not be
 # closed. Reporting "teardown complete" over a leaked tab is the defect this
 # replaces (Quarterdeck reject, attempt 1).
-fm_herdr_close_pane "$T" "$MUX" || echo "warning: teardown could not close $T for $ID; check for a leftover pane" >&2
+#
+# AND KEEP THE RECORD WHEN THE CLOSE FAILED. The warning names a pane, and the
+# only durable thing tying that pane to this task is the meta deleted a few
+# lines below - so the operator was told to go hunting and the map was burned in
+# the same run. A copy of the record is kept aside before that delete: it holds
+# every meta line (window=, mux=, project=, kind=) plus how it was orphaned, so a
+# later reconcile can still find and close the leftover pane.
+#
+# It is a separate `.orphan-pane` file rather than the meta left in place on
+# purpose. Every in-flight scan in the fleet - fm-guard's alarm, fm-watch's task
+# set, secondmate teardown's refusal, the boot digest - globs `state/*.meta`, so
+# keeping the meta would report a finished task as live forever. Misleading a
+# supervisor is the same class of defect as the leak itself; `.orphan-pane` is
+# outside that glob.
+ORPHAN_RECORD=""
+if ! fm_herdr_close_pane "$T" "$MUX"; then
+  ORPHAN_RECORD="$STATE/$ID.orphan-pane"
+  {
+    printf '# firstmate: teardown of %s could not close its pane; this record is kept\n' "$ID"
+    printf '# so the leftover pane stays findable. Close it, then delete this file.\n'
+    cat "$META"
+    printf 'orphan-pane=%s\n' "$T"
+    printf 'orphan-mux=%s\n' "${MUX:-tmux-drain}"
+    printf 'orphan-since=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  } > "$ORPHAN_RECORD" || ORPHAN_RECORD=""
+  if [ -n "$ORPHAN_RECORD" ]; then
+    echo "warning: teardown could not close $T for $ID; kept the task record at $ORPHAN_RECORD so the leftover pane stays findable - close the pane, then delete that file" >&2
+  else
+    echo "warning: teardown could not close $T for $ID; check for a leftover pane" >&2
+  fi
+fi
 if [ "$KIND" = secondmate ]; then
   [ -n "$HOME_PATH" ] || HOME_PATH=$WT
   remove_firstmate_home "$HOME_PATH" "secondmate home" "$ID"
@@ -496,5 +529,9 @@ rm -f "$STATE/$ID.status" "$STATE/$ID.turn-ended" "$STATE/$ID.check.sh" "$STATE/
 if [ "$KIND" != scout ] && [ "$KIND" != secondmate ] && [ "$MODE" != local-only ]; then
   "$FM_ROOT/bin/fm-fleet-sync.sh" "$PROJ" || true
 fi
-echo "teardown $ID complete (window $T, worktree $WT)"
+if [ -n "$ORPHAN_RECORD" ]; then
+  echo "teardown $ID complete (worktree $WT); pane $T was NOT closed - record kept at $ORPHAN_RECORD"
+else
+  echo "teardown $ID complete (window $T, worktree $WT)"
+fi
 backlog_refresh_reminder

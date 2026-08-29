@@ -33,6 +33,6 @@ Each file also starts with a short header comment.
 | `fm-status.sh`           | Append one crewmate status line to a home's status file; briefs teach this verb because a shell redirect into the firstmate tree is refused as an edit |
 | `fm-pr-check.sh`         | Record a PR-ready task and arm the watcher's merge poll                                                             |
 | `fm-promote.sh`          | Promote a scout task in place so it becomes a protected ship task                                                   |
-| `fm-teardown.sh`         | Return the worktree or retire/release a secondmate home and close its pane on the surface that created it, warning rather than staying silent when a pane could not be closed; protects ship work, requires scout reports, checks child work, and prints the backlog reminder |
+| `fm-teardown.sh`         | Return the worktree or retire/release a secondmate home and close its pane on the surface that created it, warning rather than staying silent when a pane could not be closed and keeping the task record at `state/<id>.orphan-pane` so that leftover pane stays findable; protects ship work, requires scout reports, checks child work, and prints the backlog reminder |
 | `fm-harness.sh`          | Detect the running harness; resolve the effective crewmate harness                                                  |
 | `fm-lock.sh`             | Per-home firstmate session lock                                                                                     |

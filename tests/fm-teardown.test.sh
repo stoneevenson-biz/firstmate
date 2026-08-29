@@ -121,6 +121,71 @@ run_teardown() {
     "$TEARDOWN" task-x1 "$@"
 }
 
+# A close that could not happen must leave the map behind. The warning names a
+# pane; the meta is the only durable thing tying that pane to the task, and
+# deleting it in the same run told the operator to go hunting and burned the map.
+fail_the_close() {
+  local case_dir=$1
+  cat > "$case_dir/fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+# The window is there and will not close: the one case teardown must not swallow.
+case "${1:-}" in
+  kill-window)  exit 1 ;;
+  list-windows) printf 'fm-task-x1\n'; exit 0 ;;
+esac
+exit 0
+SH
+  chmod +x "$case_dir/fakebin/tmux"
+}
+
+test_a_failed_close_keeps_the_task_record() {
+  local case_dir rc record
+  case_dir=$(make_case close-fails)
+  write_meta "$case_dir" local-only ship
+  fail_the_close "$case_dir"
+  record="$case_dir/state/task-x1.orphan-pane"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "close-fails: teardown should still complete its own cleanup"
+  [ -f "$record" ] || fail "close-fails: the task record was not kept; the leftover pane is unfindable"
+  grep -qF 'window=fm-task-x1' "$record" \
+    || fail "close-fails: the kept record does not name the pane"
+  grep -qF 'orphan-pane=fm-task-x1' "$record" \
+    || fail "close-fails: the kept record does not say which pane was orphaned"
+  grep -qF 'orphan-since=' "$record" \
+    || fail "close-fails: the kept record does not say when it was orphaned"
+  [ ! -f "$case_dir/state/task-x1.meta" ] \
+    || fail "close-fails: the meta was left in the in-flight glob; the task would read as live forever"
+  grep -qF "$record" "$case_dir/stderr" \
+    || fail "close-fails: the warning does not say the record was kept, or where"
+  grep -qF 'was NOT closed' "$case_dir/stdout" \
+    || fail "close-fails: teardown reported a plain completion over a pane it could not close"
+  pass "a close that failed keeps the task record, outside the in-flight glob, and says so"
+}
+
+test_a_successful_close_leaves_no_orphan_record() {
+  local case_dir rc
+  case_dir=$(make_case close-succeeds)
+  write_meta "$case_dir" local-only ship
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "close-succeeds: teardown should succeed"
+  [ ! -f "$case_dir/state/task-x1.orphan-pane" ] \
+    || fail "close-succeeds: a clean teardown left an orphan record; the signal would mean nothing"
+  [ ! -f "$case_dir/state/task-x1.meta" ] || fail "close-succeeds: the meta was not cleared"
+  grep -qF 'teardown task-x1 complete (window fm-task-x1' "$case_dir/stdout" \
+    || fail "close-succeeds: the ordinary completion line changed"
+  pass "a clean close leaves no orphan record (the warning keeps its meaning)"
+}
+
 test_local_only_fork_remote_allows() {
   local case_dir rc
   case_dir=$(make_case fork-allow)
@@ -256,3 +321,5 @@ test_local_only_merged_to_local_main_allows
 test_no_mistakes_origin_remote_allows
 test_no_mistakes_truly_unpushed_refuses
 test_local_only_force_overrides_unpushed
+test_a_failed_close_keeps_the_task_record
+test_a_successful_close_leaves_no_orphan_record

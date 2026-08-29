@@ -83,6 +83,7 @@ state/               volatile runtime signals; gitignored
   <id>.turn-ended    touched by turn-end hooks
   <id>.meta          written by fm-spawn: window=, worktree=, project=, harness=, mux=, name=, kind=, mode=, yolo=; `bin/fm-herdr.sh` owns what window= and mux= mean (section 8); kind=secondmate also records home= and projects= (fm-pr-check appends pr=)
   <id>.check.sh      optional slow poll you write per task (e.g. merged-PR check)
+  <id>.orphan-pane   kept by fm-teardown ONLY when it could not close the task's pane: the task's meta lines plus orphan-pane=, orphan-mux=, orphan-since=. Deliberately outside the `*.meta` glob so a finished task never reads as in flight; close the leftover pane, then delete the file
   .wake-queue        durable queued wakes: epoch<TAB>seq<TAB>kind<TAB>key<TAB>payload
   .afk               durable away-mode flag; present = sub-supervisor may inject escalations (set by /afk, cleared on user return)
   .watch.lock .wake-queue.lock watcher singleton and queue serialization locks
