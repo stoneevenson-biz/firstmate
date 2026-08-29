@@ -36,12 +36,14 @@ _fmg_real() {
 }
 
 # Scan a COPY of the argument list: the real one has to survive intact for the
-# exec below, so this must never shift "$@".
+# exec below, so this must never shift "$@". args is 0-indexed, so index 0 is
+# the verb and the flags run to n-1; reading args[n] would be past the end, and
+# under `set -u` that aborts the guard instead of refusing.
 _fmg_target_of() {  # <args...> -> the -t value, or empty
   local args=("$@") i=1 n=$#
-  while [ "$i" -le "$n" ]; do
+  while [ "$i" -lt "$n" ]; do
     case "${args[i]}" in
-      -t) i=$((i + 1)); [ "$i" -le "$n" ] && printf '%s' "${args[i]}"; return 0 ;;
+      -t) i=$((i + 1)); [ "$i" -lt "$n" ] && printf '%s' "${args[i]}"; return 0 ;;
       -t*) printf '%s' "${args[i]#-t}"; return 0 ;;
     esac
     i=$((i + 1))
@@ -53,14 +55,22 @@ _fmg_target_of() {  # <args...> -> the -t value, or empty
 # Scoping the -t target is therefore not just insufficient there, it is exactly
 # backwards - a correctly declared throwaway session would spare itself and take
 # the fleet's with it. There is no scoped form of "all but", so it is refused.
+#
+# This walks the argv the same way _fmg_target_of does, and it has to: -t carries
+# a VALUE, so `-t bar` and the combined `-tbar` are targets, not flag bundles. A
+# plain "does any arg contain an a" scan reads `-tbar` as -a and refuses a kill
+# that was correctly scoped - failing closed, but for a reason that is a lie.
 _fmg_has_all_flag() {  # <args...>
-  local a
-  for a in "$@"; do
-    case "$a" in
+  local args=("$@") i=1 n=$#
+  while [ "$i" -lt "$n" ]; do
+    case "${args[i]}" in
       --) return 1 ;;
+      -t) i=$((i + 2)); continue ;;
+      -t*) i=$((i + 1)); continue ;;
       -a|-a[!-]*) return 0 ;;
-      -*a*) case "$a" in --*) ;; *) return 0 ;; esac ;;
+      -*a*) case "${args[i]}" in --*) ;; *) return 0 ;; esac ;;
     esac
+    i=$((i + 1))
   done
   return 1
 }

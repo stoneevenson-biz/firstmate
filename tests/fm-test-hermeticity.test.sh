@@ -124,6 +124,49 @@ test_a_kill_with_no_declared_session_is_refused() {
   pass "hermeticity: an unscopeable, inverted or undeclared kill is refused, not aimed at the current session"
 }
 
+# The guard reads the same argv twice - once for the -t target, once for the
+# inverting -a - and the two readings have to agree about what an argument IS.
+# `-t` carries a VALUE, so `-tbar` is a target, not a flag bundle; a scan that
+# only asks "does this contain an a" reads it as -a and refuses a correctly
+# scoped kill, which fails closed but for a reason that is a lie. And a kill
+# with no flags at all must reach the refusal rather than dying on an
+# out-of-range index under `set -u`, which would abort the guard before it ever
+# decided anything.
+#
+# Both verdicts are read WITHOUT a live tmux: pointing PATH at nothing means an
+# allowed verb stops at the guard's own "no real tmux binary" report, which is
+# proof it got past the scoping check with no live server involved.
+test_the_two_argv_readings_agree() {
+  local out rc form ses argv
+  # "<declared session>|<argv>" - the -t value is the target in every allowed
+  # row, including `-ta`, where tmux reads the "a" as -t's value and not as -a.
+  local -a allowed=("fmthrow|kill-session -tfmthrow" \
+                    "fmthrow|kill-session -t fmthrow" \
+                    "fmthrow|kill-window -tfmthrow:fm-drainer" \
+                    "a|kill-session -ta")
+  local -a refused=("kill-session -at fmthrow" \
+                    "kill-session -abc" \
+                    "kill-session")
+  for form in "${allowed[@]}"; do
+    ses=${form%%|*}; argv=${form#*|}; rc=0
+    # shellcheck disable=SC2086
+    out=$(FM_TEST_LIVE_TMUX_SESSION="$ses" PATH=/nonexistent-fm-test \
+          "$BASH" "$GUARD" $argv 2>&1) || rc=$?
+    assert_contains "$out" "no real tmux binary" \
+      "the guard refused '$argv', which is scoped to the declared session '$ses'"
+  done
+  for argv in "${refused[@]}"; do
+    rc=0
+    # shellcheck disable=SC2086
+    out=$(FM_TEST_LIVE_TMUX_SESSION=fmthrow PATH=/nonexistent-fm-test \
+          "$BASH" "$GUARD" $argv 2>&1) || rc=$?
+    expect_code 97 "$rc" "'$argv' did not reach a refusal (the guard aborted or allowed it)"
+    assert_contains "$out" "refusing a destructive tmux verb" \
+      "'$argv' failed without the guard's own refusal"
+  done
+  pass "hermeticity: the -t target and the inverting -a are read from one argv, consistently"
+}
+
 # The guard must not become a second deny shim: a read-only verb, and a kill
 # INSIDE the declared session, both have to reach the real binary. Run through
 # in_fresh with the opt-in set, because that is the only PATH where the guard
@@ -183,4 +226,5 @@ test_opting_in_still_routes_through_the_guard
 test_an_absent_real_binary_is_reported_not_execed
 test_a_kill_outside_the_declared_session_is_refused
 test_a_kill_with_no_declared_session_is_refused
+test_the_two_argv_readings_agree
 test_the_guard_passes_scoped_and_harmless_verbs_through

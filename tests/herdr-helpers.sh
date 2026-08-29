@@ -305,7 +305,7 @@ fm_herdr_fake_tmux() {  # <dir>
   local fb="$1/fakebin"; mkdir -p "$fb"
   cat > "$fb/tmux" <<'SH'
 #!/usr/bin/env bash
-printf '%s\n' "$*" >> "$CALLS"
+printf '%s\n' "$*" >> "${CALLS:-/dev/null}"
 case "$1" in
   capture-pane) cat "${PANE_FILE:-/dev/null}" 2>/dev/null ;;
   display-message)

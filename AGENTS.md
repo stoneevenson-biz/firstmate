@@ -654,7 +654,7 @@ relying on any of them:
   checkpoint. A crewmate that reaches its context ceiling simply dies with no handoff
   written. Until this moves, watch context on long crewmates yourself.
 
-Six more are known and deliberately deferred. Each errs toward a false negative or a
+Eight more are known and deliberately deferred. Each errs toward a false negative or a
 loud refusal - none of them loses work - but each is worth acting on:
 
 - **A steer to an idle crewmate reports "did not acknowledge" almost every time.**
@@ -695,6 +695,26 @@ loud refusal - none of them loses work - but each is worth acting on:
   `bin/fm-peek.sh afs-resource-registry` fails with `no window named ...`. It fails
   loudly and `fm-<id>` still works, so nothing is stranded; resolve a name against this
   home's metas (`grep -lFx "name=<want>"`) before falling through to tmux.
+- **The tests' live-tmux guard scopes kills, not creates or sends.**
+  `tests/denybin/live-tmux/tmux` allows every non-kill verb straight through to the real
+  server once a suite sets `FM_TEST_ALLOW_LIVE_TMUX=1`, so `new-window` / `new-session`
+  can still leave a stray window in the captain's live session - which is the accident
+  that actually happened on this branch (`firstmate:fm-fallback-t8`) - and an unscoped
+  `send-keys` would type into a live pre-cutover crewmate's composer. The asymmetry is
+  deliberate: a create leaves clutter someone tidies up, a kill against a draining
+  crewmate takes unlanded commits with it, so the guard covers the irreversible half
+  first. Extending the same `-t`-must-name-`FM_TEST_LIVE_TMUX_SESSION` check to the
+  create and send verbs closes the rest.
+- **The launch prefix does not survive an agent restarted in its own pane.**
+  `bin/fm-spawn.sh` passes `HERDR_SESSION`, `FM_HOME` and the operational overrides as a
+  `VAR=x <cmd>` prefix on the launch string, which scopes them to the harness process
+  only - not to the pane's shell. So if a crewmate's agent exits and the captain restarts
+  it in that same pane, every pin is gone, and a secondmate restarted that way probes the
+  `default` session while its fleet lives elsewhere. `herdr tab create` has `--env
+  <KEY=VALUE>` (verified against 0.8.2), which sets the variable on the launched process
+  so it survives, and bypasses the shell quoting the launch string otherwise needs.
+  Deferred because it changes the launch contract of every direct report, not because
+  the spawn path is wrong today.
 
 The two "not yet migrated" gaps above - `fm-watch.sh` (with the away-mode daemon's
 `window_for_task`) and the context watchdog - should move onto `fm-herdr.sh` once the
