@@ -585,11 +585,22 @@ fm_herdr_close_pane() {  # <target> <mux>
   # captain closing a finished window by hand is an ordinary path, not a leak.
   # Warning about it would send firstmate hunting a window that is not there and
   # dilute the one signal this helper exists to produce.
-  if ! tmux list-windows -a -F '#{session_name}:#{window_name}' 2>/dev/null \
-    | grep -qFx -- "$target"; then
-    return 0
+  #
+  # But GONE MUST BE OBSERVED, never inferred from silence. An absent tmux, a
+  # dropped server or any other unreadable listing also yields no matching line,
+  # and treating that as gone reports a successful close for a window nothing
+  # ever touched - teardown then prints no warning, deletes the meta and calls
+  # itself complete, which is the exact leak this helper was written to stop.
+  # So the LISTING itself has to succeed before its silence means anything; the
+  # herdr branch above is the same rule, keyed on an explicit not-found envelope.
+  local listing lrc=0
+  listing=$(tmux list-windows -a -F '#{session_name}:#{window_name}' 2>/dev/null) || lrc=$?
+  if [ "$lrc" = 0 ]; then
+    if ! printf '%s\n' "$listing" | grep -qFx -- "$target"; then return 0; fi
+    echo "fm-herdr: could not close tmux window $target; it may still be open" >&2
+    return 1
   fi
-  echo "fm-herdr: could not close tmux window $target; it may still be open" >&2
+  echo "fm-herdr: could not close tmux window $target and could not determine whether it is still open" >&2
   return 1
 }
 

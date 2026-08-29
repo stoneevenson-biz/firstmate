@@ -488,7 +488,7 @@
     "gate-h8-teardown-closes-the-pane": {
       "id": "gate-h8-teardown-closes-the-pane",
       "title": "Teardown closes the pane on the surface that created it, and reports a close it could not do",
-      "observable": "fm_herdr_close_pane closes a mux=herdr pane with herdr verbs and a pre-cutover window with tmux, reports a close that cannot run while treating an already-gone pane OR an already-gone drained window as a successful close rather than a leftover-pane alarm, fm-teardown.sh routes both its own and its child closes through it, and a real herdr tab created by the library is really gone afterwards (live half proven on a machine with the real server; FM_TEST_REQUIRE_LIVE=1 turns a skip into a failure so it cannot be mistaken for proof)",
+      "observable": "fm_herdr_close_pane closes a mux=herdr pane with herdr verbs and a pre-cutover window with tmux, reports a close that cannot run while treating an already-gone pane OR an already-gone drained window as a successful close rather than a leftover-pane alarm, gone is OBSERVED and never inferred from silence so an unreadable or absent tmux is reported as an undetermined close instead of a clean one, fm-teardown.sh routes both its own and its child closes through it, and a real herdr tab created by the library is really gone afterwards (live half proven on a machine with the real server; FM_TEST_REQUIRE_LIVE=1 turns a skip into a failure so it cannot be mistaken for proof)",
       "origin_mode": "build",
       "spec_ref": "docs/plans/cmux-herdr-surface-split.md",
       "blocked_by": [],

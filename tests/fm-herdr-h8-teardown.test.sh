@@ -113,6 +113,33 @@ test_a_drain_window_that_will_not_close_is_reported() {
   pass "teardown: a drained window that will not close is still reported"
 }
 
+# GONE MUST BE OBSERVED, NEVER INFERRED FROM SILENCE. The two cases above both
+# read the window listing, and an unreadable listing is empty for the same
+# reason a hand-closed window is: nothing names the target. Concluding "gone"
+# from that reports a successful close for a window nothing ever touched -
+# teardown then warns about nothing, deletes the meta and calls itself complete,
+# which is the same leak the helper exists to stop, reached by a different road.
+test_an_undeterminable_drain_window_is_not_called_gone() {
+  local fb out rc=0
+  # 1. tmux answers, but the listing itself failed.
+  fb=$(fm_herdr_fake_tmux "$TMP_ROOT/drain-unreadable")
+  out=$(PATH="$fb:$PATH" CALLS="$TMP_ROOT/drain-unreadable-calls" TMUX_RC=1     TMUX_LIST_RC=1 TMUX_WINDOWS=""     fm_herdr_close_pane "firstmate:fm-old" "" 2>&1) || rc=$?
+  if [ "$rc" = 0 ]; then
+    fail "an unreadable window listing was read as proof the window is gone"
+  fi
+  assert_contains "$out" "firstmate:fm-old" "the failure does not name the window it could not close"
+  assert_contains "$out" "could not determine"     "the failure does not distinguish 'still open' from 'could not tell'"
+
+  # 2. tmux is not on PATH at all - the same silence, no server involved.
+  rc=0
+  out=$(PATH="$(fm_herdr_path_without_binary tmux)"     fm_herdr_close_pane "firstmate:fm-old" "" 2>&1) || rc=$?
+  if [ "$rc" = 0 ]; then
+    fail "an absent tmux was read as proof the window is gone"
+  fi
+  assert_contains "$out" "could not determine"     "an absent tmux did not report that the outcome is unknown"
+  pass "teardown: a close that cannot be verified is reported, not called gone"
+}
+
 # --- teardown itself calls it ----------------------------------------------
 
 # The routing being right is worthless if teardown never reaches it. This is the
@@ -205,5 +232,6 @@ test_a_failed_close_is_reported
 test_an_already_closed_pane_is_a_successful_close
 test_an_already_closed_drain_window_is_a_successful_close
 test_a_drain_window_that_will_not_close_is_reported
+test_an_undeterminable_drain_window_is_not_called_gone
 test_fm_teardown_closes_through_the_surface
 test_live_a_real_herdr_tab_is_really_closed

@@ -34,8 +34,17 @@
 #   HERDR_PANE_CWD    what `pane get` reports as foreground_cwd
 #   HERDR_KEY_FAIL    1 -> both `agent send-keys` and `pane send-keys` refuse
 #   HERDR_PANE_FILE   file whose contents `agent read`/`pane read` return
+#   HERDR_RUN_MODE    echo|deaf|cmd - what the pane's shell does with `pane run`
 #   HERDR_READ_FAIL   1 -> both `agent read` and `pane read` refuse
 #   CALLS             file every invocation's argv is appended to
+#
+# EVERY error envelope goes to STDERR, as the real binary's does, and no branch
+# gets to be the exception. Today every consumer of these paths merges the two
+# streams, so a fake that answered on stdout would look correct - and the moment
+# one stops merging (fm_herdr_read already does, deliberately, to keep tool
+# chatter out of pane text) it would silently see nothing and a gate asserting
+# on the error would go green against a lie. This branch has been bitten four
+# times by a fake diverging from herdr 0.8.2; the stream is not worth a fifth.
 fm_herdr_fake_server() {  # <dir>
   local fb="$1/fakebin"; mkdir -p "$fb"
   cat > "$fb/herdr" <<'SH'
@@ -148,8 +157,10 @@ case "$1 $2" in
     printf '{"id":"cli:tab:create","result":{"root_pane":{"cwd":"%s","foreground_cwd":"%s","pane_id":"%s:p2","tab_id":"%s:t2"},"tab":{"label":"%s","tab_id":"%s:t2"},"type":"tab_created"}}\n' \
       "$cwd" "$cwd" "$ws" "$ws" "$label" "$ws" ;;
   "tab rename")
-    # Free text: a tab label has no character restriction.
-    printf '%s\n' "$3" >> "${HERDR_TABS:-/dev/null}"
+    # Free text: a tab label has no character restriction. `tab rename <TAB>
+    # <LABEL>`, so the LABEL is $4 - recording $3 filed the tab id under the
+    # name and made every label assertion read a value nothing renamed.
+    printf '%s\n' "$4" >> "${HERDR_TABS:-/dev/null}"
     printf '{"id":"cli:tab:rename","result":{"type":"ok"}}\n' ;;
   "tab close")   printf '{"id":"cli:tab:close","result":{"type":"ok"}}\n' ;;
   "pane get")
@@ -163,10 +174,19 @@ case "$1 $2" in
         "${HERDR_PANE_CWD:-/proj}" "${HERDR_PANE_CWD:-/proj}" "$3"
     fi ;;
   "pane run")
-    # A shell that actually runs what it is given: the readiness probe depends
-    # on the marker coming back on a line of its own, exactly as under tmux.
-    case "$3" in
-      "printf '%s\n' "*) printf '%s\n' "${3##*\' }" >> "${HERDR_PANE_FILE:-/dev/null}" ;;
+    # The pane's SHELL, which is what the readiness probe is really asking about.
+    #   echo (default) a shell at a prompt: it runs the line, so the marker comes
+    #                  back on a line of its own
+    #   deaf           a shell mid-command: the line is swallowed and nothing is
+    #                  echoed - the state that left two secondmates dead
+    #   cmd            the line is echoed as TEXT and never run, so the pane holds
+    #                  the marker only inside the command it was typed in
+    case "${HERDR_RUN_MODE:-echo}" in
+      deaf) : ;;
+      cmd)  printf '$ %s \n' "$4" >> "${HERDR_PANE_FILE:-/dev/null}" ;;
+      *)    case "$4" in
+              "printf '%s\n' "*) printf '%s\n' "${4##*\' }" >> "${HERDR_PANE_FILE:-/dev/null}" ;;
+            esac ;;
     esac
     printf '{"id":"cli:pane:run","result":{"type":"ok"}}\n' ;;
   "pane read"|"agent read")
@@ -209,7 +229,7 @@ case "$1 $2" in
     printf '],"type":"agent_list"}}\n' ;;
   "agent get")
     [ "${HERDR_NO_AGENT:-0}" = 1 ] && {
-      echo '{"error":{"code":"agent_not_found","message":"agent target not found"}}'; exit 1; }
+      echo '{"error":{"code":"agent_not_found","message":"agent target not found"}}' >&2; exit 1; }
     # HERDR_STATES scripts a LIFECYCLE: successive `agent get` calls walk the
     # comma-separated list and the last entry sticks. That is what lets a test
     # model "working, then the turn ends, then a new turn starts" - the sequence
@@ -248,7 +268,7 @@ case "$1 $2" in
     for _w in $_want; do
       [ "$_w" = "$_st" ] && { printf '{"result":{"agent_status":"%s"}}\n' "$_st"; exit 0; }
     done
-    echo '{"error":{"code":"timeout","message":"timed out waiting for agent status"}}'
+    echo '{"error":{"code":"timeout","message":"timed out waiting for agent status"}}' >&2
     exit 1 ;;
   "agent prompt")
     # An arbitrary failure the pattern list does not know about - a dropped
@@ -260,14 +280,14 @@ case "$1 $2" in
       exit "${HERDR_PROMPT_RC:-0}"
     fi
     [ "${HERDR_BLOCKED:-0}" = 1 ] && {
-      echo '{"error":{"code":"agent_blocked","message":"agent is blocked"}}'; exit 1; }
+      echo '{"error":{"code":"agent_blocked","message":"agent is blocked"}}' >&2; exit 1; }
     # herdr accepts the submission and THEN waits for a state change; when none
     # arrives the text has already gone in. Observed live against a claude TUI
     # herdr reported as idle while it was still booting.
     [ "${HERDR_STALLED:-0}" = 1 ] && {
-      echo '{"error":{"code":"agent_prompt_stalled","message":"agent prompt produced no observed state change within 5000 ms"}}'; exit 1; }
+      echo '{"error":{"code":"agent_prompt_stalled","message":"agent prompt produced no observed state change within 5000 ms"}}' >&2; exit 1; }
     [ "${HERDR_NO_AGENT:-0}" = 1 ] && {
-      echo '{"error":{"code":"agent_not_found","message":"agent target not found"}}'; exit 1; }
+      echo '{"error":{"code":"agent_not_found","message":"agent target not found"}}' >&2; exit 1; }
     # A prompt WITHOUT --wait is valid and is what the seam sends to an agent
     # that is already working: there, --wait "does not track turns" and can be
     # satisfied by the turn that was already running, so its verdict would be
@@ -281,7 +301,7 @@ case "$1 $2" in
     if printf '%s' "$name" | grep -qE '^[a-z][a-z0-9_-]{0,31}$'; then
       printf '{"id":"cli:agent:rename","result":{"type":"ok"}}\n'
     else
-      printf '{"error":{"code":"invalid_agent_name","message":"agent name must start with a lowercase letter and contain only lowercase letters, digits, %s-%s or %s_%s (1-32 characters)"},"id":"cli:agent:rename"}\n' "'" "'" "'" "'"
+      printf '{"error":{"code":"invalid_agent_name","message":"agent name must start with a lowercase letter and contain only lowercase letters, digits, %s-%s or %s_%s (1-32 characters)"},"id":"cli:agent:rename"}\n' "'" "'" "'" "'" >&2
       exit 1
     fi ;;
   "agent send-keys"|"pane send-keys")
@@ -300,7 +320,16 @@ SH
 }
 
 # fm_herdr_fake_tmux <dir> -> a tmux that records argv and answers the few reads
-# the seam performs. TMUX_RC forces a failure; PANE_FILE backs capture-pane.
+# the seam performs. TMUX_RC forces a failure of the MUTATING verbs; PANE_FILE
+# backs capture-pane.
+#
+# The READ verbs carry their own status (TMUX_LIST_RC, default 0) because the
+# real binary's do: `kill-window` fails for a window that no longer exists while
+# `list-windows` happily succeeds and simply does not name it, and that gap is
+# precisely how a close tells "already gone" from "could not be determined". One
+# shared rc would model a tmux where an absent window makes the listing fail
+# too, which no tmux does - and a caller that fails open on an unreadable
+# listing would then look correct here.
 fm_herdr_fake_tmux() {  # <dir>
   local fb="$1/fakebin"; mkdir -p "$fb"
   cat > "$fb/tmux" <<'SH'
@@ -316,7 +345,7 @@ case "$1" in
       *pane_current_path*) printf '%s\n' "${TMUX_CWD:-}" ;;
       *) printf '%s\n' "${TMUX_SESSION:-firstmate}" ;;
     esac ;;
-  list-windows) printf '%s\n' "${TMUX_WINDOWS:-}" ;;
+  list-windows) printf '%s\n' "${TMUX_WINDOWS:-}"; exit "${TMUX_LIST_RC:-0}" ;;
   has-session) exit "${TMUX_HAS_SESSION:-0}" ;;
   send-keys)
     for a in "$@"; do
@@ -331,12 +360,14 @@ SH
   printf '%s\n' "$fb"
 }
 
-# A herdr binary that is absent entirely: PATH with no herdr on it at all.
-fm_herdr_path_without_binary() {
-  local p out=""
+# The named binary absent entirely: PATH with no copy of it on it at all, the
+# deny shim's included. Defaults to herdr; pass tmux for the drain paths, whose
+# "could not close" and "could not determine" answers differ.
+fm_herdr_path_without_binary() {  # [tool]
+  local tool=${1:-herdr} p out=""
   IFS=:; for p in $PATH; do
     [ -n "$p" ] || continue
-    [ -x "$p/herdr" ] && continue
+    [ -x "$p/$tool" ] && continue
     out="${out:+$out:}$p"
   done
   unset IFS

@@ -42,6 +42,9 @@ See the [no-mistakes quick start](https://kunchenguid.github.io/no-mistakes/star
   Each starts with a usage header comment; keep it accurate when you change behavior.
   Test scripts and helpers in `tests/` are plain bash too.
   `shellcheck bin/*.sh tests/*.sh` must pass, and CI enforces it.
+- Every suite in `tests/` must source `tests/lib.sh` (directly, or through a helper that does).
+  That is what puts the refusing `herdr` and `tmux` first on PATH, so a suite that forgot to fake one fails loudly instead of silently creating tabs in, or killing windows out of, the captain's live fleet.
+  A suite whose subject genuinely IS a real server it creates and destroys itself declares a `# HERMETICITY-WAIVER: <reason>` line instead; `tests/fm-test-hermeticity.test.sh` enforces one or the other, so the exemptions stay a short, readable list.
 - Changes to harness adapters (launch templates in `bin/fm-spawn.sh`, facts in `.agents/skills/harness-adapters/SKILL.md`) must be verified empirically against the real harness, never written from documentation alone.
 - In Markdown, put each full sentence on its own line.
 
@@ -118,7 +121,7 @@ tests/fm-boot-m4.test.sh                  # boot budget under wedged helpers: wa
 tests/fm-boot-m5.test.sh                  # boot context never fails silently: a raising section leaves an explicit UNAVAILABLE marker
 tests/fm-ci-declared-red.test.sh          # tests/run-all.sh skips a test only when its gate is both red and declared, announces every skip, and fails closed
 tests/fm-status-verb.test.sh              # bin/fm-status.sh appends one line to the right home, and briefs teach the verb instead of a redirect
-tests/fm-test-hermeticity.test.sh         # the suites stay off the captain's live herdr and tmux: both refusers on PATH, independent opt-outs, and a live-tmux opt-in whose kills are scoped to the suite's own throwaway session
+tests/fm-test-hermeticity.test.sh         # the suites stay off the captain's live herdr and tmux: every suite is under the net or declares a HERMETICITY-WAIVER, both refusers on PATH, independent opt-outs, and a live-tmux opt-in whose kills are scoped to the suite's own throwaway session
 [ "$(readlink CLAUDE.md)" = "AGENTS.md" ]
 [ "$(readlink .claude/skills)" = "../.agents/skills" ]
 FM_HEARTBEAT=2 FM_POLL=1 bin/fm-watch-arm.sh  # watcher re-arm smoke test (prints arm status, then "heartbeat")

@@ -20,17 +20,25 @@
 #
 # Mutation (LEDGER_MUTATE=1): the wake-queue fixture records are not written, so
 # the queue-depth assertion fails.
+#
+# HERMETICITY. This suite rolled its own ROOT/fail/pass and so sat OUTSIDE the
+# net that tests/lib.sh installs - which stopped being harmless the moment the
+# digest began inventorying the fleet: every run then queried the captain's REAL
+# herdr and tmux servers, and its output depended on whichever crew happened to
+# be live. The net is opt-in-by-sourcing, so the rule is the fix: a suite comes
+# under it by sourcing tests/lib.sh, not by remembering to stub what it happens
+# to call today. Case F prepends its own fake ahead of the refusers, which is
+# how a case that WANTS a herdr gets one.
 set -u
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
-pass() { printf 'ok - %s\n' "$1"; }
+
+# shellcheck source=tests/lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 BOOT="$ROOT/bin/fm-captain-bootstrap.sh"
 WATCHARM="$ROOT/bin/fm-watch-arm.sh"
 DISCLAIMER='Snapshot as of boot — run bin/fm-wake-drain.sh before acting on the fleet.'
 
-TMP=$(mktemp -d "${TMPDIR:-/tmp}/fm-boot-digest.XXXXXX")
-trap 'rm -rf "$TMP"' EXIT
+TMP=$(fm_test_tmproot fm-boot-digest)
 
 path_mtime() {
   if [ "$(uname)" = Darwin ]; then stat -f %m "$1"; else stat -c %Y "$1"; fi

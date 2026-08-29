@@ -41,6 +41,47 @@ in_fresh() {  # <env-assignments...> -- <snippet>
       _ "$ROOT" "$snippet" 2>&1
 }
 
+# --- the net is opt-in by SOURCING, so who is outside it must be visible -----
+#
+# THE DEFECT THIS EXISTS FOR. Every guarantee below arrives by sourcing
+# tests/lib.sh, so a suite that rolls its own ROOT/fail/pass is simply outside
+# the net - silently, with nothing to notice it. That is not hypothetical: the
+# captain digest suite sat outside while the same branch taught the digest to
+# shell out to `herdr agent list`, `herdr tab list` and `tmux list-windows`, so
+# every run of it queried the captain's live servers and its output depended on
+# whichever crew happened to be up.
+#
+# The rule, enforced rather than hoped for: a suite is either UNDER the net (it
+# sources tests/lib.sh, directly or through a helper that does) or it DECLARES
+# that it is not, with a `# HERMETICITY-WAIVER:` line saying why. A waiver is
+# for a suite whose subject IS a real server it creates and destroys itself; it
+# is greppable, so the exemptions are a list someone can read and shrink rather
+# than an absence nobody can see.
+test_every_suite_is_under_the_net_or_declares_that_it_is_not() {
+  local f base unguarded=()
+  for f in "$ROOT"/tests/*.test.sh; do
+    base=$(basename "$f")
+    grep -qE '^\. "\$\(dirname "\$\{BASH_SOURCE\[0\]\}"\)/[a-z.-]+\.sh"' "$f" && continue
+    grep -q '^# HERMETICITY-WAIVER:' "$f" && continue
+    unguarded+=("$base")
+  done
+  [ "${#unguarded[@]}" -eq 0 ] || fail \
+    "these suites neither source tests/lib.sh nor declare a HERMETICITY-WAIVER, so they can reach the captain's live servers unnoticed: ${unguarded[*]}"
+  pass "hermeticity: every suite is under the net or declares in-file why it is not"
+}
+
+# A waiver must not become a way to opt out of thinking. Each one has to say
+# what it is exempt FOR, so the list stays reviewable and shrinkable.
+test_every_waiver_states_a_reason() {
+  local f base line
+  for f in $(grep -rl '^# HERMETICITY-WAIVER:' "$ROOT"/tests/*.test.sh); do
+    base=$(basename "$f")
+    line=$(grep -m1 '^# HERMETICITY-WAIVER:' "$f")
+    [ "${#line}" -gt 40 ] || fail "$base carries a bare HERMETICITY-WAIVER with no reason"
+  done
+  pass "hermeticity: every waiver names the real server it is exempt for"
+}
+
 # --- the default: neither binary is reachable -------------------------------
 
 test_a_forgetful_suite_cannot_reach_either_binary() {
@@ -220,6 +261,8 @@ test_an_absent_real_binary_is_reported_not_execed() {
   pass "hermeticity: an absent real tmux is reported, not exec'd as an empty command"
 }
 
+test_every_suite_is_under_the_net_or_declares_that_it_is_not
+test_every_waiver_states_a_reason
 test_a_forgetful_suite_cannot_reach_either_binary
 test_the_two_opt_outs_are_independent
 test_opting_in_still_routes_through_the_guard

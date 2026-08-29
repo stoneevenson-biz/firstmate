@@ -276,7 +276,45 @@ test_a_failed_create_is_reported() {
   pass "new_tab: a failed create is reported, not papered over"
 }
 
+# THE FAKE IS PART OF THE CONTRACT. Every error herdr 0.8.2 reports arrives on
+# STDERR, and a fake that answers one on stdout is invisible today only because
+# every consumer of those paths merges the streams. fm_herdr_read already keeps
+# them apart on purpose, so the next verb that does the same would find the fake
+# silently disagreeing with the binary - the divergence class that has cost this
+# branch four review cycles. Pinned per knob so a new branch cannot quietly pick
+# the other stream.
+test_the_fake_reports_every_error_on_stderr() {
+  local case_ knob verb out err rc
+  # "<knob>|<argv>" - one row per branch of the fake that produces an envelope.
+  for case_ in "HERDR_NO_AGENT|agent get w9:p2" \
+               "HERDR_NO_AGENT|agent prompt w9:p2 hi" \
+               "HERDR_BLOCKED|agent prompt w9:p2 hi" \
+               "HERDR_STALLED|agent prompt w9:p2 hi" \
+               "HERDR_READ_FAIL|agent read w9:p2" \
+               "HERDR_READ_FAIL|pane read w9:p2" \
+               "HERDR_KEY_FAIL|agent send-keys w9:p2 --key enter" \
+               "HERDR_GONE|pane get w9:p2"; do
+    knob=${case_%%|*}; verb=${case_#*|}
+    err="$TMP_ROOT/fake-err.txt"
+    rc=0
+    # shellcheck disable=SC2086
+    out=$(env "$knob=1" herdr $verb 2>"$err") || rc=$?
+    if [ "$rc" = 0 ]; then fail "the fake's $knob branch of '$verb' succeeded instead of failing"; fi
+    assert_eq "$out" "" "the fake put $knob's error envelope for '$verb' on STDOUT"
+    assert_contains "$(cat "$err")" '"error"' \
+      "the fake's $knob branch of '$verb' produced no error envelope on stderr"
+  done
+  # And the rename refusal, whose failing input is the name rather than a knob.
+  rc=0
+  out=$(herdr agent rename w9:p2 'bad/name' 2>"$err") || rc=$?
+  if [ "$rc" = 0 ]; then fail "the fake accepted a slashed agent name"; fi
+  assert_eq "$out" "" "the fake put invalid_agent_name on STDOUT"
+  assert_contains "$(cat "$err")" invalid_agent_name "the rename refusal is not on stderr"
+  pass "fake: every error envelope arrives on stderr, as the real binary's does"
+}
+
 test_field_extraction_pulls_real_values
+test_the_fake_reports_every_error_on_stderr
 test_field_extraction_does_not_straddle_records
 test_new_tab_is_scoped_and_returns_the_pane
 test_an_idle_prompt_is_one_acknowledged_call
