@@ -8,6 +8,7 @@
 # (AGENTS.md only - no STATE.md/LOOP.md/loop docs/agents) - a correct audit
 # scores it far below 58, failing the assertion.
 set -u
+# shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 command -v loop-audit >/dev/null 2>&1 || {

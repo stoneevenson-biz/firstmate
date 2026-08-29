@@ -81,6 +81,7 @@ GEN_SECONDMATE="$HOME_DIR/data/second-1/brief.md"
 assert_present "$GEN_SECONDMATE" "the generated secondmate charter must exist"
 
 # One backticked command per status line; take the first and strip the ticks.
+# shellcheck disable=SC2016  # single quotes are deliberate: the sed script and its backticks are literal.
 VERB_FORM=$(grep -m1 -F 'fm-status.sh' "$GEN" | sed -n 's/^[^`]*`\(.*\)`[^`]*$/\1/p')
 [ -n "$VERB_FORM" ] \
   || fail "could not extract the status command from the generated brief - this gate must model the emitted form, not a restatement of it"
@@ -233,6 +234,7 @@ for kind_brief in "ship:$GEN" "scout:$GEN_SCOUT" "secondmate:$GEN_SECONDMATE"; d
   # The verb alone is not enough: an unpinned command follows the runtime
   # environment, which for a secondmate is its OWN home rather than the one this
   # brief was generated in and whose watcher polls the file.
+  # shellcheck disable=SC2016  # single quotes are deliberate: the sed script and its backticks are literal.
   kind_form=$(grep -m1 -F 'fm-status.sh' "$brief" | sed -n 's/^[^`]*`\(.*\)`[^`]*$/\1/p')
   [ -n "$kind_form" ] \
     || fail "could not extract the status command from the generated $kind brief"
