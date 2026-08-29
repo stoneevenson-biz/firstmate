@@ -44,7 +44,28 @@ assert_present "$STATUS_SH" "bin/fm-status.sh must exist"
 
 TMP=$(fm_test_tmproot fm-status-verb)
 HOME_DIR="$TMP/home"
-mkdir -p "$HOME_DIR/state"
+mkdir -p "$HOME_DIR/state" "$HOME_DIR/data" "$HOME_DIR/projects/demo"
+
+# --- the command crewmates actually receive ---------------------------------
+#
+# The form under test is DERIVED from a real generated brief, never restated
+# here. A hand-written copy drifts the moment the emitted command changes - and
+# a stale copy is exactly what made the home-routing defect invisible one level
+# down. The brief is scaffolded into the modelled protected home, so the policy
+# below judges the same command, targeting the same home, that a crewmate under
+# the real profile would be handed.
+BRIEF_SH="$ROOT/bin/fm-brief.sh"
+assert_present "$BRIEF_SH" "bin/fm-brief.sh must exist"
+
+FM_HOME="$HOME_DIR" bash "$BRIEF_SH" task-1 demo >/dev/null 2>&1 \
+  || fail "fm-brief.sh must scaffold a ship brief"
+GEN="$HOME_DIR/data/task-1/brief.md"
+assert_present "$GEN" "the generated brief must exist"
+
+# One backticked command per status line; take the first and strip the ticks.
+VERB_FORM=$(grep -m1 -F 'fm-status.sh' "$GEN" | sed -n 's/^[^`]*`\(.*\)`[^`]*$/\1/p')
+[ -n "$VERB_FORM" ] \
+  || fail "could not extract the status command from the generated brief - this gate must model the emitted form, not a restatement of it"
 
 # --- the modelled permission policy -----------------------------------------
 #
@@ -59,24 +80,32 @@ policy_permits() {
 }
 
 REDIRECT_FORM="echo \"done: via redirect\" >> $HOME_DIR/state/task-1.status"
-VERB_FORM="bash $STATUS_SH task-1 'done: via the verb'"
 
 # 1. the model has teeth: the old form is refused
 if policy_permits "$REDIRECT_FORM"; then
   fail "the modelled policy must REFUSE a direct redirect into the home - otherwise this gate proves nothing"
 fi
 
-# 2. the verb form is permitted by the same policy
+# 2. the emitted verb form is permitted by the same policy
 policy_permits "$VERB_FORM" \
-  || fail "the verb form must be PERMITTED by the same policy that refuses the redirect"
+  || fail "the emitted verb form must be PERMITTED by the same policy that refuses the redirect: $VERB_FORM"
 
-# 3. and it actually reports. Only the permitted command is ever executed here,
-#    exactly as a crewmate under the real profile would experience it.
-FM_HOME="$HOME_DIR" bash "$STATUS_SH" task-1 "done: via the verb" \
-  || fail "fm-status.sh must exit 0 on a normal append"
+# 3. and it actually reports. The emitted command itself is run - with only its
+#    message placeholder filled in - exactly as a crewmate under the real
+#    profile would run it. The ambient environment names a DIFFERENT home, so a
+#    command that leaned on what it inherited would land in the wrong state dir
+#    and be caught here rather than in production.
+mkdir -p "$TMP/wrong"
+RUN_FORM=${VERB_FORM/'"{state}: {one short line}"'/"'done: via the verb'"}
+[ "$RUN_FORM" != "$VERB_FORM" ] \
+  || fail "the emitted status command no longer carries the {state} message placeholder this gate substitutes"
+FM_HOME="$TMP/wrong" FM_STATE_OVERRIDE="$TMP/wrong" eval "$RUN_FORM" \
+  || fail "the emitted status command must exit 0 on a normal append"
 
 STATUS="$HOME_DIR/state/task-1.status"
 assert_present "$STATUS" "the verb must create the status file when it is absent"
+assert_absent "$TMP/wrong/task-1.status" \
+  "the emitted command must pin its own home, not follow the ambient environment"
 assert_grep "done: via the verb" "$STATUS" "the reported line must reach the status file"
 
 # Appends, never truncates - a second report must not lose the first.
@@ -128,17 +157,9 @@ assert_absent "$TMP/escape.status" "a traversing id must not write outside the s
 # --- the guidance crewmates actually receive --------------------------------
 #
 # The script existing changes nothing if every generated brief still teaches the
-# form that gets refused. This is the half that closes the defect.
-BRIEF_SH="$ROOT/bin/fm-brief.sh"
-assert_present "$BRIEF_SH" "bin/fm-brief.sh must exist"
-
-BHOME="$TMP/bhome"
-mkdir -p "$BHOME/state" "$BHOME/data" "$BHOME/projects/demo"
-FM_HOME="$BHOME" bash "$BRIEF_SH" demo-task demo >/dev/null 2>&1 \
-  || fail "fm-brief.sh must scaffold a ship brief"
-GEN="$BHOME/data/demo-task/brief.md"
-assert_present "$GEN" "the generated brief must exist"
-
+# form that gets refused. This is the half that closes the defect. It reads the
+# same $GEN the executed command was extracted from, so the guidance and the
+# thing this gate proved are one artifact rather than two that can diverge.
 if [ "${LEDGER_MUTATE:-}" = 1 ]; then
   assert_grep 'echo "{state}' "$GEN" \
     "MUTATION: expected the brief to still teach the refused redirect form"

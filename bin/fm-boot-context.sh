@@ -48,10 +48,13 @@
 # the lock is either free or stale (this session is the one about to take it),
 # or held by a live harness. If the holder is this process's own ancestor - a
 # resume, a compact, a /clear in the steering session - it is still steering.
-# Anything else is an incidental session and gets Tier 1 only. If the ancestry
-# probe cannot run, the answer is "not steering": a steering session then pays
-# one tool call, whereas the opposite default would charge every incidental
-# session the full block.
+# Anything else is an incidental session and gets Tier 1 only. If the lock could
+# not be read, or the ancestry probe could not RUN, the answer is neither of
+# those two: it is "unknown", and it renders as an explicit marker. Tier 2 is
+# still withheld - a steering session then pays one tool call, whereas the
+# opposite default would charge every incidental session the full block - but
+# the block never asserts that another session is steering on evidence it does
+# not have.
 #
 # ---------------------------------------------------------------------------
 # THE BUDGET
@@ -196,6 +199,10 @@ data = os.path.join(fm, "data")
 
 # Config notes raised while parsing the environment, surfaced in the output.
 CONFIG_NOTES = []
+
+# Set by build_fleet: the instance count it actually rendered. Empty when the
+# fleet section could not be built at all.
+FLEET_COUNT = []
 
 
 def env_num(name, default, cast):
@@ -520,6 +527,14 @@ def helpers(specs):
 
     for proc, label in running:
         left = deadline - time.time()
+        # A helper that has ALREADY EXITED is not a timeout, whatever the clock
+        # says. Results are collected in order, so a first helper that wedges to
+        # the deadline would otherwise condemn a second one whose answer is
+        # already sitting in the pipe - rendering a healthy watcher UNAVAILABLE
+        # because the lock read was slow. Only a process still running when the
+        # deadline passes is killed and marked.
+        if left <= 0 and proc.poll() is not None:
+            left = MIN_HELPER_SLICE
         try:
             if left <= 0:
                 raise subprocess.TimeoutExpired(proc.args, budget)
@@ -679,15 +694,20 @@ def wake_queue():
 # --- steering ---------------------------------------------------------------
 
 def ancestors():
-    """This process's ancestor pids, from one ps call, under the shared deadline.
+    """(ran, pids) - whether the probe ACTUALLY ran, and the ancestor pids.
 
     One `ps -eo pid=,ppid=` beats walking the chain with one exec per level,
-    and it is bounded by the same deadline as every other exec here. On any
-    failure the caller falls back to "not steering", which is the cheap answer.
+    and it is bounded by the same deadline as every other exec here.
+
+    The pair matters more than the set. An empty set means two different
+    things - the probe was SKIPPED because the shared budget is spent, or ps
+    ran and matched nothing - and collapsing them into one falsy answer is what
+    let a degraded boot claim another session was steering. The caller cannot
+    recover the difference afterwards, so it is returned rather than inferred.
     """
     slice_ = min(HELPER_TIMEOUT, remaining())
     if slice_ < MIN_HELPER_SLICE:
-        return set()
+        return False, set()
     r = subprocess.run(["ps", "-eo", "pid=,ppid="], capture_output=True,
                        text=True, timeout=slice_)
     parent = {}
@@ -700,28 +720,40 @@ def ancestors():
         seen.add(pid)
         pid = parent[pid]
     seen.add(pid)
-    return seen
+    return True, seen
 
 
-def is_steering(lock_line):
-    """True when this session is the one steering this home.
+def steering_state(lock_line):
+    """(state, reason) where state is "steering", "observing", or "unknown".
 
     Free or stale lock: this session is about to take it. Held by a live
     harness: steering only if that pid is in our own ancestry (a resume,
     compact, or /clear inside the steering session).
+
+    "unknown" is a third answer, not a shade of "observing". An unreadable lock
+    and an ancestry probe that could not run are both cases where we have no
+    evidence about who is steering; rendering "observing" there tells a resuming
+    steering session to go ask itself. The lock path already refused that guess,
+    and the probe path must refuse it the same way.
     """
     if lock_line.startswith("UNAVAILABLE"):
-        return False
+        # Unwrap the helper's own marker; the caller re-wraps it, and nesting
+        # "UNAVAILABLE (UNAVAILABLE (...))" buries the reason a reader needs.
+        detail = lock_line[len("UNAVAILABLE ("):-1] if lock_line.endswith(")") else lock_line
+        return "unknown", detail
     if "free" in lock_line or "stale" in lock_line:
-        return True
+        return "steering", ""
     digits = "".join(c if c.isdigit() else " " for c in lock_line).split()
     if not digits:
-        return False
+        return "unknown", "the lock line names no holder pid"
     holder = int(digits[-1])
     try:
-        return holder in ancestors()
-    except Exception:
-        return False
+        ran, pids = ancestors()
+    except Exception as e:
+        return "unknown", "the ancestry probe failed (%s)" % type(e).__name__
+    if not ran:
+        return "unknown", "the ancestry probe could not run within the boot budget"
+    return ("steering" if holder in pids else "observing"), ""
 
 
 # --- Tier 1: the fleet ------------------------------------------------------
@@ -796,6 +828,12 @@ def build_fleet(own_summary):
                 problem = "fleet view is unreadable (%s)" % type(e).__name__
 
     lines = [own_summary] + [peer_line(p) for p in peers]
+    # The one authoritative instance count. The injection-cap notice needs it
+    # and must not recount "- " lines out of the finished block: registry lines,
+    # secondmate entries, backlog items and per-task digest lines all share that
+    # shape, so counting them would overstate the fleet in the very diagnostic a
+    # reader uses to understand why the cap was breached.
+    FLEET_COUNT.append(len(lines))
     head = "## Fleet (%d instance%s)" % (len(lines), "" if len(lines) == 1 else "s")
     tail = ["To act on another instance's work, ask it - do not reach into its home.",
             DISCLAIMER]
@@ -994,10 +1032,8 @@ def main():
     lock_line = relayed["session lock"]
     watcher_line = relayed["watcher"]
 
-    steering = is_steering(lock_line)
-    steering_word = ("steering" if steering
-                     else "steering unknown" if lock_line.startswith("UNAVAILABLE")
-                     else "observing")
+    steering, steering_reason = steering_state(lock_line)
+    steering_word = "steering unknown" if steering == "unknown" else steering
 
     watcher_word = "unknown"
     if watcher_line.startswith("UNAVAILABLE"):
@@ -1037,24 +1073,37 @@ You are a firstmate. Home: %s (%s). Manual: %s/AGENTS.md""" % (
     blocks.append(section("fleet", build_fleet, own_summary))
 
     # Tier 2. Only for the session that is actually steering.
-    if steering:
+    if steering == "steering":
         tier2 = section("steering detail", build_tier2, tasks, task_problems,
                        watcher_line, lock_line)
         room = INJECT_CAP - len("\n\n".join(blocks)) - 200
         room = min(room, TIER2_CAP)
-        if len(tier2) > room > 0:
-            tier2 = tier2[:room] + "\n... (+%d chars more - read the files directly)" % (
-                len(tier2) - room)
         if room > 0:
+            if len(tier2) > room:
+                tier2 = tier2[:room] + (
+                    "\n... (+%d chars more - read the files directly)" % (len(tier2) - room))
             blocks.append(tier2)
-    elif lock_line.startswith("UNAVAILABLE"):
-        # We could not read the lock, so we do not KNOW who is steering. Saying
-        # another session is would be a confident falsehood of exactly the kind
-        # this file exists to prevent - and it is reachable, because a loaded
-        # machine can exhaust the helper budget and skip the lock read entirely.
+        else:
+            # Dropping Tier 2 outright is what keeps `out` under the cap, so the
+            # injection-cap notice below can never fire for it: the two guards
+            # are mutually exclusive. Without a marker here the steering session
+            # loses its whole digest - wake queue, in-flight tasks, watcher,
+            # lock - and the block still reads as healthy. That is precisely the
+            # silent failure this file refuses.
+            blocks.append("## steering detail - UNAVAILABLE (no room under the %d-char "
+                          "injection cap; the spawn lifecycle, registered projects, "
+                          "secondmates, backlog, and the reconciliation digest were all "
+                          "dropped) - run bin/fm-wake-drain.sh and read %s/state directly."
+                          % (INJECT_CAP, fm))
+    elif steering == "unknown":
+        # We do not KNOW who is steering - the lock would not read, or the
+        # ancestry probe could not run. Saying another session is would be a
+        # confident falsehood of exactly the kind this file exists to prevent,
+        # and it is reachable, because a loaded machine can exhaust the helper
+        # budget and skip either read entirely.
         blocks.append("## steering - UNAVAILABLE (%s) - could not determine whether "
                       "this session is steering; re-read the lock before acting."
-                      % lock_line)
+                      % steering_reason)
     else:
         blocks.append("Another session is steering this home; "
                       "this one is observing. Ask it rather than acting.")
@@ -1070,8 +1119,9 @@ You are a firstmate. Home: %s (%s). Manual: %s/AGENTS.md""" % (
     # block is a degraded read, not a blind one. What must not happen is
     # choosing silently, so the choice is stated in the output.
     if len(out) > INJECT_CAP:
-        instances = sum(1 for line in out.splitlines() if line.startswith("- "))
-        out += ("\n\n## injection cap - UNAVAILABLE (a fleet of %d needs %d chars against a "
+        instances = ("a fleet of %d" % FLEET_COUNT[-1] if FLEET_COUNT
+                     else "a fleet of unknown size")
+        out += ("\n\n## injection cap - UNAVAILABLE (%s needs %d chars against a "
                 "cap of %d; every instance is listed anyway - a peer is never elided)" % (
                     instances, len(out), INJECT_CAP))
 
