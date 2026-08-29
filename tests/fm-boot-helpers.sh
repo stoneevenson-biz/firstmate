@@ -21,7 +21,9 @@ FM_BOOT_HELPERS_SOURCED=1
 FM_BOOT_EMITTER="$ROOT/bin/fm-boot-context.sh"
 
 # fm_boot_hook_json [source] [cwd] [session_id]
-# The SessionStart payload the harness pipes in on stdin.
+# The SessionStart payload the harness pipes in on stdin. Every argument is
+# optional; gates that want the defaults call it bare.
+# shellcheck disable=SC2120
 fm_boot_hook_json() {
   local src=${1:-startup} cwd=${2:-/tmp} sid=${3:-probe-session}
   printf '{"source":"%s","cwd":"%s","session_id":"%s","transcript_path":"/dev/null"}' \
