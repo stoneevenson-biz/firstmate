@@ -18,9 +18,9 @@
 # command line the profile refuses.
 #
 # HOW THIS IS TESTED WITHOUT THE HARNESS. A test cannot invoke the real
-# permission layer, so the policy is modelled exactly as it behaves: a predicate
-# over the command that refuses any command redirecting into the home, and
-# resolves the command's prefix the way a Bash rule is resolved against it.
+# permission layer, so the one rule that did the refusing is modelled: a
+# predicate over the command that refuses any command redirecting into the home.
+# It is narrow on purpose, and its stated limits are in the policy block below.
 # The gate then proves three things together, which is what makes it meaningful:
 #
 #   1. the modelled policy REFUSES the old redirect form  (the model has teeth)
@@ -28,13 +28,9 @@
 #   3. running the verb actually appends the line         (it really reports)
 #
 # Without (1) the model would be vacuous; without (3) a permitted no-op would
-# pass. All three, or nothing.
-#
-# The policy is modelled on BOTH axes the real one refuses along - the text of
-# the command, and its prefix - because the harness resolves a Bash rule by
-# prefix, and pinning the home moved the emitted command's leading token off the
-# interpreter. A redirect-only model cannot see that, so it would pass whatever
-# the shape became; see the policy block below.
+# pass. All three, or nothing. The form judged in (2) and run in (3) is not a
+# restatement - it is extracted from a brief fm-brief.sh really generates, so
+# the gate cannot drift from the command crewmates receive.
 #
 # Mutation (LEDGER_MUTATE=1): the brief assertions are inverted to demand the
 # old `echo >>` form. A brief that has been fixed to teach the verb then fails,
@@ -91,30 +87,35 @@ VERB_FORM=$(grep -m1 -F 'fm-status.sh' "$GEN" | sed -n 's/^[^`]*`\(.*\)`[^`]*$/\
 
 # --- the modelled permission policy -----------------------------------------
 #
-# The real profile refuses in two independent ways, and a model carrying only
-# one of them is blind by exactly the width of the other:
+# The model carries ONE rule, and it is the one that actually refused a
+# crewmate: the profile denies edits to the firstmate tree
+# (deny: Edit(~/firstmate/**), including state/**), and the harness applies that
+# to Bash by refusing a command whose text redirects into the protected home.
+# Nothing else about the profile is asserted here.
 #
-#   BY TEXT   - deny: Edit(~/firstmate/**), which the harness applies to Bash by
-#               refusing a command whose text redirects into the protected home.
-#               That is the refusal actually observed.
-#   BY PREFIX - Claude Code resolves a Bash rule against the command's PREFIX,
-#               so the leading tokens decide which rule is consulted at all. The
-#               home-pinning fix changed precisely those tokens: the emitted
-#               command no longer begins with the interpreter. A text-only model
-#               could not see that, and would keep passing whatever the prefix
-#               became - the same drift, one level up, that made the routing
-#               defect invisible in the first place.
-#
-# The prefix half is stated as a rule set, never as a copy of what fm-brief.sh
-# happens to emit, and it is proved to have teeth below against a command that
-# only a prefix rule can refuse.
+# WHAT THIS MODEL DELIBERATELY DOES NOT COVER. The live harness also resolves a
+# Bash rule against the command, matching glob patterns rather than bare command
+# names - the real rules look like `Bash(sudo *)`, `Bash(rm -rf /*)` and
+# `Bash(* ~/.ssh/*)`, several of which begin with `*` and so are not anchored on
+# the leading token at all. A faithful model of that cannot be built from here,
+# and an invented deny-list would give this gate teeth against rules that do not
+# exist - proving nothing about whether a crewmate can report, which is the only
+# question this gate answers. So it is left out on purpose. The one thing a
+# future reader should check against the REAL profile, if rule matching ever
+# becomes load-bearing, is the leading `VAR=value` assignments the home-pinning
+# fix put in front of the emitted command; the shape assertion below states that
+# shape so the check has something exact to start from.
+policy_permits() {
+  case "$1" in
+    *">>"*"$HOME_DIR"*|*">"*"$HOME_DIR"*) return 1 ;;
+  esac
+  return 0
+}
 
-# Leading `VAR=value` assignments are part of the command TEXT but are not the
-# command being run. This is the fact the gate must state rather than discover:
-# the emitted command leads with two of them, so a rule keyed on the literal
-# string "bash" does not match it, and the prefix a rule must be keyed on is the
-# first token that is not an assignment.
-policy_prefix() {
+# The first token that is not a leading `VAR=value` assignment - the word the
+# command actually runs. Used only to state the emitted command's shape, not to
+# claim anything about how the harness matches rules.
+command_word() {
   printf '%s\n' "$1" | awk '{
     i = 1
     while (i <= NF && $i ~ /^[A-Za-z_][A-Za-z0-9_]*=/) i++
@@ -122,54 +123,27 @@ policy_prefix() {
   }'
 }
 
-# Prefixes the profile refuses outright, whatever the rest of the command says.
-POLICY_DENIED_PREFIXES="sudo rm mv chmod tee dd"
-
-policy_permits() {
-  local cmd=$1 prefix denied
-  case "$cmd" in
-    *">>"*"$HOME_DIR"*|*">"*"$HOME_DIR"*) return 1 ;;
-  esac
-  prefix=$(policy_prefix "$cmd")
-  # Nothing but assignments is not a command a rule can be written about.
-  [ -n "$prefix" ] || return 1
-  for denied in $POLICY_DENIED_PREFIXES; do
-    [ "$prefix" = "$denied" ] && return 1
-  done
-  return 0
-}
-
 REDIRECT_FORM="echo \"done: via redirect\" >> $HOME_DIR/state/task-1.status"
-# Writes into the same protected file with no redirect at all. Only the prefix
-# half can refuse it, and the env assignment in front is exactly the shape that
-# would hide it from a model that read the leading token literally.
-PREFIX_FORM="FM_HOME=$HOME_DIR tee -a $HOME_DIR/state/task-1.status"
 
-# 1. the model has teeth by TEXT: the old redirect form is refused
+# 1. the model has teeth: the old redirect form is refused
 if policy_permits "$REDIRECT_FORM"; then
   fail "the modelled policy must REFUSE a direct redirect into the home - otherwise this gate proves nothing"
 fi
 
-# 1b. and by PREFIX: a denied command stays denied when env assignments are put
-#     in front of it, or the prefix half is decoration
-if policy_permits "$PREFIX_FORM"; then
-  fail "the modelled policy must REFUSE a denied prefix even behind env assignments - otherwise it cannot see the one thing the emitted command changed"
-fi
-
-# 2. the emitted verb form is permitted by the same policy, on both halves
+# 2. the emitted verb form is permitted by the same policy
 policy_permits "$VERB_FORM" \
   || fail "the emitted verb form must be PERMITTED by the same policy that refuses the redirect: $VERB_FORM"
 
 # 3. and the gate STATES the command's shape rather than inferring it. The
-#    emitted command leads with an env assignment and resolves to bash; both
-#    facts are asserted, so a change to either is a gate failure that has to be
-#    looked at, not a silent pass.
+#    emitted command leads with an env assignment and runs bash; both facts are
+#    asserted, so a change to either is a gate failure that has to be looked at,
+#    not a silent pass.
 case "$VERB_FORM" in
   FM_HOME=*) ;;
   *) fail "the emitted status command must still pin the home in the command itself: $VERB_FORM" ;;
 esac
-[ "$(policy_prefix "$VERB_FORM")" = "bash" ] \
-  || fail "the emitted status command must resolve to the bash interpreter behind its pinned env, got '$(policy_prefix "$VERB_FORM")' in: $VERB_FORM"
+[ "$(command_word "$VERB_FORM")" = "bash" ] \
+  || fail "the emitted status command must run the bash interpreter behind its pinned env, got '$(command_word "$VERB_FORM")' in: $VERB_FORM"
 
 # 4. and it actually reports. The emitted command itself is run - with only its
 #    message placeholder filled in - exactly as a crewmate under the real
@@ -272,8 +246,8 @@ for kind_brief in "ship:$GEN" "scout:$GEN_SCOUT" "secondmate:$GEN_SECONDMATE"; d
     *"FM_STATE_OVERRIDE='$HOME_DIR/state'"*) ;;
     *) fail "the $kind brief's status command must pin the state dir too, or a stale override diverts the line: $kind_form" ;;
   esac
-  [ "$(policy_prefix "$kind_form")" = "bash" ] \
-    || fail "the $kind brief's status command must resolve to the bash interpreter behind its pinned env: $kind_form"
+  [ "$(command_word "$kind_form")" = "bash" ] \
+    || fail "the $kind brief's status command must run the bash interpreter behind its pinned env: $kind_form"
 done
 
 pass "status reporting is a verb a refused crewmate can still use"

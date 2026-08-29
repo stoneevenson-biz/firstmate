@@ -354,7 +354,12 @@ trap m5_cleanup EXIT
 # A live process that is emphatically NOT one of our ancestors. Bounded, so a
 # run that dies on an earlier assertion cannot leave it behind for long, and
 # deliberately not the `sleep 999` signature tests/fm-reap-strays.sh hunts.
-sleep 60 &
+# Its output is detached from ours: tests/run-all.sh captures each test with a
+# command substitution, which does not return until every holder of the pipe's
+# write end closes it - so a sleeper that inherited stdout could stall the whole
+# suite for a minute, with no output naming the test in flight, on any exit path
+# that bypassed the trap above.
+sleep 60 >/dev/null 2>&1 &
 FOREIGN_SLEEPER=$!
 
 steer_bin() {
