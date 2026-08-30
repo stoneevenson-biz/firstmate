@@ -103,6 +103,19 @@ if ! FM_INTAKE_HEALTH_WINDOW=100 fm_intake_health "$TMP/rolling" >/dev/null; the
   fail "FM_INTAKE_HEALTH_WINDOW must select the window"
 fi
 
+# Both seams are BOUNDS, not trust: a garbage value falls back to the default
+# rather than erroring the comparison out into a silent pass. A watchdog that a
+# stray environment variable can switch off is the exact failure this detector
+# was built to catch, one level down.
+for bad in '' abc 0 -1; do
+  if FM_INTAKE_HEALTH_MIN="$bad" fm_intake_health "$TMP/zero" >/dev/null 2>&1; then
+    fail "FM_INTAKE_HEALTH_MIN='$bad' must not disable the detector"
+  fi
+  if FM_INTAKE_HEALTH_WINDOW="$bad" fm_intake_health "$TMP/zero" >/dev/null 2>&1; then
+    fail "FM_INTAKE_HEALTH_WINDOW='$bad' must not disable the detector"
+  fi
+done
+
 # --- 6. fm-intake itself reports the fault when it decides -------------------
 # The detector is worthless if nothing calls it, so intake carries it: every
 # decision it records is followed by an honest read of the council's own record.

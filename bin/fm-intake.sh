@@ -94,34 +94,25 @@ INTAKE_CMD=${FM_INTAKE_CMD:-claude -p --permission-mode bypassPermissions}
 
 # The prompt below lists all four PANEL lines as a template, so a thinker that
 # echoes the menu, restates an option, or adds a footnote emits more than one
-# line starting "PANEL: ". Taking the last one lets that trailing line decide:
-# it can downgrade a real blocker into a proceed, or turn a sound verdict into a
-# spurious escalate. So every line that parses to a VALID verdict is considered
-# and the MOST BLOCKING of them wins - fail closed by construction. No valid
+# line starting "PANEL: ". Two of those lines are noise and must not decide the
+# verdict: a template echo (which parses as a valid verdict the thinker never
+# reached - the escalate template would stop every spawn on its own) and a
+# non-verdict footnote (which would fail closed into a spurious escalate). Both
+# are dropped, and among what remains the LAST line wins, because the prompt
+# tells the thinker its reply must END with exactly one verdict line. No valid
 # line at all still yields nothing, which the caller maps to escalate.
-verdict_rank() {  # <verdict> -> higher is more blocking; 0 is not a verdict
-  case "$1" in
-    escalate) echo 4 ;;
-    revise) echo 3 ;;
-    proceed-with-notes) echo 2 ;;
-    proceed) echo 1 ;;
-    *) echo 0 ;;
-  esac
-}
-
-pick_panel() {  # <thinker-output-file> -> the most blocking valid PANEL line
-  local line best="" rank best_rank=0
+pick_panel() {  # <thinker-output-file> -> the last real PANEL verdict line
+  local line best=""
   while IFS= read -r line; do
-    rank=$(verdict_rank "$(fm_intake_verdict "$line")")
-    [ "$rank" -gt "$best_rank" ] || continue
-    best_rank=$rank
+    [ "$(fm_intake_verdict "$line")" != invalid ] || continue
+    if fm_intake_is_placeholder "$line"; then continue; fi
     best=$line
   done < <(grep '^PANEL: ' "$1" || true)
   [ -n "$best" ] && printf '%s\n' "$best"
   return 0
 }
 
-run_thinker() {  # <name> <charge> -> writes data/<id>/intake-<name>.md; prints its most blocking PANEL line
+run_thinker() {  # <name> <charge> -> writes data/<id>/intake-<name>.md; prints its PANEL verdict line
   local name=$1 charge=$2 out prompt
   out="$DATA/$ID/intake-$name.md"
   prompt=$(cat <<EOF

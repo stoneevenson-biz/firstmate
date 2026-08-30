@@ -151,11 +151,15 @@ than being truncated into a clean proceed. A trailing space or CR is transport
 noise and is stripped, not treated as a malformed verdict. A missing PANEL line,
 a dead thinker, and an unreadable review all still escalate. Because the prompt
 itself lists all four `PANEL:` lines as a template, a thinker may emit several of
-them; selection is therefore the *most blocking* line that parses to a valid
-verdict (escalate > revise > proceed-with-notes > proceed), not the last one. A
-trailing template echo can then neither downgrade a real blocker into a proceed
-nor turn a sound verdict into a spurious escalate, and no valid verdict at all
-remains the fail-closed escalate.
+them, and each template line parses as a valid verdict it never reached — so
+selection first discards the noise. A line whose reason is a placeholder token
+rather than prose (`PANEL: escalate - <why the captain, not the crewmate, must
+decide>`) is a template echo, matched by shape via `fm_intake_is_placeholder`, and
+a `PANEL: ` line that parses to no valid verdict is a footnote; neither may
+decide. Among what survives, the *last* line wins, because the prompt requires
+the reply to end with exactly one verdict line. A trailing template echo can then
+neither downgrade a real blocker into a proceed nor turn a sound verdict into a
+spurious escalate, and no valid verdict at all remains the fail-closed escalate.
 `FM_INTAKE_OVERRIDE` semantics and the cap values are untouched.
 
 ### The regression that was missing

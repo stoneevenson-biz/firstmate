@@ -6,9 +6,9 @@
 #   2. one genuine blocker       -> still revise (unanimity on blockers kept);
 #   3. any escalate              -> still escalate;
 #   4. a missing or malformed PANEL line -> still escalate (fail closed);
-#   5. several PANEL lines -> the MOST BLOCKING valid verdict decides, so a
-#      trailing template echo can neither downgrade a blocker nor invent an
-#      escalate.
+#   5. several PANEL lines -> template echoes and non-verdict footnotes are
+#      discarded and the LAST real verdict decides, so a trailing line can
+#      neither downgrade a blocker nor invent an escalate.
 # Case 1 is the point. Case 2 is what stops this from being "approve everything".
 # The models are stubbed out through FM_INTAKE_CMD so the gate tests SYNTHESIS,
 # not a model's mood; the stub dispatches on the lens name in its prompt.
@@ -80,6 +80,26 @@ for pair in \
 done
 got=$(fm_intake_verdict "$(printf 'PANEL: proceed - ok\r')" 2>/dev/null || echo MISSING)
 [ "$got" = proceed ] || fail "a trailing CR is transport noise, not a malformed verdict (got $got)"
+
+# Every line of the prompt's own grammar template parses as a valid verdict, so
+# the ONLY thing separating a template echo from a decision is that a template's
+# reason is a placeholder token rather than prose. Matched by shape, so a
+# reworded template is caught too - and real prose never is.
+for line in \
+  'PANEL: proceed - <one-line reason>' \
+  'PANEL: proceed-with-notes - <the non-blocking findings, in one line>' \
+  'PANEL: revise - <the single BLOCKING defect, and the concrete change it needs>' \
+  'PANEL: escalate - <why the captain, not the crewmate, must decide>' \
+  'PANEL: revise - <put the blocker here>'; do
+  fm_intake_is_placeholder "$line" || fail "the grammar template is not a decision: $line"
+done
+for line in \
+  'PANEL: proceed - the seam and the definition of done both check out' \
+  'PANEL: revise - <id>.meta is never written, so the worker cannot prove it is done' \
+  'PANEL: proceed' \
+  'PANEL: (see the notes above)'; do
+  if fm_intake_is_placeholder "$line"; then fail "a real verdict must not read as a template: $line"; fi
+done
 
 # --- 1. two non-blocking findings -> PROCEED, notes carried along -------------
 brief t1notes
@@ -160,12 +180,14 @@ F=$(fm_intake_file "$S" t1malformed)
 assert_grep "thinker infrastructure failure" "$F" "a malformed verdict is an infrastructure failure, not a pass"
 assert_no_grep "proceed:" "$F" "no proceed may appear on a malformed PANEL line"
 
-# --- 5. more than one PANEL line -> the MOST BLOCKING valid one wins ----------
+# --- 5. more than one PANEL line -> the LAST REAL verdict wins ---------------
 # The thinker prompt lists all four PANEL lines as a template, so a model that
 # echoes the menu, restates an option, or adds a footnote emits several lines
-# starting "PANEL: ". Taking the last one lets that trailing line decide the
-# verdict in either direction; resolving to the most blocking valid verdict is
-# fail closed by construction.
+# starting "PANEL: ". Two kinds of line are noise and may not decide: a template
+# echo (which parses as a valid verdict the thinker never reached - the escalate
+# template alone would stop every spawn) and a non-verdict footnote (which would
+# fail closed into a spurious escalate). Both are discarded; among what is left
+# the last line wins, because the prompt requires the reply to END with one.
 brief t1echo
 mkstub "$TMP/echo-menu.sh" \
   'PANEL: revise - the safe-set would close panes holding live work
@@ -177,9 +199,26 @@ F=$(fm_intake_file "$S" t1echo)
 assert_grep "panes holding live work" "$F" "the blocking reason still decides the panel"
 assert_no_grep "proceed:" "$F" "an echoed proceed line may never yield a proceed"
 
-# The same rule the other way: a trailing NON-verdict "PANEL: " line must not
-# turn a sound verdict into a spurious escalate, which is what taking the last
-# line unconditionally did.
+# The same rule the other way: echoing the WHOLE menu after a sound non-blocking
+# verdict must not invent a blocker either. The escalate template is a valid
+# escalate by grammar, so nothing but the placeholder filter separates it from a
+# real one - this is the case that would otherwise stop every spawn.
+brief t1echomenu
+mkstub "$TMP/echo-full-menu.sh" \
+  'PANEL: proceed-with-notes - the helper could be named better
+PANEL: proceed - <one-line reason>
+PANEL: proceed-with-notes - <the non-blocking findings, in one line>
+PANEL: revise - <the single BLOCKING defect, and the concrete change it needs>
+PANEL: escalate - <why the captain, not the crewmate, must decide>' \
+  'PANEL: proceed - fine'
+FM_INTAKE_CMD="$TMP/echo-full-menu.sh" "$ROOT/bin/fm-intake.sh" t1echomenu "$PROJ" >/dev/null 2>&1; code=$?
+expect_code 0 "$code" "echoing the whole grammar menu must not invent a blocker"
+F=$(fm_intake_file "$S" t1echomenu)
+[ "$(fm_intake_last "$S" t1echomenu)" = proceed ] || fail "the real verdict, not the echoed menu, must decide"
+assert_grep "named better" "$F" "the real verdict is the one read"
+
+# A trailing NON-verdict "PANEL: " line must not turn a sound verdict into a
+# spurious escalate, which is what taking the last line unconditionally did.
 brief t1footnote
 mkstub "$TMP/footnote.sh" \
   'PANEL: proceed-with-notes - the helper could be named better
@@ -190,16 +229,6 @@ expect_code 0 "$code" "a trailing non-verdict PANEL line must not escalate a sou
 F=$(fm_intake_file "$S" t1footnote)
 assert_grep "named better" "$F" "the real verdict is the one read"
 assert_no_grep "infrastructure failure" "$F" "a footnote is not an infrastructure failure"
-
-# An escalate anywhere in the output outranks a proceed anywhere else.
-brief t1escfirst
-mkstub "$TMP/esc-first.sh" \
-  'PANEL: escalate - only the captain may authorize deleting the data store
-PANEL: proceed-with-notes - otherwise it reads fine' \
-  'PANEL: proceed - fine'
-FM_INTAKE_CMD="$TMP/esc-first.sh" "$ROOT/bin/fm-intake.sh" t1escfirst "$PROJ" >/dev/null 2>&1; code=$?
-expect_code 3 "$code" "escalate outranks every other verdict in the same output"
-[ "$(fm_intake_last "$S" t1escfirst)" = escalate ] || fail "last decision must be escalate"
 
 # Several PANEL lines, none of them a valid verdict, is still fail-closed.
 brief t1allbad
@@ -212,5 +241,15 @@ expect_code 3 "$code" "no valid verdict among several PANEL lines must still esc
 F=$(fm_intake_file "$S" t1allbad)
 assert_grep "thinker infrastructure failure" "$F" "the fail-closed reason survives multi-line output"
 assert_no_grep "proceed:" "$F" "no proceed may come out of an all-invalid output"
+
+# Nothing but the grammar template is discarded: a thinker whose ONLY PANEL line
+# is a placeholder has emitted no decision, which is the fail-closed escalate.
+brief t1onlytemplate
+mkstub "$TMP/only-template.sh" \
+  'PANEL: proceed - <one-line reason>' \
+  'PANEL: proceed - fine'
+FM_INTAKE_CMD="$TMP/only-template.sh" "$ROOT/bin/fm-intake.sh" t1onlytemplate "$PROJ" >/dev/null 2>&1; code=$?
+expect_code 3 "$code" "a thinker that emitted only the template has reached no verdict"
+assert_no_grep "proceed:" "$(fm_intake_file "$S" t1onlytemplate)" "a template echo alone may never yield a proceed"
 
 pass "T1 severity bar: non-blocking findings proceed with notes; blockers, escalates and malformed verdicts still stop the spawn"

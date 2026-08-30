@@ -95,6 +95,42 @@ fm_intake_verdict() {
   esac
 }
 
+# fm_intake_is_placeholder <panel-line> -> 0 when the line is the GRAMMAR
+# TEMPLATE rather than a decision.
+#
+# The thinker prompt lists all four PANEL lines so a thinker knows the grammar,
+# and each of those lines parses to a perfectly valid verdict. A model that
+# echoes or restates the menu therefore emits real-looking verdicts it never
+# reached - and `PANEL: escalate - <why the captain, not the crewmate, must
+# decide>` would deterministically stop the spawn. What separates a template
+# from a decision is the reason: a template's reason is a placeholder token,
+# `<like this>`, where a decision's is prose. Matched by SHAPE, not by the four
+# exact strings, so a reworded template is caught too.
+fm_intake_is_placeholder() {
+  local line=$1 word rest inner
+  while [ -n "$line" ] && [ "$line" != "${line%[[:space:]]}" ]; do line=${line%[[:space:]]}; done
+  case "$line" in
+    'PANEL: '*) rest=${line#PANEL: } ;;
+    *) return 1 ;;
+  esac
+  word=${rest%%[![:lower:]-]*}
+  rest=${rest#"$word"}
+  case "$rest" in
+    ' - '*) rest=${rest# - } ;;
+    *) return 1 ;;
+  esac
+  case "$rest" in
+    '<'*'>')
+      inner=${rest#<}
+      inner=${inner%>}
+      case "$inner" in
+        *'>'*) return 1 ;;
+        *) return 0 ;;
+      esac ;;
+    *) return 1 ;;
+  esac
+}
+
 # fm_intake_recent_kinds <state-dir> <window> -> the kind of each of the most
 # recent <window> decisions, oldest first, one per line. Recency is file
 # modification time across state/*.intake, then append order within a file.
@@ -134,7 +170,11 @@ fm_intake_health() {
   local dir=$1 min=${2:-${FM_INTAKE_HEALTH_MIN:-10}}
   local window=${3:-${FM_INTAKE_HEALTH_WINDOW:-20}}
   local p=0 r=0 e=0 total rate kinds kind
+  # Both bounds are validated: a non-numeric value would make the comparison
+  # below error out and read as false, which switches the detector OFF - the
+  # silently-unwatched-watchdog failure this whole function exists to prevent.
   [ "$window" -ge 1 ] 2>/dev/null || window=20
+  [ "$min" -ge 1 ] 2>/dev/null || min=10
   kinds=$(fm_intake_recent_kinds "$dir" "$window")
   if [ -n "$kinds" ]; then
     while IFS= read -r kind; do
