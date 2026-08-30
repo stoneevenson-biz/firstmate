@@ -33,6 +33,19 @@
 #     field must survive the row split rather than letting the next field slide
 #     into it - which once made the gate's own declared reason read as a
 #     missing test path.
+#   - a declaration this branch ADDS to gates/accepted-red.md, and then relies
+#     on to be acceptable, escalates instead of passing. accepted-red.md calls
+#     itself a deliberate, reviewable statement, so a line a branch writes into
+#     its own diff has been reviewed by nobody; a crewmate whose gate will not
+#     go green could otherwise excuse it by writing the excuse. It escalates
+#     rather than rejects because adding a baseline is legitimate work that a
+#     human still has to say yes to.
+#   - a declaration a branch adds for a gate that is GREEN, or that is not in
+#     the ledger at all, excuses nothing and must not escalate.
+#   - a gate whose status is unproven REJECTS, and the relay tells the crewmate
+#     to let the gate be observed red. The harness stamps unproven whenever a
+#     gate test passes while first_observed_red is null (CONTRIBUTING.md), so it
+#     is ordinary WIP, not a ledger a human has to interpret.
 #   - the verifier prompt no longer carries a gate rule of its own. Two
 #     authorities over one decision is what produced the contradiction.
 #
@@ -74,10 +87,31 @@ SH
 chmod +x "$TMP/relay.sh"
 export FM_RELAY_CMD="$TMP/relay.sh"
 
-# task <id> -> a repo + worktree + ship meta, worktree path echoed
+# The two accepted-red.md bodies the cases use. DECL_RED declares the gate that
+# is actually red; DECL_OTHER declares a different one, so the red stays
+# undeclared.
+DECL_RED='# Accepted red gates
+
+- fx-red - a fixture baseline, accepted red on purpose; goes away when the other repo lands.'
+DECL_OTHER='# Accepted red gates
+
+- fx-some-other-gate - declared, but not the gate that is actually red.'
+
+# task <id> [base-accepted-red] -> a repo + worktree + ship meta, worktree path
+# echoed. When a body is given it is committed as gates/accepted-red.md on the
+# default branch BEFORE the task branch exists, so it is present at the merge
+# base - a reviewed baseline, which is the only kind fm-verify lets a ledger
+# lean on. Without it the declaration exists only in the branch diff.
 task() {
-  local id=$1 repo="$TMP/$1-repo" wt="$TMP/$1-wt"
-  fm_git_worktree "$repo" "$wt" "fm/$id"
+  local id=$1 base=${2:-} repo="$TMP/$1-repo" wt="$TMP/$1-wt"
+  fm_git_init_commit "$repo"
+  if [ -n "$base" ]; then
+    mkdir -p "$repo/gates"
+    printf '%s\n' "$base" > "$repo/gates/accepted-red.md"
+    git -C "$repo" add gates/accepted-red.md
+    git -C "$repo" commit -qm "gates: reviewed red baseline"
+  fi
+  git -C "$repo" worktree add --quiet -b "fm/$id" "$wt"
   mkdir -p "$D/$id"
   fm_write_meta "$S/$id.meta" \
     "window=firstmate:fm-$id" "worktree=$wt" "project=$repo" \
@@ -102,24 +136,16 @@ gates() {
 }
 JSON
   if [ "$declare_red" = yes ]; then
-    cat > "$wt/gates/accepted-red.md" <<'MD'
-# Accepted red gates
-
-- fx-red - a fixture baseline, accepted red on purpose; goes away when the other repo lands.
-MD
+    printf '%s\n' "$DECL_RED" > "$wt/gates/accepted-red.md"
   else
-    cat > "$wt/gates/accepted-red.md" <<'MD'
-# Accepted red gates
-
-- fx-some-other-gate - declared, but not the gate that is actually red.
-MD
+    printf '%s\n' "$DECL_OTHER" > "$wt/gates/accepted-red.md"
   fi
 }
 
 run() { FM_VERIFY_CMD="$TMP/verify.sh" "$ROOT/bin/fm-verify.sh" "$1" >"$TMP/$1.out" 2>&1; }
 
 # --- case A: the only red is declared -> proceed, approve --------------------
-WA=$(task a); gates "$WA" yes
+WA=$(task a "$DECL_RED"); gates "$WA" yes
 run a; codeA=$?
 expect_code 0 "$codeA" "a ledger whose only red is DECLARED must not block acceptance;
 demanding an all-green ledger is unsatisfiable while a declared baseline exists"
@@ -179,7 +205,7 @@ assert_no_grep "approve:" "$(fm_verdict_file "$S" e)" "an unprovable ledger must
 # exist. It does NOT prove any test passes - that is CI's job, and re-running
 # the suite here would duplicate it at the most expensive moment.
 rm -f "$LENS_TRIP" "$VERIFY_TRIP"
-WF=$(task f); gates "$WF" yes; rm -f "$WF/tests/aa.test.sh"
+WF=$(task f "$DECL_RED"); gates "$WF" yes; rm -f "$WF/tests/aa.test.sh"
 run f; codeF=$?
 expect_code 2 "$codeF" "a ledger claiming a gate whose test file is gone is stale, and rejects"
 assert_grep "fx-green" "$(fm_verdict_file "$S" f)" "the stale reject names the gate"
@@ -234,7 +260,7 @@ assert_absent "$VERIFY_TRIP" "the forgery escalation also precedes the verifier"
 # file" the ledger never named - the same spurious reject this whole stage
 # exists to remove. A gate with no readable test path has nothing to check.
 rm -f "$LENS_TRIP" "$VERIFY_TRIP"
-WJ=$(task j); gates "$WJ" yes
+WJ=$(task j "$DECL_RED"); gates "$WJ" yes
 python3 - "$WJ/gates/ledger.json" <<'PY'
 import json, sys
 p = sys.argv[1]
@@ -253,6 +279,82 @@ readable test path is simply not freshness-checked"
 assert_no_grep "reject:" "$(fm_verdict_file "$S" j)" \
   "no stale-test reject may be recorded for a path the ledger never claimed"
 assert_present "$VERIFY_TRIP" "the run proceeds to the verifier"
+
+# --- case K: a declaration this branch added itself -> escalate --------------
+#
+# The base declares a DIFFERENT gate, so the reviewed baseline exists but says
+# nothing about fx-red; the branch adds that line to its own diff. Nobody has
+# reviewed it, and the ledger leans on it to be acceptable, so it is the
+# captain who decides - never a silent pass.
+rm -f "$LENS_TRIP" "$VERIFY_TRIP"
+WK=$(task k "$DECL_OTHER"); gates "$WK" yes
+run k; codeK=$?
+expect_code 3 "$codeK" "a red excused only by a declaration this branch added must escalate"
+assert_grep "escalate:" "$(fm_verdict_file "$S" k)" "the self-authorised red is recorded as an escalation"
+assert_grep "fx-red" "$(fm_verdict_file "$S" k)" "the escalation names the gate whose declaration is new"
+assert_no_grep "approve:" "$(fm_verdict_file "$S" k)" "a branch must never authorise its own red"
+assert_no_grep "gates: acceptable" "$TMP/k.out" \
+  "fm-verify must not announce a self-authorised red as acceptable"
+assert_absent "$VERIFY_TRIP" "the self-authorisation escalation also precedes the verifier"
+
+# --- case L: no accepted-red.md at the base at all -> unverifiable, escalate -
+#
+# Fail closed: with nothing to compare against, whether the declaration was ever
+# reviewed cannot be established, and "cannot establish" is not "fine".
+rm -f "$LENS_TRIP" "$VERIFY_TRIP"
+WL=$(task l); gates "$WL" yes
+run l; codeL=$?
+expect_code 3 "$codeL" "a declared red with no base copy of accepted-red.md must escalate"
+assert_grep "escalate:" "$(fm_verdict_file "$S" l)" "the unverifiable declaration is recorded as an escalation"
+assert_no_grep "approve:" "$(fm_verdict_file "$S" l)" "an unverifiable declaration must never approve"
+
+# --- case M: a new declaration the ledger does not rely on -> unaffected -----
+#
+# Only RELIED-UPON declarations matter. Declaring a gate that is green, or one
+# that is not in the ledger at all, excuses nothing, so it must not escalate -
+# otherwise every edit to that file would wake the captain.
+rm -f "$LENS_TRIP" "$VERIFY_TRIP"
+WM=$(task m "$DECL_RED"); gates "$WM" yes
+cat >> "$WM/gates/accepted-red.md" <<'MD'
+- fx-green - declared, but this gate is green, so the declaration excuses nothing.
+- fx-not-in-the-ledger - declared, and no such gate exists.
+MD
+run m; codeM=$?
+expect_code 0 "$codeM" "declaring a green or absent gate changes nothing and must not escalate"
+assert_grep "approve:" "$(fm_verdict_file "$S" m)" "the run proceeds to an approve"
+assert_no_grep "escalate:" "$(fm_verdict_file "$S" m)" \
+  "a declaration the ledger does not lean on must never escalate"
+assert_present "$VERIFY_TRIP" "the run reaches the verifier"
+
+# --- case N: an unproven gate rejects, and is never a captain escalation -----
+#
+# The harness stamps unproven whenever a gate test passes while
+# first_observed_red is null (CONTRIBUTING.md, "Born-green gates are refused"),
+# so it is the ordinary transient state of gate-driven development and the
+# commonest non-clean status a crewmate can produce. It is crewmate-actionable:
+# let the gate be observed red. Sending it to the captain instead was both a
+# wrong route and a wrong claim - the repo does have a rule for it.
+rm -f "$LENS_TRIP" "$VERIFY_TRIP"; : > "$TMP/relay.log"
+WN=$(task n "$DECL_RED"); gates "$WN" yes
+python3 - "$WN/gates/ledger.json" <<'PYX'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+for g in d["gates"]:
+    if g["id"] == "fx-green":
+        g["status"] = "unproven"
+open(p, "w").write(json.dumps(d, indent=2))
+PYX
+run n; codeN=$?
+expect_code 2 "$codeN" "an unproven gate is crewmate-actionable and must reject, not escalate"
+assert_grep "reject: (attempt 1 of 3)" "$(fm_verdict_file "$S" n)" \
+  "the unproven reject is recorded with an attempt count, like any other reject"
+assert_grep "fx-green" "$(fm_verdict_file "$S" n)" "the reject names the unproven gate"
+assert_no_grep "escalate:" "$(fm_verdict_file "$S" n)" \
+  "unproven must never take the captain path - this repo has a rule for it"
+assert_grep "observed red" "$TMP/relay.log" \
+  "the relay tells the crewmate to let the gate be observed red first"
+assert_absent "$VERIFY_TRIP" "the unproven reject also precedes the verifier"
 
 # --- case G: the prompt no longer carries a gate rule of its own -------------
 #

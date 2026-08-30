@@ -26,7 +26,10 @@
 #     JSON array is BADLEDGER, never coerced into one; and no gate field may
 #     carry a tab or newline, because a delimiter in a structural field FORGES
 #     A ROW - one crafted gate id turned an all-green ledger with an empty
-#     accepted-red.md into a silent skip of an arbitrary failing test. That coercion was
+#     accepted-red.md into a silent skip of an arbitrary failing test; and an
+#     unproven gate is recognised but never acceptable, reported under its own
+#     verdict so a caller can route it to the crewmate who can clear it rather
+#     than to a human who cannot. That coercion was
 #     a live fail-open - {"gates": {}} became an empty list, produced zero rows,
 #     and classified OK, so fm-verify announced "gates: acceptable" over a
 #     ledger it had read no gates from at all.
@@ -184,13 +187,42 @@ p = sys.argv[1]
 d = json.load(open(p))
 for g in d["gates"]:
     if g["id"] == "fx-green":
-        g["status"] = "unproven"
+        g["status"] = "sea-green"
 open(p, "w").write(json.dumps(d, indent=2))
 PY
 case "$(row "$(fm_gates_classify "$H")" fx-green)" in
   bad-status\ *) : ;;
   *) fail "a status the classifier has no rule for must never classify ok" ;;
 esac
+
+# --- unproven is RECOGNISED, and still not acceptable ------------------------
+#
+# CONTRIBUTING.md ("Born-green gates are refused") records that the harness
+# stamps unproven whenever a gate test passes while first_observed_red is null,
+# so it is the ordinary transient state of gate-driven development - not a value
+# this repo cannot interpret. It gets its own verdict because the two fail in
+# different directions for the caller: unproven is a crewmate-actionable reject,
+# while an unrecognised status is a ledger a human has to look at. Collapsing
+# them sent the commonest non-clean status a crewmate can produce straight to a
+# captain escalation.
+U="$TMP/u"; fixture "$U"
+python3 - "$U/gates/ledger.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+for g in d["gates"]:
+    if g["id"] == "fx-green":
+        g["status"] = "unproven"
+open(p, "w").write(json.dumps(d, indent=2))
+PY
+outU=$(fm_gates_classify "$U")
+case "$(row "$outU" fx-green)" in
+  bad-unproven\ *) : ;;
+  *) fail "unproven must classify bad-unproven: recognised, distinct from a
+status this repo has no rule for, and never acceptable" ;;
+esac
+assert_contains "$(row "$outU" fx-green)" "never been observed red" \
+  "the unproven verdict carries the reason a crewmate needs to act on it"
 
 # --- fail closed: a non-array "gates" is BADLEDGER, never coerced ------------
 #

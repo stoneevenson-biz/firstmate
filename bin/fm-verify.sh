@@ -105,6 +105,20 @@ verify_escalate() {  # <reason>
   exit 3
 }
 
+# The branch base is needed by two stages: the gate stage, to tell a reviewed
+# declared red from one this branch wrote for itself, and the diff payload.
+default_branch() {
+  local ref branch
+  ref=$(git -C "$WORKTREE" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)
+  if [ -n "$ref" ]; then echo "${ref#origin/}"; return 0; fi
+  for branch in main master; do
+    if git -C "$WORKTREE" show-ref --verify --quiet "refs/heads/$branch"; then
+      echo "$branch"; return 0
+    fi
+  done
+  return 1
+}
+
 # --- 1. gate ledger adjudication (structural, ahead of both models) -----------
 #
 # Which way each condition fails, and why:
@@ -133,8 +147,16 @@ verify_escalate() {  # <reason>
 #                            can be proven either way. Infrastructure, not work.
 #   unreadable ledger        ESCALATE. Same reason: a parse failure is not a
 #                            finding a crewmate can fix by editing code.
+#   unproven status          REJECT. Crewmate-actionable, and ordinary: the
+#                            harness stamps unproven whenever a gate test passes
+#                            while first_observed_red is null (CONTRIBUTING.md).
+#                            The fix is to let `ledger verify` observe the gate
+#                            red, which is work, not a human decision.
 #   unrecognised status      ESCALATE. Never a pass, and not a work defect - a
 #                            ledger this repo cannot interpret needs a human.
+#   a declared red whose
+#     declaration this
+#     branch added itself    ESCALATE. See "self-authorised reds" below.
 #
 # gates/verify.sh is deliberately never invoked: `ledger verify` re-runs every
 # gate, REWRITES the ledger inside the crewmate's worktree, and is absent in CI.
@@ -174,6 +196,76 @@ if [ "$GATE_HEADER" != NOGATES ]; then
   [ -z "$GATE_UNKNOWN" ] \
     || verify_escalate "gate ledger holds a status this repo has no rule for: ${GATE_UNKNOWN% } - acceptable is green, or red and declared in gates/accepted-red.md; fail closed"
 
+  # SELF-AUTHORISED REDS. A declared red is acceptable because someone REVIEWED
+  # the declaration - gates/accepted-red.md calls itself "a deliberate,
+  # reviewable statement". A line a branch adds to its own diff has been
+  # reviewed by nobody, so a crewmate whose gate will not go green could excuse
+  # it simply by writing the excuse, and both this stage and tests/run-all.sh
+  # would honour it. So every declaration the ledger actually RELIES on is
+  # checked against the merge base.
+  #
+  # It escalates rather than rejects: adding a baseline is legitimate work, and
+  # by that file's own contract approving a new one is the captain's call, not
+  # something to bounce back to the crewmate that wrote it.
+  #
+  # Only RELIED-UPON declarations count. A declaration this branch adds for a
+  # gate that is green, or that is not in the ledger at all, excuses nothing.
+  #
+  # The base is classified with the SAME classifier, over the worktree's own
+  # ledger paired with the BASE copy of accepted-red.md, so "was this declared
+  # before" is answered by the one owner of the declaration format rather than
+  # by a second parser here - which is how the rule came to have three
+  # statements in the first place.
+  GATE_DECLARED=$(printf '%s\n' "$GATE_ROWS" \
+    | awk -F'\t' '$1 == "ok" && $3 == "red" { print $2 }')
+  if [ -n "$GATE_DECLARED" ]; then
+    gate_base_why=""
+    gate_self=""
+    if ! gate_default=$(default_branch); then
+      gate_base_why="no default branch is resolvable there"
+    elif ! gate_base=$(git -C "$WORKTREE" merge-base HEAD "$gate_default" 2>/dev/null) \
+        || [ -z "$gate_base" ]; then
+      gate_base_why="no merge base with $gate_default is resolvable there"
+    elif ! gate_tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-verify-base.XXXXXX" 2>/dev/null); then
+      gate_base_why="a scratch dir for the base comparison could not be created"
+    else
+      mkdir -p "$gate_tmp/gates"
+      if ! git -C "$WORKTREE" show "${gate_base}:gates/accepted-red.md" \
+          > "$gate_tmp/gates/accepted-red.md" 2>/dev/null; then
+        gate_base_why="gates/accepted-red.md does not exist at the merge base $gate_base"
+      elif ! cp "$WORKTREE/gates/ledger.json" "$gate_tmp/gates/ledger.json" 2>/dev/null; then
+        gate_base_why="gates/ledger.json could not be read for the base comparison"
+      else
+        gate_base_raw=$(fm_gates_classify "$gate_tmp" 2>/dev/null)
+        if [ "$(printf '%s\n' "$gate_base_raw" | head -1)" != OK ]; then
+          gate_base_why="the base copy of gates/accepted-red.md could not be classified"
+        else
+          # Anything the worktree calls a declared red but the base calls an
+          # UNDECLARED red is a declaration this branch introduced.
+          gate_self=$(printf '%s\n' "$gate_base_raw" | tail -n +2 \
+            | awk -F'\t' -v want="$GATE_DECLARED" '
+                BEGIN { n = split(want, a, "\n"); for (i = 1; i <= n; i++) d[a[i]] = 1 }
+                $1 == "bad-red" && ($2 in d) { printf "%s ", $2 }')
+        fi
+      fi
+      rm -rf "$gate_tmp"
+    fi
+
+    if [ -n "$gate_base_why" ]; then
+      verify_escalate "the gate ledger relies on a red declared in gates/accepted-red.md ($(printf '%s' "$GATE_DECLARED" | tr '\n' ' ')) but $gate_base_why, so whether that declaration was ever reviewed cannot be established; fail closed"
+    fi
+    if [ -n "$gate_self" ]; then
+      verify_escalate "this branch declares its own red gates in gates/accepted-red.md: ${gate_self% } - a declaration a branch adds to its own diff has been reviewed by nobody, and accepting a new red baseline is a captain decision"
+    fi
+  fi
+
+  # `unproven` is a status this repo DOES have a rule for, so it must not take
+  # the captain path: CONTRIBUTING.md records that the harness stamps it
+  # whenever a gate test passes while first_observed_red is null. The crewmate
+  # clears it by letting the gate be observed red, which is work.
+  GATE_UNPROVEN=$(printf '%s\n' "$GATE_ROWS" \
+    | awk -F'\t' '$1 == "bad-unproven" { printf "%s ", $2 }')
+
   GATE_UNDECLARED=$(printf '%s\n' "$GATE_ROWS" \
     | awk -F'\t' '$1 == "bad-red" { printf "%s ", $2 }')
 
@@ -209,6 +301,12 @@ GATEROWS
       "gates/ledger.json and gates/accepted-red.md in your worktree; run bash $SCRIPT_DIR/fm-gates-lib.sh $WORKTREE"
   fi
 
+  if [ -n "$GATE_UNPROVEN" ]; then
+    verify_reject \
+      "the gate ledger holds unproven gates: ${GATE_UNPROVEN% } - an unproven gate has never been observed red, so it proves nothing. Register the gate while its test genuinely fails and let ledger verify stamp first_observed_red itself, rather than hand-writing that timestamp" \
+      "gates/ledger.json in your worktree, and CONTRIBUTING.md on born-green gates; run bash $SCRIPT_DIR/fm-gates-lib.sh $WORKTREE"
+  fi
+
   if [ -n "$GATE_STALE" ]; then
     verify_reject \
       "the gate ledger references test files that do not exist on disk: ${GATE_STALE%; } - a ledger citing deleted tests is stale by construction" \
@@ -219,18 +317,6 @@ GATEROWS
 fi
 
 # --- 2. diff payload ---------------------------------------------------------
-default_branch() {
-  local ref branch
-  ref=$(git -C "$WORKTREE" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)
-  if [ -n "$ref" ]; then echo "${ref#origin/}"; return 0; fi
-  for branch in main master; do
-    if git -C "$WORKTREE" show-ref --verify --quiet "refs/heads/$branch"; then
-      echo "$branch"; return 0
-    fi
-  done
-  return 1
-}
-
 DIFF_FILE="$DATA/$ID/lens-diff.patch"
 {
   DEFAULT=$(default_branch || true)

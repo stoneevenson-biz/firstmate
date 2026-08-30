@@ -54,11 +54,22 @@
 #
 #   <verdict>\t<gate-id>\t<status>\t<test-path>\t<detail>
 #
-#   verdict     ok | bad-red | bad-status
+#   verdict     ok | bad-red | bad-unproven | bad-status
 #   test-path   the ".test.sh" token from test_ref, or empty. Reported as the
 #               ledger records it and NOT stat()ed - checking it is I/O, and
 #               belongs to the caller that wants a freshness cross-check.
 #   detail      the declared reason for an excused red; why, for a bad verdict.
+#
+# bad-unproven IS NOT bad-status. CONTRIBUTING.md ("Born-green gates are
+# refused") records that the harness itself stamps "unproven" whenever a gate's
+# test passes while first_observed_red is null, so it is the ordinary transient
+# state of gate-driven development, not a value this repo cannot interpret. It
+# is separated out because the two fail in different directions for the caller:
+# an unproven gate is something a crewmate can clear by letting `ledger verify`
+# observe the gate red, while a status nobody has a rule for is a ledger a human
+# has to look at. Collapsing them sent the commonest non-clean status a crewmate
+# can produce straight to a captain escalation. It is still NOT acceptable: the
+# clean set below is exactly green and frozen, plus a declared red.
 #
 # Headers:
 #   NOGATES     <root>/gates is not a directory. Not applicable; no rows.
@@ -220,6 +231,13 @@ for i, g in enumerate(gates):
             verdict, detail = "ok", flat(declared[gid])
         else:
             verdict, detail = "bad-red", "red and not declared in gates/accepted-red.md"
+    elif status == "unproven":
+        # Recognised, and still not acceptable: a gate that has never been seen
+        # red proves nothing, which is exactly why the harness refuses to call
+        # it green. It gets its own verdict so a caller can route it to the
+        # party who can fix it instead of to a human who cannot.
+        verdict, detail = "bad-unproven", (
+            "unproven: the gate has never been observed red, so it proves nothing yet")
     else:
         verdict, detail = "bad-status", 'unrecognised status "%s"' % status
 

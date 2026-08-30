@@ -125,7 +125,20 @@ Anything else is unrecognised and fails closed.
 | a gate's `test_ref` names a file not on disk | **reject** | A ledger claiming green for a gate whose test is gone is stale by construction. |
 | `gates/` but no `ledger.json` | **escalate** | The repo declares itself gate-governed and the record of what is proven is absent. Infrastructure, not work. |
 | ledger unreadable or wrong shape | **escalate** | A parse failure is not a finding a crewmate can fix by editing code. "Wrong shape" includes a `gates` value that is not a JSON array: `CONTRIBUTING.md` and frozen gate `m0-ledger-shape` both make that fatal, so it is never coerced into a list — an object would otherwise yield zero rows and read as acceptable. An *empty* array is valid and acceptable. It also includes any gate whose id, status, or test path carries a tab or newline: the classifier rows are tab-separated, so a delimiter in a structural field forges an extra row, and one crafted gate id was enough to make `run-all.sh` skip an arbitrary failing test over an all-green ledger that declared nothing. |
+| status `unproven` | **reject** | Recognised, not acceptable, and crewmate-actionable. `CONTRIBUTING.md` ("Born-green gates are refused") records that the harness stamps `unproven` whenever a gate test passes while `first_observed_red` is null, so it is the ordinary transient state of gate-driven development and the commonest non-clean status a crewmate can produce. The fix is work - register the gate while its test genuinely fails and let `ledger verify` stamp `first_observed_red` itself - so it goes back to the crewmate, never to the captain. The classifier reports it under its own verdict, `bad-unproven`, so the two failure directions cannot be collapsed again. |
 | unrecognised status | **escalate** | Never a pass; a ledger this repo cannot interpret needs a human. |
+| a declared red whose declaration this branch added itself | **escalate** | `gates/accepted-red.md` calls itself a deliberate, reviewable statement, so a line a branch writes into its own diff has been reviewed by nobody. A crewmate whose gate will not go green could otherwise excuse it by writing the excuse, and both this stage and `run-all.sh` would honour it. It escalates rather than rejects because adding a baseline is legitimate work that a human still has to approve. Only declarations the ledger actually *relies on* count - declaring a green gate, or one absent from the ledger, excuses nothing. If the base cannot be resolved, or `gates/accepted-red.md` does not exist there, every relied-upon declaration is unverifiable and it escalates: fail closed. |
+
+**The base comparison lives in the policy layer, not the classifier.**
+Whether a declaration was ever reviewed is a question about *git history*, and
+the classifier is pure by contract - two files, root as an argument, no other
+I/O.
+So `bin/fm-verify.sh` answers it, and it answers it by running the same
+classifier a second time over the worktree's own ledger paired with the **base**
+copy of `gates/accepted-red.md`.
+A gate the worktree calls a declared red and the base calls an undeclared one is
+a declaration this branch introduced.
+The declaration format therefore still has exactly one parser.
 
 **Freshness is a cross-check, not a re-run.** The `test_ref` existence check
 proves only that the ledger is not referencing tests that no longer exist. It
