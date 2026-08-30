@@ -28,7 +28,12 @@ half-implemented.
    *(Superseded by the 2026-08-29 amendment below: a fourth verdict,
    `proceed-with-notes`, and a defined severity bar for `revise`.)*
 3. Synthesis (fail closed): any escalate or missing PANEL line → escalate;
-   any revise → revise; both proceed → proceed. Written to
+   any revise → revise; both proceed → proceed.
+   *(Amended 2026-08-29: a malformed, hedged, or template-echoed PANEL line
+   escalates as well, and "both proceed" widens to "both non-blocking" — either
+   `proceed` or `proceed-with-notes`, whose findings ride along on the
+   decision.)*
+   Written to
    `data/<id>/intake-review.md`; the decision appends to the new append-only
    **`state/<id>.intake`** (`proceed:` / `revise:` / `escalate:` decisions,
    `panel:` evidence — a separate channel; the verdict grammar stays as q1 pins it).
@@ -198,6 +203,11 @@ as a structural fault.
 is read over, so the detector stays live instead of disarming on the first
 proceed.
 
+Both bounds are validated before use: an empty, non-numeric, zero, or negative
+value falls back to its default rather than being honoured. A bound that
+switches the detector off is the silently-unwatched watchdog the detector
+exists to prevent, so neither seam may be the thing that mutes it.
+
 ### Gates (t1)
 
 - `gate-t1-severity-proceeds` — stubbed thinkers drive synthesis directly, so
@@ -207,12 +217,19 @@ proceed.
   escalate**; a missing or malformed PANEL line → **still escalate**.
   Plus `fm_intake_verdict` directly: the four words and nothing else, with a
   hedged or garbled verdict (`proceed/revise`, `proceed?`, `proceed_with_notes`)
-  invalid rather than truncated into a proceed.
+  invalid rather than truncated into a proceed; `fm_intake_is_placeholder`
+  recognising every line of the prompt's own grammar template by shape and no
+  real verdict; and, when a thinker emits several `PANEL: ` lines, the template
+  echoes and non-verdict footnotes discarded and the LAST real verdict deciding
+  — so a trailing echo can neither downgrade a revise into a proceed nor invent
+  a blocker after a sound verdict, and output whose only `PANEL: ` lines are
+  invalid or templates still escalates.
 - `gate-t1-proceed-rate-nonzero` — the detector: a 12-decision zero-proceed
   corpus is flagged, one proceed clears it, a 3-decision corpus and an empty one
   stay quiet, the same 3-decision corpus is flagged with the floor at 3, a
-  proceed older than the window does not disarm it, and a live `fm-intake` run
-  over a zero-proceed state dir emits the warning.
+  proceed older than the window does not disarm it, neither bound can mute the
+  detector with an empty, non-numeric, zero, or negative value, and a live
+  `fm-intake` run over a zero-proceed state dir emits the warning.
 
 ### Gates (red-first + LEDGER_MUTATE=1 mutation, as q1–q7)
 
