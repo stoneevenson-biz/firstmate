@@ -22,16 +22,20 @@
 #     verify` re-runs every gate and rewrites the ledger it is pointed at, so a
 #     classifier that called it would mutate the thing it classifies.
 #   - FAIL CLOSED: an unparseable ledger yields no rows at all, never a partial
-#     answer; an unrecognised status is never ok; and a "gates" value that is
-#     not a JSON array is BADLEDGER, never coerced into one. That coercion was
+#     answer; an unrecognised status is never ok; a "gates" value that is not a
+#     JSON array is BADLEDGER, never coerced into one; and no gate field may
+#     carry a tab or newline, because a delimiter in a structural field FORGES
+#     A ROW - one crafted gate id turned an all-green ledger with an empty
+#     accepted-red.md into a silent skip of an arbitrary failing test. That coercion was
 #     a live fail-open - {"gates": {}} became an empty list, produced zero rows,
 #     and classified OK, so fm-verify announced "gates: acceptable" over a
 #     ledger it had read no gates from at all.
 #
 # Mutation (LEDGER_MUTATE=1): the assertions demand the unsafe classification -
-# that an UNDECLARED red is ok, and that an object-shaped "gates" is coerced and
-# classified OK. A correct classifier calls them bad-red and BADLEDGER, so both
-# assertions fail.
+# that an UNDECLARED red is ok, that an object-shaped "gates" is coerced and
+# classified OK, and that a forged row is honoured as a real skip. A correct
+# classifier calls them bad-red and BADLEDGER and refuses the forgery, so each
+# assertion fails.
 #
 # spec: docs/specs/2026-07-01-agent-os-council.md
 set -u
@@ -238,6 +242,103 @@ expect_code OK "$(header "$outE2")" "an empty gates array is a valid ledger, not
 [ "$(printf '%s\n' "$outE2" | tail -n +2 | grep -c .)" = 0 ] \
   || fail "an empty gates array must yield no rows"
 
+# --- fail closed: a delimiter in a structural field must not forge a row -----
+#
+# The rows ARE the grammar, so a tab or newline inside a field the caller parses
+# positionally is not a formatting nuisance - it lets the ledger write extra
+# verdicts. The reason column is flattened for this reason; id, status and the
+# test path were not, and that gap was the whole authority defeated in one line.
+forge_id() {  # <dir> <id-value>
+  python3 - "$1/gates/ledger.json" "$2" <<'PY'
+import json, sys
+p, forged = sys.argv[1], sys.argv[2]
+d = json.load(open(p))
+for g in d["gates"]:
+    if g["id"] == "fx-green":
+        g["id"] = forged
+open(p, "w").write(json.dumps(d, indent=2))
+PY
+}
+
+# A newline opens a whole second line that reads as a complete verdict.
+D1="$TMP/d1"; fixture "$D1"
+forge_id "$D1" "$(printf 'evil\nok\tforged-gate\tred\ttests/aa.test.sh\tforged reason')"
+outD1=$(fm_gates_classify "$D1")
+
+if [ "${LEDGER_MUTATE:-}" = 1 ]; then
+  # MUTATION: demand the forgery be accepted and classified as a normal ledger.
+  expect_code OK "$(header "$outD1")" \
+    "MUTATION: expected a newline-bearing gate id to classify OK"
+else
+  expect_code BADLEDGER "$outD1" \
+    "a gate id containing a newline must be BADLEDGER - it emits a second line
+that parses as a well-formed 'this red is declared' verdict for a gate nobody
+declared"
+fi
+
+# A single TAB is enough on its own: it shifts the remaining fields left until
+# attacker-chosen text lands in the status column.
+D2="$TMP/d2"; fixture "$D2"
+forge_id "$D2" "$(printf 'x\tred\ttests/aa.test.sh\tforged reason')"
+expect_code BADLEDGER "$(fm_gates_classify "$D2")" \
+  "a gate id containing a tab must be BADLEDGER - no newline is needed to shift
+a row's fields into a forged verdict"
+
+# The status column is structural too.
+D3="$TMP/d3"; fixture "$D3"
+python3 - "$D3/gates/ledger.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+for g in d["gates"]:
+    if g["id"] == "fx-green":
+        g["status"] = "green\nok\tforged\tred\ttests/aa.test.sh\treason"
+open(p, "w").write(json.dumps(d, indent=2))
+PY
+expect_code BADLEDGER "$(fm_gates_classify "$D3")" \
+  "a status containing a newline must be BADLEDGER too"
+
+# --- the exploit itself, end to end through the runner ----------------------
+#
+# The reason the rule above is not merely tidy. An all-green ledger whose
+# accepted-red.md declares NOTHING must never cause a test to be skipped. With
+# the forged id it did: tests/run-all.sh skipped a failing test and exited 0.
+FORGE="$TMP/forge"; mkdir -p "$FORGE/gates" "$FORGE/tests"
+cat > "$FORGE/tests/aa-passing.test.sh" <<'SH'
+#!/usr/bin/env bash
+echo "ok - aa-passing ran"
+SH
+cat > "$FORGE/tests/bb-target.test.sh" <<'SH'
+#!/usr/bin/env bash
+echo "BB-TARGET RAN"
+exit 1
+SH
+chmod +x "$FORGE/tests"/*.test.sh
+python3 - "$FORGE/gates/ledger.json" <<'PY'
+import json, sys
+forged = "evil\nok\tforged-gate\tred\ttests/bb-target.test.sh\tforged reason"
+json.dump({"version": 1, "gates": [
+    {"id": "fx-green", "status": "green", "test_ref": "bash tests/aa-passing.test.sh"},
+    {"id": forged,     "status": "green", "test_ref": "bash tests/aa-passing.test.sh"},
+]}, open(sys.argv[1], "w"), indent=2)
+PY
+printf '# Accepted red gates\n\nNothing is declared here.\n' > "$FORGE/gates/accepted-red.md"
+outF=$(FM_SUITE_ROOT="$FORGE" bash "$ROOT/tests/run-all.sh" 2>&1); codeF=$?
+
+if [ "${LEDGER_MUTATE:-}" = 1 ]; then
+  # MUTATION: demand the forged skip be honoured and the suite come back green.
+  expect_code 0 "$codeF" "MUTATION: expected the forged row to skip the target test"
+  assert_not_contains "$outF" "BB-TARGET RAN" "MUTATION: expected the target test to be skipped"
+else
+  [ "$codeF" -ne 0 ] \
+    || fail "a forged row must not turn a failing test into a green suite"
+  assert_contains "$outF" "BB-TARGET RAN" \
+    "the targeted test must still RUN - no gate was red and nothing was declared,
+so nothing whatsoever was skippable"
+  assert_not_contains "$outF" "SKIP bb-target" \
+    "a skip announced for a gate that does not exist is a forged authority"
+fi
+
 # --- purity: never invokes gates/verify.sh or the ledger CLI -----------------
 #
 # `ledger verify` execSyncs every gate's test_ref and then REWRITES
@@ -271,4 +372,4 @@ re-run every gate and rewrite the ledger it is classifying"
 [ "$(header "$(fm_gates_classify "$A")")" = OK ] || fail "root A must classify OK"
 [ "$(fm_gates_classify "$C")" = NOGATES ] || fail "root C must classify NOGATES"
 
-pass "Q8 gate classifier: double condition, absence cases, array-only, pure, fail closed"
+pass "Q8 gate classifier: double condition, absence cases, array-only, unforgeable rows, pure, fail closed"

@@ -65,7 +65,9 @@
 #   NOLEDGER    gates/ exists but gates/ledger.json does not. No rows.
 #   BADLEDGER   the ledger is unreadable, unparseable, or the wrong shape -
 #               including a "gates" value that is not a JSON array, which
-#               CONTRIBUTING.md and frozen gate m0-ledger-shape both call fatal.
+#               CONTRIBUTING.md and frozen gate m0-ledger-shape both call fatal,
+#               and any gate whose id, status, or test path carries a tab or a
+#               newline, which would forge a row (see below).
 #               No rows - never a partial answer (see ALL OR NOTHING below).
 #   NOACCEPTED  the ledger parsed but gates/accepted-red.md is absent, so NO
 #               declarations exist. Rows follow, and every red among them is
@@ -161,18 +163,42 @@ if not isinstance(gates, list) or not all(isinstance(g, dict) for g in gates):
 def flat(s):
     return re.sub(r"[\t\r\n]+", " ", str(s)).strip()
 
+# THE STRUCTURAL FIELDS ARE THE ROW GRAMMAR, SO A DELIMITER IN ONE FORGES A ROW.
+# Verified, and it is the whole authority defeated in one line: a gate whose id
+# was "evil\nok<TAB>forged<TAB>red<TAB>tests/x.test.sh<TAB>reason" emitted a
+# second line that parsed as a perfectly well-formed "this red is declared"
+# verdict. tests/run-all.sh then skipped tests/x.test.sh and exited 0 - over an
+# all-green ledger, with an accepted-red.md that declared nothing at all. A
+# single tab is enough on its own: it shifts the remaining fields left until
+# some attacker-chosen text lands in the status column.
+#
+# Flattening these the way the reason is flattened would keep the row intact but
+# leave a mangled id standing in for a real one. Refusing outright is the
+# stricter and more honest answer, and it costs nothing: a tab or a newline in a
+# gate id, a status, or a test path is never a legitimate ledger. It is the same
+# rule as the array check above - a ledger the harness would never accept is not
+# one this classifier may quietly repair.
+def structural(value, field, index):
+    v = str(value)
+    if any(c in v for c in "\t\r\n"):
+        raise SystemExit(
+            "gate #%d: %s contains a tab or newline, which would forge a row" % (index, field))
+    return v
+
 # Built whole, then printed. A raise partway through must yield NO rows at all,
 # never a half-list that would look like a complete answer.
 rows = []
-for g in gates:
-    gid = str(g.get("id"))
-    status = str(g.get("status"))
+for i, g in enumerate(gates):
+    gid = structural(g.get("id"), "id", i)
+    status = structural(g.get("status"), "status", i)
 
     # test_ref is a shell command ("bash tests/x.test.sh"); take the path token.
+    # split() breaks on every whitespace character, so a token cannot carry a
+    # delimiter - it is checked anyway rather than resting on that.
     test_path = ""
     for tok in str(g.get("test_ref") or "").split():
         if tok.endswith(".test.sh"):
-            test_path = tok
+            test_path = structural(tok, "test_ref", i)
             break
 
     if status in clean:
