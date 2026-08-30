@@ -58,7 +58,8 @@ fm_intake_revise_count() {  # <state-dir> <id>
 # proceed-with-notes is the word the council was missing. Without it a reviewer
 # holding a real but non-blocking finding had nowhere to put it, so it either
 # vetoed the spawn or was thrown away; across 96 verdicts it always vetoed.
-# Non-blocking findings now ride along with the proceed as notes on the brief.
+# Non-blocking findings are now recorded on the proceed line and in the review
+# file; firstmate folds what is worth folding into the brief before spawning.
 
 # fm_intake_verdict <panel-line> -> proceed|proceed-with-notes|revise|escalate,
 # or "invalid" for anything else. Deliberately strict: the caller maps invalid

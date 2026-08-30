@@ -16,7 +16,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-06-25T00:00:00Z",
-      "last_verified": "2026-08-30T00:32:03.034Z"
+      "last_verified": "2026-08-30T00:49:08.322Z"
     },
     {
       "id": "gate-g2-busy-guard",
@@ -33,7 +33,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-06-25T00:00:00Z",
-      "last_verified": "2026-08-30T00:32:03.034Z"
+      "last_verified": "2026-08-30T00:49:08.322Z"
     },
     {
       "id": "gate-g3-rehydrate",
@@ -50,7 +50,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-06-25T00:00:00Z",
-      "last_verified": "2026-08-30T00:32:03.034Z"
+      "last_verified": "2026-08-30T00:49:08.322Z"
     },
     {
       "id": "gate-g4-e2e",
@@ -70,7 +70,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-06-25T00:00:00Z",
-      "last_verified": "2026-08-30T00:32:03.034Z"
+      "last_verified": "2026-08-30T00:49:08.322Z"
     },
     {
       "id": "gate-g5-inject-cap",
@@ -87,7 +87,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-06-25T00:00:00Z",
-      "last_verified": "2026-08-30T00:32:03.034Z"
+      "last_verified": "2026-08-30T00:49:08.322Z"
     },
     {
       "id": "gate-q1-verdict-grammar",
@@ -104,7 +104,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-07-01T00:00:00Z",
-      "last_verified": "2026-08-30T00:32:03.034Z"
+      "last_verified": "2026-08-30T00:49:08.322Z"
     },
     {
       "id": "gate-q2-merge-refuses-unverified",
@@ -123,7 +123,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-07-01T00:00:00Z",
-      "last_verified": "2026-08-30T00:32:03.034Z"
+      "last_verified": "2026-08-30T00:49:08.322Z"
     },
     {
       "id": "gate-q3-prcheck-refuses-unverified",
@@ -142,7 +142,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-07-01T00:00:00Z",
-      "last_verified": "2026-08-30T00:32:03.034Z"
+      "last_verified": "2026-08-30T00:49:08.322Z"
     },
     {
       "id": "gate-q4-reject-roundtrip",
@@ -161,7 +161,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-07-01T00:00:00Z",
-      "last_verified": "2026-08-30T00:32:03.034Z"
+      "last_verified": "2026-08-30T00:49:08.322Z"
     },
     {
       "id": "gate-q5-attempt-cap",
@@ -180,7 +180,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-07-01T00:00:00Z",
-      "last_verified": "2026-08-30T00:32:03.034Z"
+      "last_verified": "2026-08-30T00:49:08.322Z"
     },
     {
       "id": "gate-q6-lens-degrade",
@@ -199,7 +199,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-07-01T00:00:00Z",
-      "last_verified": "2026-08-30T00:32:03.034Z"
+      "last_verified": "2026-08-30T00:49:08.322Z"
     },
     {
       "id": "gate-q7-fail-closed",
@@ -218,7 +218,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-07-01T00:00:00Z",
-      "last_verified": "2026-08-30T00:32:03.034Z"
+      "last_verified": "2026-08-30T00:49:08.322Z"
     },
     {
       "id": "gate-i1-intake-grammar",
@@ -235,7 +235,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-07-03T00:00:00Z",
-      "last_verified": "2026-08-30T00:32:03.034Z"
+      "last_verified": "2026-08-30T00:49:08.322Z"
     },
     {
       "id": "gate-i2-spawn-refuses-unvetted",
@@ -254,7 +254,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-07-03T00:00:00Z",
-      "last_verified": "2026-08-30T00:32:03.034Z"
+      "last_verified": "2026-08-30T00:49:08.322Z"
     },
     {
       "id": "gate-i3-panel-roundtrip",
@@ -273,7 +273,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-07-03T00:00:00Z",
-      "last_verified": "2026-08-30T00:32:03.034Z"
+      "last_verified": "2026-08-30T00:49:08.322Z"
     },
     {
       "id": "gate-i4-revise-cap-fail-closed",
@@ -292,7 +292,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-07-03T00:00:00Z",
-      "last_verified": "2026-08-30T00:32:03.034Z"
+      "last_verified": "2026-08-30T00:49:08.322Z"
     },
     {
       "id": "gate-i5-intake-lens-degrade",
@@ -311,7 +311,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-07-03T00:00:00Z",
-      "last_verified": "2026-08-30T00:32:03.034Z"
+      "last_verified": "2026-08-30T00:49:08.322Z"
     },
     {
       "id": "gate-l1-drain-instrumented",
@@ -328,7 +328,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-07-03T00:00:00Z",
-      "last_verified": "2026-08-30T00:32:03.034Z"
+      "last_verified": "2026-08-30T00:49:08.322Z"
     },
     {
       "id": "gate-l2-loop-audit-level",
@@ -347,7 +347,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-07-03T00:00:00Z",
-      "last_verified": "2026-08-30T00:32:03.034Z"
+      "last_verified": "2026-08-30T00:49:08.322Z"
     },
     {
       "id": "g-boot-digest",
@@ -359,12 +359,12 @@
       "test_ref": "bash tests/fm-captain-bootstrap-digest.test.sh",
       "baseline_ref": null,
       "first_observed_red": "2026-07-08T21:00:30.169Z",
-      "mutation_verified": "2026-08-30T00:34:06.017Z",
+      "mutation_verified": "2026-08-30T00:50:34.228Z",
       "status": "frozen",
       "vacuous": false,
       "regression": false,
       "created": "2026-07-08T00:00:00Z",
-      "last_verified": "2026-08-30T00:32:03.034Z"
+      "last_verified": "2026-08-30T00:49:08.322Z"
     },
     {
       "id": "m0-ledger-shape",
@@ -376,12 +376,12 @@
       "test_ref": "bash tests/fm-boot-m0.test.sh",
       "baseline_ref": null,
       "first_observed_red": "2026-08-28T05:01:42.000Z",
-      "mutation_verified": "2026-08-30T00:34:11.380Z",
+      "mutation_verified": "2026-08-30T00:50:38.009Z",
       "status": "frozen",
       "vacuous": false,
       "regression": false,
       "created": "2026-08-27T00:00:00Z",
-      "last_verified": "2026-08-30T00:32:03.034Z"
+      "last_verified": "2026-08-30T00:49:08.322Z"
     },
     {
       "id": "m1-hook-registered",
@@ -398,7 +398,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-08-27T00:00:00Z",
-      "last_verified": "2026-08-30T00:32:03.034Z"
+      "last_verified": "2026-08-30T00:49:08.322Z"
     },
     {
       "id": "m2-boot-emitter-is-read-only",
@@ -410,12 +410,12 @@
       "test_ref": "bash tests/fm-boot-m2.test.sh",
       "baseline_ref": null,
       "first_observed_red": "2026-08-28T05:03:07.053Z",
-      "mutation_verified": "2026-08-30T00:34:11.730Z",
+      "mutation_verified": "2026-08-30T00:50:38.280Z",
       "status": "frozen",
       "vacuous": false,
       "regression": false,
       "created": "2026-08-27T00:00:00Z",
-      "last_verified": "2026-08-30T00:32:03.034Z"
+      "last_verified": "2026-08-30T00:49:08.322Z"
     },
     {
       "id": "m4-boot-budget-hostile",
@@ -427,12 +427,12 @@
       "test_ref": "bash tests/fm-boot-m4.test.sh",
       "baseline_ref": null,
       "first_observed_red": "2026-08-28T05:03:07.053Z",
-      "mutation_verified": "2026-08-30T00:34:12.472Z",
+      "mutation_verified": "2026-08-30T00:50:38.907Z",
       "status": "frozen",
       "vacuous": false,
       "regression": false,
       "created": "2026-08-27T00:00:00Z",
-      "last_verified": "2026-08-30T00:32:03.034Z"
+      "last_verified": "2026-08-30T00:49:08.322Z"
     },
     {
       "id": "m5-digest-never-silent",
@@ -444,12 +444,12 @@
       "test_ref": "bash tests/fm-boot-m5.test.sh",
       "baseline_ref": null,
       "first_observed_red": "2026-08-28T05:03:07.053Z",
-      "mutation_verified": "2026-08-30T00:34:45.499Z",
+      "mutation_verified": "2026-08-30T00:51:09.787Z",
       "status": "frozen",
       "vacuous": false,
       "regression": false,
       "created": "2026-08-27T00:00:00Z",
-      "last_verified": "2026-08-30T00:32:03.034Z"
+      "last_verified": "2026-08-30T00:49:08.322Z"
     },
     {
       "id": "gate-ci-declared-red",
@@ -461,12 +461,12 @@
       "test_ref": "bash tests/fm-ci-declared-red.test.sh",
       "baseline_ref": null,
       "first_observed_red": "2026-08-28T05:43:52.000Z",
-      "mutation_verified": "2026-08-30T00:34:53.179Z",
+      "mutation_verified": "2026-08-30T00:51:12.463Z",
       "status": "frozen",
       "vacuous": false,
       "regression": false,
       "created": "2026-08-27T00:00:00Z",
-      "last_verified": "2026-08-30T00:32:03.034Z"
+      "last_verified": "2026-08-30T00:49:08.322Z"
     },
     {
       "id": "gate-status-verb",
@@ -478,12 +478,12 @@
       "test_ref": "bash tests/fm-status-verb.test.sh",
       "baseline_ref": null,
       "first_observed_red": "2026-08-28T15:11:29.000Z",
-      "mutation_verified": "2026-08-30T00:34:58.093Z",
+      "mutation_verified": "2026-08-30T00:51:16.746Z",
       "status": "frozen",
       "vacuous": false,
       "regression": false,
       "created": "2026-08-28T00:00:00Z",
-      "last_verified": "2026-08-30T00:32:03.034Z"
+      "last_verified": "2026-08-30T00:49:08.322Z"
     },
     {
       "id": "gate-h2-mux-workspace-scoping",
@@ -500,7 +500,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-08-28T00:00:00Z",
-      "last_verified": "2026-08-30T00:32:03.034Z"
+      "last_verified": "2026-08-30T00:49:08.322Z"
     },
     {
       "id": "gate-h3-spawn-named-herdr-tab",
@@ -517,7 +517,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-08-28T00:00:00Z",
-      "last_verified": "2026-08-30T00:32:03.034Z"
+      "last_verified": "2026-08-30T00:49:08.322Z"
     },
     {
       "id": "gate-h4-send-peek-routed-by-meta",
@@ -534,7 +534,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-08-28T00:00:00Z",
-      "last_verified": "2026-08-30T00:32:03.034Z"
+      "last_verified": "2026-08-30T00:49:08.322Z"
     },
     {
       "id": "gate-h5-herdr-live-roundtrip",
@@ -551,7 +551,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-08-28T00:00:00Z",
-      "last_verified": "2026-08-30T00:32:03.034Z"
+      "last_verified": "2026-08-30T00:49:08.322Z"
     },
     {
       "id": "gate-h1-herdr-only-surface",
@@ -568,7 +568,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-08-28T00:00:00Z",
-      "last_verified": "2026-08-30T00:32:03.034Z"
+      "last_verified": "2026-08-30T00:49:08.322Z"
     },
     {
       "id": "gate-h6-drain-open-nothing-new-on-tmux",
@@ -585,7 +585,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-08-28T00:00:00Z",
-      "last_verified": "2026-08-30T00:32:03.034Z"
+      "last_verified": "2026-08-30T00:49:08.322Z"
     },
     {
       "id": "gate-h7-drain-live-roundtrip",
@@ -602,7 +602,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-08-28T00:00:00Z",
-      "last_verified": "2026-08-30T00:32:03.034Z"
+      "last_verified": "2026-08-30T00:49:08.322Z"
     },
     {
       "id": "gate-h8-teardown-closes-the-pane",
@@ -619,7 +619,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-08-28T00:00:00Z",
-      "last_verified": "2026-08-30T00:32:03.034Z"
+      "last_verified": "2026-08-30T00:49:08.322Z"
     },
     {
       "id": "gate-h9-startup-reports-unusable-herdr",
@@ -636,7 +636,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-08-28T00:00:00Z",
-      "last_verified": "2026-08-30T00:32:03.034Z"
+      "last_verified": "2026-08-30T00:49:08.322Z"
     },
     {
       "id": "gate-h10-busy-agent-acknowledgment",
@@ -653,12 +653,12 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-08-28T00:00:00Z",
-      "last_verified": "2026-08-30T00:32:03.034Z"
+      "last_verified": "2026-08-30T00:49:08.322Z"
     },
     {
       "id": "gate-t1-severity-proceeds",
       "title": "Intake severity bar: non-blocking findings proceed with notes; a blocker, an escalate or a malformed verdict still stops the spawn",
-      "observable": "with stubbed thinkers driving synthesis directly: two proceed-with-notes verdicts exit 0 with a 'proceed:' line carrying the notes and no revise; a single revise from either lens exits 2 with the revise count and no proceed; a single escalate exits 3; a missing, malformed or hedged PANEL line exits 3 recording 'thinker infrastructure failure' and never a proceed; fm_intake_verdict maps only the four verdict words, each as a whole word followed by nothing or ' - reason', and yields 'invalid' for everything else including 'proceed/revise', 'proceed?' and 'proceed_with_notes'",
+      "observable": "with stubbed thinkers driving synthesis directly: two proceed-with-notes verdicts exit 0 with a 'proceed:' line carrying the notes and no revise; a single revise from either lens exits 2 with the revise count and no proceed; a single escalate exits 3; a missing, malformed or hedged PANEL line exits 3 recording 'thinker infrastructure failure' and never a proceed; fm_intake_verdict maps only the four verdict words, each as a whole word followed by nothing or ' - reason', and yields 'invalid' for everything else including 'proceed/revise', 'proceed?' and 'proceed_with_notes'; and when a thinker emits several 'PANEL: ' lines the MOST BLOCKING valid verdict decides, so a trailing echo of the template cannot downgrade a revise into a proceed, a trailing non-verdict 'PANEL: ' line cannot escalate a sound verdict, and several PANEL lines with no valid verdict among them still exit 3 recording 'thinker infrastructure failure'",
       "origin_mode": "build",
       "spec_ref": "docs/specs/2026-07-03-wardroom-intake.md",
       "blocked_by": [
@@ -673,7 +673,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-08-29T00:00:00Z",
-      "last_verified": "2026-08-30T00:32:03.034Z"
+      "last_verified": "2026-08-30T00:49:08.322Z"
     },
     {
       "id": "gate-t1-proceed-rate-nonzero",
@@ -692,7 +692,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-08-29T00:00:00Z",
-      "last_verified": "2026-08-30T00:32:03.034Z"
+      "last_verified": "2026-08-30T00:49:08.322Z"
     }
   ]
 }

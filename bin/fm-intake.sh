@@ -92,7 +92,36 @@ fm_intake_append "$STATE" "$ID" panel "lens $LENS $(head -c 120 "$LENS_REVIEW" |
 # --- 2. thinker panel (sequential; parallel panels arrive with agent teams, P5) --
 INTAKE_CMD=${FM_INTAKE_CMD:-claude -p --permission-mode bypassPermissions}
 
-run_thinker() {  # <name> <charge> -> writes data/<id>/intake-<name>.md; prints last PANEL line
+# The prompt below lists all four PANEL lines as a template, so a thinker that
+# echoes the menu, restates an option, or adds a footnote emits more than one
+# line starting "PANEL: ". Taking the last one lets that trailing line decide:
+# it can downgrade a real blocker into a proceed, or turn a sound verdict into a
+# spurious escalate. So every line that parses to a VALID verdict is considered
+# and the MOST BLOCKING of them wins - fail closed by construction. No valid
+# line at all still yields nothing, which the caller maps to escalate.
+verdict_rank() {  # <verdict> -> higher is more blocking; 0 is not a verdict
+  case "$1" in
+    escalate) echo 4 ;;
+    revise) echo 3 ;;
+    proceed-with-notes) echo 2 ;;
+    proceed) echo 1 ;;
+    *) echo 0 ;;
+  esac
+}
+
+pick_panel() {  # <thinker-output-file> -> the most blocking valid PANEL line
+  local line best="" rank best_rank=0
+  while IFS= read -r line; do
+    rank=$(verdict_rank "$(fm_intake_verdict "$line")")
+    [ "$rank" -gt "$best_rank" ] || continue
+    best_rank=$rank
+    best=$line
+  done < <(grep '^PANEL: ' "$1" || true)
+  [ -n "$best" ] && printf '%s\n' "$best"
+  return 0
+}
+
+run_thinker() {  # <name> <charge> -> writes data/<id>/intake-<name>.md; prints its most blocking PANEL line
   local name=$1 charge=$2 out prompt
   out="$DATA/$ID/intake-$name.md"
   prompt=$(cat <<EOF
@@ -119,9 +148,11 @@ A finding is BLOCKING only if, running this brief as written, the crewmate would
 
 Everything else is a NOTE: a cleaner seam, a better name, an extra test, scope
 you would have trimmed, a doc step, a count or a wording to fix, a risk worth
-mentioning. Notes are valuable and you should still write them - they ride along
-with the spawn as notes on the brief, and the worker gets them. They do not veto
-it. Preference is not a defect.
+mentioning. Notes are valuable and you should still write them: they are recorded
+on the proceed line in state/<id>.intake and in data/<id>/intake-review.md, where
+firstmate reads them and folds what is worth folding into the brief before the
+crewmate is spawned. What a note does not do is veto the spawn. Preference is not
+a defect.
 
 Two tests before you call something blocking:
   - Can you state it as premise then consequence - "X is true, SO the worker
@@ -149,7 +180,7 @@ EOF
 )
   : > "$out"
   if (cd "$PROJ" && sh -c "$INTAKE_CMD \"\$1\"" _ "$prompt") > "$out" 2>&1; then
-    grep '^PANEL: ' "$out" | tail -1 || true
+    pick_panel "$out"
   fi
 }
 

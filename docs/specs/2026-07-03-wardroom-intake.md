@@ -149,7 +149,13 @@ choose (`PANEL: proceed/revise - unsure`), got the grammar wrong
 (`PANEL: proceed_with_notes`) or is guessing (`PANEL: proceed?`) escalates rather
 than being truncated into a clean proceed. A trailing space or CR is transport
 noise and is stripped, not treated as a malformed verdict. A missing PANEL line,
-a dead thinker, and an unreadable review all still escalate.
+a dead thinker, and an unreadable review all still escalate. Because the prompt
+itself lists all four `PANEL:` lines as a template, a thinker may emit several of
+them; selection is therefore the *most blocking* line that parses to a valid
+verdict (escalate > revise > proceed-with-notes > proceed), not the last one. A
+trailing template echo can then neither downgrade a real blocker into a proceed
+nor turn a sound verdict into a spurious escalate, and no valid verdict at all
+remains the fail-closed escalate.
 `FM_INTAKE_OVERRIDE` semantics and the cap values are untouched.
 
 ### The regression that was missing

@@ -5,7 +5,10 @@
 #   1. two NON-BLOCKING findings -> proceed, with the notes riding along;
 #   2. one genuine blocker       -> still revise (unanimity on blockers kept);
 #   3. any escalate              -> still escalate;
-#   4. a missing or malformed PANEL line -> still escalate (fail closed).
+#   4. a missing or malformed PANEL line -> still escalate (fail closed);
+#   5. several PANEL lines -> the MOST BLOCKING valid verdict decides, so a
+#      trailing template echo can neither downgrade a blocker nor invent an
+#      escalate.
 # Case 1 is the point. Case 2 is what stops this from being "approve everything".
 # The models are stubbed out through FM_INTAKE_CMD so the gate tests SYNTHESIS,
 # not a model's mood; the stub dispatches on the lens name in its prompt.
@@ -156,5 +159,58 @@ expect_code 3 "$code" "a malformed PANEL verdict must escalate, never proceed"
 F=$(fm_intake_file "$S" t1malformed)
 assert_grep "thinker infrastructure failure" "$F" "a malformed verdict is an infrastructure failure, not a pass"
 assert_no_grep "proceed:" "$F" "no proceed may appear on a malformed PANEL line"
+
+# --- 5. more than one PANEL line -> the MOST BLOCKING valid one wins ----------
+# The thinker prompt lists all four PANEL lines as a template, so a model that
+# echoes the menu, restates an option, or adds a footnote emits several lines
+# starting "PANEL: ". Taking the last one lets that trailing line decide the
+# verdict in either direction; resolving to the most blocking valid verdict is
+# fail closed by construction.
+brief t1echo
+mkstub "$TMP/echo-menu.sh" \
+  'PANEL: revise - the safe-set would close panes holding live work
+PANEL: proceed - <one-line reason>' \
+  'PANEL: proceed - fine'
+FM_INTAKE_CMD="$TMP/echo-menu.sh" "$ROOT/bin/fm-intake.sh" t1echo "$PROJ" >/dev/null 2>&1; code=$?
+expect_code 2 "$code" "a trailing template echo must not downgrade a blocker into a proceed"
+F=$(fm_intake_file "$S" t1echo)
+assert_grep "panes holding live work" "$F" "the blocking reason still decides the panel"
+assert_no_grep "proceed:" "$F" "an echoed proceed line may never yield a proceed"
+
+# The same rule the other way: a trailing NON-verdict "PANEL: " line must not
+# turn a sound verdict into a spurious escalate, which is what taking the last
+# line unconditionally did.
+brief t1footnote
+mkstub "$TMP/footnote.sh" \
+  'PANEL: proceed-with-notes - the helper could be named better
+PANEL: (see the notes above)' \
+  'PANEL: proceed - fine'
+out=$(FM_INTAKE_CMD="$TMP/footnote.sh" "$ROOT/bin/fm-intake.sh" t1footnote "$PROJ" 2>&1); code=$?
+expect_code 0 "$code" "a trailing non-verdict PANEL line must not escalate a sound verdict"
+F=$(fm_intake_file "$S" t1footnote)
+assert_grep "named better" "$F" "the real verdict is the one read"
+assert_no_grep "infrastructure failure" "$F" "a footnote is not an infrastructure failure"
+
+# An escalate anywhere in the output outranks a proceed anywhere else.
+brief t1escfirst
+mkstub "$TMP/esc-first.sh" \
+  'PANEL: escalate - only the captain may authorize deleting the data store
+PANEL: proceed-with-notes - otherwise it reads fine' \
+  'PANEL: proceed - fine'
+FM_INTAKE_CMD="$TMP/esc-first.sh" "$ROOT/bin/fm-intake.sh" t1escfirst "$PROJ" >/dev/null 2>&1; code=$?
+expect_code 3 "$code" "escalate outranks every other verdict in the same output"
+[ "$(fm_intake_last "$S" t1escfirst)" = escalate ] || fail "last decision must be escalate"
+
+# Several PANEL lines, none of them a valid verdict, is still fail-closed.
+brief t1allbad
+mkstub "$TMP/all-bad.sh" \
+  'PANEL: proceed?
+PANEL: looks-fine - invented word' \
+  'PANEL: proceed - fine'
+FM_INTAKE_CMD="$TMP/all-bad.sh" "$ROOT/bin/fm-intake.sh" t1allbad "$PROJ" >/dev/null 2>&1; code=$?
+expect_code 3 "$code" "no valid verdict among several PANEL lines must still escalate"
+F=$(fm_intake_file "$S" t1allbad)
+assert_grep "thinker infrastructure failure" "$F" "the fail-closed reason survives multi-line output"
+assert_no_grep "proceed:" "$F" "no proceed may come out of an all-invalid output"
 
 pass "T1 severity bar: non-blocking findings proceed with notes; blockers, escalates and malformed verdicts still stop the spawn"
