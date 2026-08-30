@@ -14,7 +14,7 @@
 #   - the DOUBLE condition: red AND declared is ok; red alone is not; a
 #     declaration alone (on a non-red gate) grants nothing.
 #   - frozen is acceptable. `ledger verify` DEMOTES frozen to green
-#     (CONTRIBUTING.md), so frozen is strictly stronger than green, and 7 of
+#     (CONTRIBUTING.md), so frozen is strictly stronger than green, and 9 of
 #     this repo's own gates are frozen today.
 #   - all three ABSENCE cases, because the classifier runs on the Quarterdeck
 #     path for every project and most have no gates/ at all.
@@ -108,7 +108,7 @@ assert_contains "$(row "$outA" fx-declared-green)" "ok | green |" \
 assert_not_contains "$(printf '%s\n' "$outA" | awk -F'\t' '$2 == "fx-declared-green" { print $3 }')" "red" \
   "a declaration must never make a gate count as red"
 
-# frozen: strictly stronger than green, and 7 of this repo's gates hold it.
+# frozen: strictly stronger than green, and 9 of this repo's gates hold it.
 assert_contains "$(row "$outA" fx-frozen)" "ok | frozen |" \
   "frozen is a passing status - ledger verify DEMOTES frozen to green, so
 treating it as unacceptable would reject every ship task in this repo"

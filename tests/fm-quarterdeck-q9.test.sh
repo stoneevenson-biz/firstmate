@@ -28,6 +28,11 @@
 #     list, so {"gates": {}} yielded zero rows and fm-verify printed
 #     "gates: acceptable" over a ledger it had read no gates from.
 #   - a ledger citing a test file that no longer exists rejects as stale.
+#   - a gate whose test_ref carries no ".test.sh" token is simply not
+#     freshness-checked. Its test-path column is empty, and an empty middle
+#     field must survive the row split rather than letting the next field slide
+#     into it - which once made the gate's own declared reason read as a
+#     missing test path.
 #   - the verifier prompt no longer carries a gate rule of its own. Two
 #     authorities over one decision is what produced the contradiction.
 #
@@ -219,6 +224,35 @@ assert_no_grep "approve:" "$(fm_verdict_file "$S" i)" "a forgeable ledger must n
 assert_no_grep "gates: acceptable" "$TMP/i.out" \
   "fm-verify must not announce a ledger that can forge its own verdicts as acceptable"
 assert_absent "$VERIFY_TRIP" "the forgery escalation also precedes the verifier"
+
+# --- case J: no ".test.sh" token means no freshness check, never a reject ----
+#
+# The freshness cross-check splits tab-separated rows, and an EMPTY MIDDLE FIELD
+# has to stay empty. `IFS=<tab> read` collapses runs of tabs, so a red-and-
+# declared gate with no ".test.sh" token in its test_ref had its declared REASON
+# read as a test path, and fm-verify rejected the crewmate for a "missing test
+# file" the ledger never named - the same spurious reject this whole stage
+# exists to remove. A gate with no readable test path has nothing to check.
+rm -f "$LENS_TRIP" "$VERIFY_TRIP"
+WJ=$(task j); gates "$WJ" yes
+python3 - "$WJ/gates/ledger.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+for g in d["gates"]:
+    if g["id"] == "fx-red":
+        g["test_ref"] = "pytest tests/x.py"
+open(p, "w").write(json.dumps(d, indent=2))
+PY
+run j; codeJ=$?
+expect_code 0 "$codeJ" "a red-and-declared gate whose test_ref holds no .test.sh token
+has no test path to check, and must never be rejected over its own declared reason"
+assert_grep "gates: acceptable" "$TMP/j.out" \
+  "the ledger is acceptable: its only red is declared, and the gate with no
+readable test path is simply not freshness-checked"
+assert_no_grep "reject:" "$(fm_verdict_file "$S" j)" \
+  "no stale-test reject may be recorded for a path the ledger never claimed"
+assert_present "$VERIFY_TRIP" "the run proceeds to the verifier"
 
 # --- case G: the prompt no longer carries a gate rule of its own -------------
 #

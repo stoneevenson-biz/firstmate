@@ -138,9 +138,21 @@ verify_escalate() {  # <reason>
 #
 # gates/verify.sh is deliberately never invoked: `ledger verify` re-runs every
 # gate, REWRITES the ledger inside the crewmate's worktree, and is absent in CI.
-GATE_RAW=$(fm_gates_classify "$WORKTREE")
+#
+# The classifier writes its refusal reason - which gate, which field - to stderr
+# and leaves stdout to the classification itself, so that reason is captured
+# here rather than let past the operator. It is a diagnostic, not a
+# classification: if the capture fails, BADLEDGER is still BADLEDGER, just
+# without the detail.
+GATE_ERR=$(mktemp "${TMPDIR:-/tmp}/fm-verify-gates.XXXXXX" 2>/dev/null) || GATE_ERR=/dev/null
+GATE_RAW=$(fm_gates_classify "$WORKTREE" 2>"$GATE_ERR")
 GATE_HEADER=$(printf '%s\n' "$GATE_RAW" | head -1)
 GATE_ROWS=$(printf '%s\n' "$GATE_RAW" | tail -n +2)
+# The last non-empty line: a raised SystemExit is that line on its own, while a
+# JSON parse error ends its traceback with the message. Either way one line.
+GATE_WHY=$(sed -e 's/[[:space:]]\{1,\}/ /g' -e 's/^ //' -e 's/ $//' "$GATE_ERR" 2>/dev/null \
+  | grep -v '^$' | tail -1)
+[ "$GATE_ERR" = /dev/null ] || rm -f "$GATE_ERR"
 
 case "$GATE_HEADER" in
   NOGATES)
@@ -150,7 +162,7 @@ case "$GATE_HEADER" in
     verify_escalate "gates/ exists in $WORKTREE but gates/ledger.json does not - nothing can be proven about this repo's gates; fail closed"
     ;;
   BADLEDGER)
-    verify_escalate "gates/ledger.json in $WORKTREE is unreadable or the wrong shape - gate state cannot be classified; fail closed"
+    verify_escalate "gates/ledger.json in $WORKTREE is unreadable or the wrong shape${GATE_WHY:+: $GATE_WHY} - gate state cannot be classified; fail closed"
     ;;
 esac
 
@@ -166,12 +178,26 @@ if [ "$GATE_HEADER" != NOGATES ]; then
     | awk -F'\t' '$1 == "bad-red" { printf "%s ", $2 }')
 
   # Freshness cross-check: every gate must still point at a test that exists.
+  #
+  # The row is split POSITIONALLY, empty middle fields intact. `IFS=<tab> read`
+  # cannot do that - tab is IFS whitespace, so a run of tabs collapses to one
+  # delimiter and an empty column simply vanishes. A gate whose test_ref holds
+  # no ".test.sh" token has an empty test-path column, so its declared REASON
+  # slid left into that field and fm-verify rejected the crewmate over a path
+  # the ledger never claimed: the very class of spurious reject this stage
+  # exists to remove. awk indexes by position, so an empty test path stays
+  # empty and that gate is simply not freshness-checked, which is the only
+  # honest answer for a gate this classifier could read no path out of.
+  GATE_PATHS=$(printf '%s\n' "$GATE_ROWS" | awk -F'\t' '$4 != "" { print $2 "\t" $4 }')
   GATE_STALE=""
-  while IFS="$(printf '\t')" read -r _v gid _st tref _detail; do
-    [ -n "${tref:-}" ] || continue
+  TAB=$(printf '\t')
+  while IFS= read -r gate_row; do
+    [ -n "$gate_row" ] || continue
+    gid=${gate_row%%"$TAB"*}
+    tref=${gate_row#*"$TAB"}
     [ -e "$WORKTREE/$tref" ] || GATE_STALE="$GATE_STALE$gid -> $tref; "
   done <<GATEROWS
-$GATE_ROWS
+$GATE_PATHS
 GATEROWS
 
   if [ -n "$GATE_UNDECLARED" ]; then
@@ -301,18 +327,7 @@ case "$verdict_kind" in
     exit 3
     ;;
   reject)
-    n=$(( $(fm_verdict_reject_count "$STATE" "$ID") + 1 ))
-    fm_verdict_append "$STATE" "$ID" reject "(attempt $n of $MAX) ${verdict_reason:-verifier reject}"
-    # shellcheck disable=SC2086 # FM_RELAY_CMD is deliberately word-split
-    ${FM_RELAY_CMD:-"$SCRIPT_DIR/fm-send.sh"} "fm-$ID" \
-      "QUARTERDECK REJECTED (attempt $n of $MAX): ${verdict_reason:-see report}. Findings: data/$ID/verify-report.md and data/$ID/lens-review.md. Fix and append a fresh done: line." \
-      || echo "warning: could not relay reject to fm-$ID (window gone?)" >&2
-    if [ "$n" -ge "$MAX" ]; then
-      fm_verdict_append "$STATE" "$ID" escalate "attempt cap reached ($n rejects); captain decision required"
-      echo "escalate: task $ID hit the attempt cap ($n of $MAX)" >&2
-      exit 3
-    fi
-    echo "reject: task $ID (attempt $n of $MAX); findings relayed" >&2
-    exit 2
+    verify_reject "${verdict_reason:-verifier reject}" \
+      "data/$ID/verify-report.md and data/$ID/lens-review.md"
     ;;
 esac

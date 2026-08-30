@@ -18,8 +18,8 @@
 # either caller's needs in here is how one caller's policy quietly bends the
 # other's rule.
 #
-# IT IS PURE. It reads exactly two files - <root>/gates/ledger.json and
-# <root>/gates/accepted-red.md - and nothing else. It must NEVER invoke
+# IT IS PURE. It reads exactly two files under <root> - gates/ledger.json and
+# gates/accepted-red.md - and writes nothing there at all. It must NEVER invoke
 # gates/verify.sh or the `ledger` CLI: `ledger verify` re-runs every gate's
 # test, REWRITES gates/ledger.json and gates/LEDGER.md in the worktree it is
 # pointed at, exits 2 when the CLI is absent (as it is in CI), and demotes
@@ -78,6 +78,15 @@
 # call, and the shell emits them only if python exited cleanly. A half-list that
 # stopped at a malformed entry looks exactly like a complete answer, and acting
 # on one is a fail-open in the one place this file promises to fail closed.
+#
+# THE BADLEDGER REASON GOES TO STDERR. The parser names what it refused - which
+# gate, and which field - and that is the one thing an operator staring at a
+# fail-closed escalation needs. It cannot ride stdout: BADLEDGER is the whole
+# of stdout by contract, and appending a reason to the header or adding a row
+# would be exactly the partial answer above. So the parser diagnostic is simply
+# not swallowed, and a caller that wants it redirects fd 2 (bin/fm-verify.sh
+# does, into its escalation reason). It is a diagnostic, never a classification:
+# a caller that ignores stderr still gets BADLEDGER and still fails closed.
 
 # --- acceptable-on-their-own statuses ---------------------------------------
 #
@@ -89,7 +98,7 @@
 # drain. gates/LEDGER.md's drain list holds only the reds.
 #
 # Treating frozen as unacceptable would reject every ship task in this very
-# repository: 7 of its 27 gates are frozen today. Anything NOT in this tuple is
+# repository: 9 of its 41 gates are frozen today. Anything NOT in this tuple is
 # unrecognised and fails closed; the set is deliberately short and explicit so
 # adding to it is a visible decision rather than a drift.
 FM_GATES_CLEAN_STATUSES='green frozen'
@@ -122,9 +131,12 @@ fm_gates_classify() {
     accepted=""
   fi
 
+  # stderr is deliberately NOT redirected: it carries the parser diagnostic that
+  # names the offending gate and field, and swallowing it left BADLEDGER with no
+  # reason at the one moment an operator most needs one.
   local out
   if out=$(FM_GATES_CLEAN="$FM_GATES_CLEAN_STATUSES" \
-      python3 - "$ledger" "$accepted" <<'PY' 2>/dev/null
+      python3 - "$ledger" "$accepted" <<'PY'
 import json, os, re, sys
 
 ledger_path, accepted_path = sys.argv[1], sys.argv[2]
