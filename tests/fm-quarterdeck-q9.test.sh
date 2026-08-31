@@ -93,6 +93,12 @@
 #     scope check compares byte for byte while the existence check normalizes, so
 #     a file this branch DELETED was seen as gone and then excused as inherited
 #     debt - a fail-open decided by nothing but how the path was spelled.
+#   - when the reviewed base is unresolvable, scope is UNKNOWN: every offending
+#     gate still rejects - fail closed - but the stage says so on stdout and the
+#     reject text drops its "gates this branch touched" claim. Fail closed must
+#     not mean fail dishonest: it once accused the crewmate of breaking gates it
+#     had never seen, and the "not your responsibility" qualifier could not
+#     appear because the pre-existing lists are empty in that state.
 #   - a gate whose status is unproven REJECTS, and the relay tells the crewmate
 #     to let the gate be observed red. The harness stamps unproven whenever a
 #     gate test passes while first_observed_red is null (CONTRIBUTING.md), so it
@@ -872,6 +878,62 @@ assert_grep "tests/aa.test.sh" "$(fm_verdict_file "$S" ac)" "the stale reject na
 assert_no_grep "pre-existing ledger debt" "$TMP/ac.out" \
   "a gate this branch is answerable for must not be reported as somebody else's debt"
 assert_absent "$VERIFY_TRIP" "the in-scope stale reject still precedes the verifier"
+
+# --- case AD: unknown scope rejects, but must not claim the branch touched it ---
+#
+# Fail closed must not mean fail dishonest. With the reviewed base unresolvable,
+# every offending gate goes in scope - the right SAFETY behaviour, and it stays -
+# but the reject text then asserted "unproven gates this branch touched" over a
+# gate the branch had never seen, while the "(pre-existing and not your
+# responsibility)" qualifier could not appear because the pre-existing lists are
+# necessarily empty in that state. The crewmate was told it broke something it
+# did not break and sent to fix inherited debt on a false premise, and nothing on
+# stdout admitted the check had degraded at all.
+#
+# The combination is reachable and not exotic: this ledger carries NO declared
+# red, so the self-authorisation escalation - the other consumer of that base -
+# never fires, and nothing else stops the run.
+rm -f "$LENS_TRIP" "$VERIFY_TRIP"; : > "$TMP/relay.log"
+repo_ad="$TMP/ad-repo"; wt_ad="$TMP/ad-wt"
+fm_git_init_commit "$repo_ad"
+git -C "$repo_ad" branch -M main
+# An origin that does not exist: the fetch fails, no cached origin/main was ever
+# created, so the reviewed base cannot be established and scope is UNKNOWN.
+git -C "$repo_ad" remote add origin "file://$TMP/ad-remote-does-not-exist.git"
+mkdir -p "$repo_ad/gates" "$repo_ad/tests"
+printf '%s\n' "$DECL_RED" > "$repo_ad/gates/accepted-red.md"
+cat > "$repo_ad/gates/ledger.json" <<'JSONAD'
+{
+  "version": 1,
+  "gates": [
+    { "id": "fx-green",  "status": "unproven", "test_ref": "bash tests/aa.test.sh" },
+    { "id": "fx-frozen", "status": "frozen",   "test_ref": "bash tests/bb.test.sh" }
+  ]
+}
+JSONAD
+: > "$repo_ad/tests/aa.test.sh"; : > "$repo_ad/tests/bb.test.sh"
+git -C "$repo_ad" add gates tests
+git -C "$repo_ad" commit -qm "gates: inherited unproven debt, no declared red"
+git -C "$repo_ad" worktree add --quiet -b fm/ad "$wt_ad"
+mkdir -p "$D/ad"
+fm_write_meta "$S/ad.meta" \
+  "window=firstmate:fm-ad" "worktree=$wt_ad" "project=$repo_ad" \
+  "harness=echo" "kind=ship" "mode=local-only" "yolo=off"
+unrelated_commit "$wt_ad"
+run ad; codeAD=$?
+expect_code 2 "$codeAD" "with the reviewed base unresolvable, scope is unknown and every
+offending gate must still be treated as this branch's own - fail closed, never excuse the lot"
+assert_grep "could not be determined" "$TMP/ad.out" \
+  "a degraded scope check must be announced on stdout, exactly as the diff-base degradation
+is; silence about a degraded check is how a degraded check becomes invisible"
+assert_grep "fx-green" "$TMP/relay.log" "the reject still names the offending gate"
+assert_grep "could not be established" "$TMP/relay.log" \
+  "the relayed text must say that scope could not be established, so the crewmate can tell
+\"you broke this\" from \"we could not tell whose this is, so you are seeing all of it\""
+assert_no_grep "unproven gates this branch touched" "$TMP/relay.log" \
+  "the reject must not claim the branch touched a gate it never saw - fail closed must not
+mean fail dishonest"
+assert_absent "$VERIFY_TRIP" "the fail-closed reject still precedes the verifier"
 
 # --- case G: the prompt no longer carries a gate rule of its own -------------
 #

@@ -228,6 +228,17 @@ to be spelled.
 It stays fail-closed where it must — if the base, the diff, or the base copy of
 the ledger cannot be read, scope is unknown and every offending gate is treated
 as this branch's own.
+**Fail closed must not mean fail dishonest.** In that state the stage says so out
+loud on stdout, exactly as the diff-base degradation does, and the reject text
+drops its "gates this branch touched" claim for a plain statement that scope
+could not be established and every offending gate is therefore listed
+conservatively.
+Silently attributing inherited debt to the branch told the crewmate it broke
+something it never saw — and because the pre-existing lists are necessarily empty
+in that state, the "not your responsibility" qualifier could not appear either.
+The path is not exotic: an unresolvable `origin/<default>` in a repo whose ledger
+carries no declared reds skips the self-authorisation escalation entirely, so
+nothing else stops the run.
 Undeclared reds are deliberately *not* scoped: CI does catch those, because
 `run-all.sh` runs an undeclared red gate's test and it fails.
 

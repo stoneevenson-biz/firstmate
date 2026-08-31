@@ -488,9 +488,11 @@ if [ "$GATE_HEADER" != NOGATES ] && [ "$GATE_HEADER" != NOLEDGER ]; then
   #
   # It stays fail-closed where it must: if the base, the diff, or the base copy
   # of the ledger cannot be read, scope is UNKNOWN and every offending gate is
-  # treated as this branch's own. Undeclared reds are deliberately NOT scoped -
-  # CI does catch those, because run-all runs an undeclared red gate's test and
-  # it fails.
+  # treated as this branch's own - and the stage SAYS so, on stdout and in the
+  # reject text, rather than accusing the branch of touching gates it never saw
+  # (see "fail closed must not mean fail dishonest" below). Undeclared reds are
+  # deliberately NOT scoped - CI does catch those, because run-all runs an
+  # undeclared red gate's test and it fails.
   #
   # The comparison is per ENTRY, not per file. Whole-file granularity would put
   # every gate in scope the moment a branch registered one new gate, which is
@@ -505,11 +507,15 @@ if [ "$GATE_HEADER" != NOGATES ] && [ "$GATE_HEADER" != NOLEDGER ]; then
   # staleness check exists for. With --no-renames a rename appears as both paths,
   # so the old one lands in the scope set.
   gate_scope_known=no
+  gate_scope_why=""
   gate_changed_files=""
   gate_touched_ids=""
-  if [ -n "$FM_AUTH_BASE_COMMIT" ] \
-      && gate_tracked=$(git -C "$WORKTREE" diff --name-only --no-renames "$FM_AUTH_BASE_COMMIT" -- 2>/dev/null) \
-      && gate_untracked=$(git -C "$WORKTREE" ls-files --others --exclude-standard 2>/dev/null); then
+  if [ -z "$FM_AUTH_BASE_COMMIT" ]; then
+    gate_scope_why="the reviewed base could not be established (${FM_AUTH_BASE_WHY:-no base branch is resolvable there})"
+  elif ! gate_tracked=$(git -C "$WORKTREE" diff --name-only --no-renames "$FM_AUTH_BASE_COMMIT" -- 2>/dev/null) \
+      || ! gate_untracked=$(git -C "$WORKTREE" ls-files --others --exclude-standard 2>/dev/null); then
+    gate_scope_why="the diff against the reviewed base $FM_AUTH_BASE_COMMIT could not be read"
+  else
     gate_changed_files=$(printf '%s\n%s\n' "$gate_tracked" "$gate_untracked")
     if gate_base_ledger=$(git -C "$WORKTREE" show "$FM_AUTH_BASE_COMMIT:gates/ledger.json" 2>/dev/null); then
       if gate_touched_ids=$(printf '%s' "$gate_base_ledger" \
@@ -546,12 +552,45 @@ for gid in head:
         print(gid)
 ' "$WORKTREE/gates/ledger.json" 2>/dev/null); then
         gate_scope_known=yes
+      else
+        gate_scope_why="gates/ledger.json at the reviewed base $FM_AUTH_BASE_COMMIT could not be compared with the one in the worktree"
       fi
     else
       # No ledger at the base at all: every gate in this one arrived here.
       gate_touched_ids=$(printf '%s\n' "$GATE_ROWS" | awk -F'\t' '$2 != "" { print $2 }')
       gate_scope_known=yes
     fi
+  fi
+
+  # FAIL CLOSED MUST NOT MEAN FAIL DISHONEST.
+  #
+  # When scope cannot be determined, gate_in_scope answers yes for every gate -
+  # which is the right SAFETY behaviour and stays. But it made the stage say
+  # things that were not true: nothing on stdout admitted the check had degraded
+  # (unlike the diff-base degradation, which this file deliberately announces),
+  # and the two rejects below asserted "gates this branch touched" over gates the
+  # branch had never seen, while the "(pre-existing and not your responsibility)"
+  # qualifier could not appear because the PRE lists are necessarily empty in
+  # this state. The crewmate was told it broke something it did not break and
+  # sent to fix inherited debt on a false premise - the same "correct work
+  # rejected at the most expensive moment" defect this stage exists to remove,
+  # reached through the fail-closed door.
+  #
+  # The path is not exotic: an unresolvable origin/<default> - offline, or a
+  # remote-tracking ref never fetched - in a repo whose ledger carries no
+  # declared reds skips the self-authorisation escalation entirely, so nothing
+  # else stops the run. So the degradation is said out loud, and the reject text
+  # says which of the two things it knows: "you broke this", or "we could not
+  # tell whose this is, so you are seeing all of it".
+  if [ "$gate_scope_known" = yes ]; then
+    gate_scope_note=""
+    gate_scope_unproven_of="unproven gates this branch touched"
+    gate_scope_stale_of="in gates this branch touched"
+  else
+    echo "gates: which gates THIS branch is answerable for could not be determined - $gate_scope_why - so every unproven gate and every ledger reference to a missing test file is treated as this branch's own (fail closed); inherited debt cannot be told apart from new debt on this run"
+    gate_scope_note=" - NOTE: which gates this branch touched could not be established ($gate_scope_why), so every offending gate in the ledger is listed here conservatively and some of them may be pre-existing debt this branch did not create"
+    gate_scope_unproven_of="unproven gates"
+    gate_scope_stale_of=""
   fi
 
   # ONE SPELLING OF THE LEDGER'S TEST PATH, FOR EVERY READER OF IT.
@@ -667,13 +706,13 @@ GATEROWS
 
   if [ -n "$GATE_UNPROVEN" ]; then
     verify_reject \
-      "the gate ledger holds unproven gates this branch touched: ${GATE_UNPROVEN% } - an unproven gate has never been observed red, so it proves nothing. Register the gate while its test genuinely fails and let ledger verify stamp first_observed_red itself, rather than hand-writing that timestamp${GATE_UNPROVEN_PRE:+ (pre-existing and not your responsibility: ${GATE_UNPROVEN_PRE% })}" \
+      "the gate ledger holds ${gate_scope_unproven_of}: ${GATE_UNPROVEN% } - an unproven gate has never been observed red, so it proves nothing. Register the gate while its test genuinely fails and let ledger verify stamp first_observed_red itself, rather than hand-writing that timestamp${GATE_UNPROVEN_PRE:+ (pre-existing and not your responsibility: ${GATE_UNPROVEN_PRE% })}${gate_scope_note}" \
       "gates/ledger.json in your worktree, and CONTRIBUTING.md on born-green gates; run bash $SCRIPT_DIR/fm-gates-lib.sh $WORKTREE"
   fi
 
   if [ -n "$GATE_STALE" ]; then
     verify_reject \
-      "the gate ledger references test files that do not exist on disk, in gates this branch touched: ${GATE_STALE%; } - a ledger citing deleted tests is stale by construction${GATE_STALE_PRE:+ (pre-existing and not your responsibility: ${GATE_STALE_PRE%; })}" \
+      "the gate ledger references test files that do not exist on disk${gate_scope_stale_of:+, $gate_scope_stale_of}: ${GATE_STALE%; } - a ledger citing deleted tests is stale by construction${GATE_STALE_PRE:+ (pre-existing and not your responsibility: ${GATE_STALE_PRE%; })}${gate_scope_note}" \
       "gates/ledger.json in your worktree; run bash $SCRIPT_DIR/fm-gates-lib.sh $WORKTREE"
   fi
 
