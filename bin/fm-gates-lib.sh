@@ -77,8 +77,10 @@
 #   BADLEDGER   the ledger is unreadable, unparseable, or the wrong shape -
 #               including a "gates" value that is not a JSON array, which
 #               CONTRIBUTING.md and frozen gate m0-ledger-shape both call fatal,
-#               and any gate whose id, status, or test path carries a tab or a
-#               newline, which would forge a row (see below).
+#               any gate whose id, status, or test path carries a tab or a
+#               newline, which would forge a row (see below), and any gate whose
+#               id or status is missing or not a JSON string - stringifying
+#               those produced the literal "None" as a gate id.
 #               No rows - never a partial answer (see ALL OR NOTHING below).
 #   NOACCEPTED  the ledger parsed but gates/accepted-red.md is absent, so NO
 #               declarations exist. Rows follow, and every red among them is
@@ -201,12 +203,19 @@ def flat(s):
 # gate id, a status, or a test path is never a legitimate ledger. It is the same
 # rule as the array check above - a ledger the harness would never accept is not
 # one this classifier may quietly repair.
+# The refusal covers the field's TYPE as well as its contents. str()-ing a
+# missing id yielded the literal "None": two id-less gates collapsed onto one
+# key, and an accepted-red.md line "- None - reason" would have excused an
+# id-less red. A missing status was worse only by luck - it landed in bad-status
+# and escalated - so both are refused here rather than repaired downstream.
 def structural(value, field, index):
-    v = str(value)
-    if any(c in v for c in "\t\r\n"):
+    if not isinstance(value, str):
+        raise SystemExit(
+            "gate #%d: %s must be a string, got %s" % (index, field, type(value).__name__))
+    if any(c in value for c in "\t\r\n"):
         raise SystemExit(
             "gate #%d: %s contains a tab or newline, which would forge a row" % (index, field))
-    return v
+    return value
 
 # Built whole, then printed. A raise partway through must yield NO rows at all,
 # never a half-list that would look like a complete answer.

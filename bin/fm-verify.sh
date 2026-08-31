@@ -119,7 +119,7 @@ default_branch() {
   return 1
 }
 
-# THE BASE IS RESOLVED ONCE, IN THE MAIN BODY, INTO THESE TWO VARIABLES.
+# THE BASE IS RESOLVED ONCE, IN THE MAIN BODY, INTO THESE VARIABLES.
 # An earlier draft memoized inside a base_ref() that both stages called as
 # `$(base_ref)`. A subshell's assignments die with the subshell, so the memo was
 # discarded on return every time: the guard was still empty in the parent, both
@@ -127,23 +127,33 @@ default_branch() {
 # that both stages compare against the SAME base was false by construction.
 # Assigning in the main body, before either consumer runs, is what makes it true.
 #
-# WHICH candidate wins is not "the one named origin". Pooled project clones keep
-# their LOCAL default branch frozen at clone time, so a merge base taken against
-# it can name a commit far behind the real one - the gate stage would then read a
-# declaration this branch merely INHERITED as a line it forged for itself, and
-# escalate over it. But preferring origin unconditionally just mirrors that bug:
-# a declaration committed to the local default and not yet pushed sits AHEAD of
-# origin/<default>, and the same false escalation lands from the other side.
+# WHICH candidate wins is a SECURITY question, so the candidates are not equal
+# and must not be ranked as though they were. The self-authorisation guard means
+# something only if the base is a ref the crewmate does not casually control.
+# refs/remotes/origin/<default> takes a push to a protected default branch,
+# which prime directive 1 forbids and branch protection normally blocks.
+# refs/heads/<default> takes nothing: firstmate's project clones are POOLED, so
+# a crewmate worktree shares that ref with the primary checkout, and an ordinary
+# local commit - not even a deliberate `git update-ref` - is enough to make a
+# declaration the branch wrote itself read as inherited and reviewed.
 #
-# So take the candidate whose merge base with HEAD is FURTHEST FORWARD. That is
-# safe in exactly one direction, which is the reason it is the right rule rather
-# than mere permissiveness: a merge base is always an ancestor of HEAD, and a
-# declaration this branch wrote in its own commit exists on no default-branch
-# candidate at all, so it can never appear at any candidate's merge base. Moving
-# the base forward can therefore only remove FALSE escalations - it cannot
-# manufacture a pass for a genuine self-authorisation.
+# An earlier round took the candidate whose merge base was FURTHEST FORWARD, so
+# that a declaration committed to an unpushed local default would not read as
+# forged. That was a usability argument about a guard whose whole purpose is
+# security, and it is withdrawn: furthest-forward made the bypass above the
+# ORDINARY path rather than an attack. Do not reintroduce it.
+#
+# So: with an origin, the base is the merge base against origin/<default> and
+# nothing else. A failed fetch falls back to an already-present
+# origin/<default>, never to the local branch, and an origin/<default> that
+# cannot be resolved at all leaves the base UNSET so every consumer fails
+# closed. With no origin at all there is no second candidate, so the local
+# default IS the base - and fm-verify says out loud that it is only as
+# trustworthy as that branch.
 FM_BASE_REF=""
 FM_BASE_COMMIT=""
+FM_BASE_WHY=""
+FM_BASE_LOCAL_ONLY=no
 
 # The fetch is the only network call on the Quarterdeck accept path, and a
 # verifier that HANGS is worse than one that escalates: fm-verify is what stands
@@ -153,53 +163,64 @@ FM_BASE_COMMIT=""
 # leaves git waiting on an interactive prompt with no tty to answer it. The env
 # guards are what actually remove the hang; the wall-clock cap is defence in
 # depth and is skipped where no timeout(1) exists (macOS ships none by default).
+#
+# ONE invocation, with the cap as a prefix array. Spelled out as two arms, the
+# no-timeout(1) arm - the DEFAULT one on macOS - silently drifts from the other
+# the first time the refspec or the http tuning is edited. `${pre[@]+...}` is
+# the bash 3.2 safe form for expanding a possibly-empty array under `set -u`.
 FM_VERIFY_SSH_BATCH='ssh -oBatchMode=yes -oConnectTimeout=10'
 fetch_default_branch() {
-  local default=$1 secs=${FM_VERIFY_FETCH_TIMEOUT:-30} runner=""
+  local default=$1 secs=${FM_VERIFY_FETCH_TIMEOUT:-30}
+  local pre=()
   if command -v timeout >/dev/null 2>&1; then
-    runner=timeout
+    pre=(timeout "$secs")
   elif command -v gtimeout >/dev/null 2>&1; then
-    runner=gtimeout
+    pre=(gtimeout "$secs")
   fi
-  if [ -n "$runner" ]; then
-    GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="$FM_VERIFY_SSH_BATCH" \
-      "$runner" "$secs" git -C "$WORKTREE" \
-        -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=15 \
-        fetch origin "+refs/heads/$default:refs/remotes/origin/$default" \
-        --quiet >/dev/null 2>&1 || true
-  else
-    GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="$FM_VERIFY_SSH_BATCH" \
-      git -C "$WORKTREE" \
-        -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=15 \
-        fetch origin "+refs/heads/$default:refs/remotes/origin/$default" \
-        --quiet >/dev/null 2>&1 || true
-  fi
+  GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="$FM_VERIFY_SSH_BATCH" \
+    ${pre[@]+"${pre[@]}"} git -C "$WORKTREE" \
+      -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=15 \
+      fetch origin "+refs/heads/$default:refs/remotes/origin/$default" \
+      --quiet >/dev/null 2>&1 || true
 }
 
-# Leaves both variables empty when no base is resolvable; each consumer decides
-# what that means (the gate stage escalates, the diff payload degrades).
+# Leaves FM_BASE_REF/FM_BASE_COMMIT empty when no reviewed base is resolvable,
+# with FM_BASE_WHY naming the step that failed. Each consumer decides what that
+# means: the gate stage escalates over a declaration it cannot check and treats
+# every offending gate as this branch's own, and the diff payload degrades.
 resolve_base() {
-  local default cand mb best_ref="" best_mb=""
-  default=$(default_branch) || return 0
+  local default cand mb
+  if ! default=$(default_branch); then
+    FM_BASE_WHY="no default branch could be determined for that worktree"
+    return 0
+  fi
   if git -C "$WORKTREE" remote get-url origin >/dev/null 2>&1; then
     fetch_default_branch "$default"
+    cand="refs/remotes/origin/$default"
+  else
+    FM_BASE_LOCAL_ONLY=yes
+    cand="refs/heads/$default"
   fi
-  for cand in "refs/remotes/origin/$default" "refs/heads/$default"; do
-    git -C "$WORKTREE" rev-parse --verify --quiet "$cand^{commit}" >/dev/null 2>&1 || continue
-    mb=$(git -C "$WORKTREE" merge-base HEAD "$cand" 2>/dev/null) || continue
-    [ -n "$mb" ] || continue
-    # `--is-ancestor A B` succeeds when B is at or after A, so this keeps the
-    # later merge base and is a no-op when the two candidates agree.
-    if [ -z "$best_mb" ] \
-        || git -C "$WORKTREE" merge-base --is-ancestor "$best_mb" "$mb" 2>/dev/null; then
-      best_ref=$cand
-      best_mb=$mb
+  if ! git -C "$WORKTREE" rev-parse --verify --quiet "$cand^{commit}" >/dev/null 2>&1; then
+    if [ "$FM_BASE_LOCAL_ONLY" = yes ]; then
+      FM_BASE_WHY="$cand could not be resolved, and there is no origin remote to fall back to"
+    else
+      FM_BASE_WHY="$cand could not be resolved - the fetch did not succeed and no cached copy exists - and refs/heads/$default is not a reviewed base while an origin remote exists, because a pooled clone shares that ref with the primary checkout"
     fi
-  done
-  FM_BASE_REF=$best_ref
-  FM_BASE_COMMIT=$best_mb
+    return 0
+  fi
+  if ! mb=$(git -C "$WORKTREE" merge-base HEAD "$cand" 2>/dev/null) || [ -z "$mb" ]; then
+    FM_BASE_WHY="HEAD and $cand share no merge base"
+    return 0
+  fi
+  FM_BASE_REF=$cand
+  FM_BASE_COMMIT=$mb
 }
 resolve_base
+
+if [ "$FM_BASE_LOCAL_ONLY" = yes ] && [ -n "$FM_BASE_REF" ]; then
+  echo "base: $WORKTREE has no origin remote, so the base is $FM_BASE_REF - for a local-only project the base is only as trustworthy as the local default branch"
+fi
 
 # --- 1. gate ledger adjudication (structural, ahead of both models) -----------
 #
@@ -218,22 +239,29 @@ resolve_base
 #                            by construction and rejects on the line above. A
 #                            fully green ledger with no accepted-red.md is fine.
 #   test_ref names a file
-#     that is not on disk    REJECT. A ledger claiming green for a gate whose
-#                            test no longer exists is stale by construction.
-#                            This proves only that the ledger is not pointing at
-#                            deleted tests - NOT that any test passes. Proving
-#                            that is CI's job, and re-running the suite here
-#                            would duplicate it at the most expensive moment.
-#   gates/ but no ledger     ESCALATE. The repo declares itself gate-governed
-#                            and the record of what is proven is gone; nothing
-#                            can be proven either way. Infrastructure, not work.
+#     that is not on disk    REJECT, if this branch TOUCHED that gate. A ledger
+#                            claiming green for a gate whose test no longer
+#                            exists is stale by construction. This proves only
+#                            that the ledger is not pointing at deleted tests -
+#                            NOT that any test passes. Proving that is CI's job,
+#                            and re-running the suite here would duplicate it at
+#                            the most expensive moment. Untouched, it is
+#                            REPORTED as pre-existing debt - see "whose debt".
+#   gates/ but no ledger     ESCALATE, if gates/ holds gate machinery
+#                            (verify.sh or accepted-red.md): the repo declares
+#                            itself gate-governed and the record of what is
+#                            proven is gone. Infrastructure, not work. With
+#                            neither, "gates" is just a directory name and this
+#                            is NOT APPLICABLE - proceed.
 #   unreadable ledger        ESCALATE. Same reason: a parse failure is not a
 #                            finding a crewmate can fix by editing code.
-#   unproven status          REJECT. Crewmate-actionable, and ordinary: the
-#                            harness stamps unproven whenever a gate test passes
-#                            while first_observed_red is null (CONTRIBUTING.md).
-#                            The fix is to let `ledger verify` observe the gate
-#                            red, which is work, not a human decision.
+#   unproven status          REJECT, if this branch TOUCHED that gate.
+#                            Crewmate-actionable, and ordinary: the harness
+#                            stamps unproven whenever a gate test passes while
+#                            first_observed_red is null (CONTRIBUTING.md). The
+#                            fix is to let `ledger verify` observe the gate red,
+#                            which is work, not a human decision. Untouched, it
+#                            is REPORTED as pre-existing debt.
 #   unrecognised status      ESCALATE. Never a pass, and not a work defect - a
 #                            ledger this repo cannot interpret needs a human.
 #   a declared red whose
@@ -263,14 +291,33 @@ case "$GATE_HEADER" in
     echo "gates: no gates/ dir in $WORKTREE - gate adjudication not applicable"
     ;;
   NOLEDGER)
-    verify_escalate "gates/ exists in $WORKTREE but gates/ledger.json does not - nothing can be proven about this repo's gates; fail closed"
+    # A DIRECTORY NAMED gates/ IS NOT A CLAIM OF GATE GOVERNANCE. "gates" is an
+    # ordinary directory name - a Go package, a Python module, a state-machine
+    # dir - and fm-verify runs against every ship task in every project
+    # firstmate manages. Escalating on the name alone conscripts unrelated
+    # repos into a captain escalation on every single task, with no
+    # crewmate-side remedy and no override short of FM_VERIFY_OVERRIDE.
+    #
+    # What claims gate governance is the machinery, not the name: gates/verify.sh
+    # or gates/accepted-red.md. With one of those present and no ledger, the
+    # record of what is proven really is gone and the fail-closed escalation is
+    # right. With neither, this is somebody else's gates/ dir and gate
+    # adjudication simply does not apply.
+    #
+    # This is POLICY, so it lives here. bin/fm-gates-lib.sh still reports
+    # NOLEDGER for the same input: its headers are a shared contract with
+    # tests/run-all.sh, which has its own answer (skip nothing, out loud).
+    if [ -f "$WORKTREE/gates/verify.sh" ] || [ -f "$WORKTREE/gates/accepted-red.md" ]; then
+      verify_escalate "gates/ in $WORKTREE holds gate machinery (verify.sh or accepted-red.md) but gates/ledger.json does not exist - nothing can be proven about the gates in that repo; fail closed"
+    fi
+    echo "gates: $WORKTREE has a gates/ dir with no ledger, no verify.sh and no accepted-red.md - not a gate-governed repo, so gate adjudication is not applicable"
     ;;
   BADLEDGER)
     verify_escalate "gates/ledger.json in $WORKTREE is unreadable or the wrong shape${GATE_WHY:+: $GATE_WHY} - gate state cannot be classified; fail closed"
     ;;
 esac
 
-if [ "$GATE_HEADER" != NOGATES ]; then
+if [ "$GATE_HEADER" != NOGATES ] && [ "$GATE_HEADER" != NOLEDGER ]; then
   # Unrecognised statuses first: they mean the ledger says something this repo
   # has no rule for, which no crewmate edit can resolve.
   GATE_UNKNOWN=$(printf '%s\n' "$GATE_ROWS" \
@@ -306,7 +353,7 @@ if [ "$GATE_HEADER" != NOGATES ]; then
     gate_base_ref=$FM_BASE_REF
     gate_base=$FM_BASE_COMMIT
     if [ -z "$gate_base_ref" ] || [ -z "$gate_base" ]; then
-      gate_base_why="no base branch is resolvable there"
+      gate_base_why="the reviewed base could not be established (${FM_BASE_WHY:-no base branch is resolvable there})"
     elif ! gate_tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-verify-base.XXXXXX" 2>/dev/null); then
       gate_base_why="a scratch dir for the base comparison could not be created"
     else
@@ -340,12 +387,102 @@ if [ "$GATE_HEADER" != NOGATES ]; then
     fi
   fi
 
+  # WHOSE DEBT IS IT? The two conditions below - an unproven gate, and a
+  # test_ref naming a file that is not on disk - are invisible to CI. run-all.sh
+  # iterates tests/*.test.sh ON DISK, so a ledger citing a deleted test never
+  # fails the suite, and an unproven gate's test passes by definition. So a repo
+  # carrying either as pre-existing debt used to reject EVERY ship task
+  # dispatched into it: three relays the crewmate could not act on, then a
+  # captain escalation, while the pipeline and CI stayed green. That is the same
+  # "correct work rejected at the most expensive moment" this stage exists to
+  # remove, only deterministic instead of random.
+  #
+  # So both are scoped to what THIS BRANCH is responsible for. A gate is this
+  # branch's when the diff against the reviewed base touches it: its entry in
+  # gates/ledger.json changed, or the test file its test_ref names is in the
+  # diff (a DELETED test shows up there, which is exactly the case that must
+  # still reject). Anything else is pre-existing debt: reported in this stage's
+  # output, never rejected, because the crewmate cannot act on it.
+  #
+  # It stays fail-closed where it must: if the base, the diff, or the base copy
+  # of the ledger cannot be read, scope is UNKNOWN and every offending gate is
+  # treated as this branch's own. Undeclared reds are deliberately NOT scoped -
+  # CI does catch those, because run-all runs an undeclared red gate's test and
+  # it fails.
+  #
+  # The comparison is per ENTRY, not per file. Whole-file granularity would put
+  # every gate in scope the moment a branch registered one new gate, which is
+  # the ordinary shape of gate-driven work and would leave this scoping doing
+  # nothing at all.
+  gate_scope_known=no
+  gate_changed_files=""
+  gate_touched_ids=""
+  if [ -n "$FM_BASE_COMMIT" ] \
+      && gate_tracked=$(git -C "$WORKTREE" diff --name-only "$FM_BASE_COMMIT" -- 2>/dev/null) \
+      && gate_untracked=$(git -C "$WORKTREE" ls-files --others --exclude-standard 2>/dev/null); then
+    gate_changed_files=$(printf '%s\n%s\n' "$gate_tracked" "$gate_untracked")
+    if gate_base_ledger=$(git -C "$WORKTREE" show "$FM_BASE_COMMIT:gates/ledger.json" 2>/dev/null); then
+      if gate_touched_ids=$(printf '%s' "$gate_base_ledger" \
+          | python3 -c '
+import json, sys
+
+def entries(doc):
+    gates = doc.get("gates")
+    if not isinstance(gates, list):
+        raise SystemExit("base ledger gates is not a JSON array")
+    out = {}
+    for g in gates:
+        if not isinstance(g, dict) or not isinstance(g.get("id"), str):
+            raise SystemExit("base ledger holds a gate with no string id")
+        out[g["id"]] = json.dumps(g, sort_keys=True)
+    return out
+
+base = entries(json.load(sys.stdin))
+head = entries(json.load(open(sys.argv[1])))
+for gid in head:
+    if base.get(gid) != head[gid]:
+        print(gid)
+' "$WORKTREE/gates/ledger.json" 2>/dev/null); then
+        gate_scope_known=yes
+      fi
+    else
+      # No ledger at the base at all: every gate in this one arrived here.
+      gate_touched_ids=$(printf '%s\n' "$GATE_ROWS" | awk -F'\t' '$2 != "" { print $2 }')
+      gate_scope_known=yes
+    fi
+  fi
+
+  # gate_in_scope <gate-id> <test-path>: 0 when this branch is answerable for
+  # that gate. Unknown scope answers 0 - fail closed, never excuse the lot.
+  gate_in_scope() {
+    local gid=$1 tref=$2
+    [ "$gate_scope_known" = yes ] || return 0
+    printf '%s\n' "$gate_touched_ids" | grep -qxF -- "$gid" && return 0
+    if [ -n "$tref" ]; then
+      printf '%s\n' "$gate_changed_files" | grep -qxF -- "$tref" && return 0
+    fi
+    return 1
+  }
+
   # `unproven` is a status this repo DOES have a rule for, so it must not take
   # the captain path: CONTRIBUTING.md records that the harness stamps it
   # whenever a gate test passes while first_observed_red is null. The crewmate
   # clears it by letting the gate be observed red, which is work.
-  GATE_UNPROVEN=$(printf '%s\n' "$GATE_ROWS" \
-    | awk -F'\t' '$1 == "bad-unproven" { printf "%s ", $2 }')
+  TAB=$(printf '\t')
+  GATE_UNPROVEN=""
+  GATE_UNPROVEN_PRE=""
+  while IFS= read -r gate_row; do
+    [ -n "$gate_row" ] || continue
+    gid=${gate_row%%"$TAB"*}
+    tref=${gate_row#*"$TAB"}
+    if gate_in_scope "$gid" "$tref"; then
+      GATE_UNPROVEN="$GATE_UNPROVEN$gid "
+    else
+      GATE_UNPROVEN_PRE="$GATE_UNPROVEN_PRE$gid "
+    fi
+  done <<UNPROVENROWS
+$(printf '%s\n' "$GATE_ROWS" | awk -F'\t' '$1 == "bad-unproven" { print $2 "\t" $4 }')
+UNPROVENROWS
 
   GATE_UNDECLARED=$(printf '%s\n' "$GATE_ROWS" \
     | awk -F'\t' '$1 == "bad-red" { printf "%s ", $2 }')
@@ -363,15 +500,34 @@ if [ "$GATE_HEADER" != NOGATES ]; then
   # honest answer for a gate this classifier could read no path out of.
   GATE_PATHS=$(printf '%s\n' "$GATE_ROWS" | awk -F'\t' '$4 != "" { print $2 "\t" $4 }')
   GATE_STALE=""
-  TAB=$(printf '\t')
+  GATE_STALE_PRE=""
   while IFS= read -r gate_row; do
     [ -n "$gate_row" ] || continue
     gid=${gate_row%%"$TAB"*}
     tref=${gate_row#*"$TAB"}
-    [ -e "$WORKTREE/$tref" ] || GATE_STALE="$GATE_STALE$gid -> $tref; "
+    if [ -e "$WORKTREE/$tref" ]; then continue; fi
+    if gate_in_scope "$gid" "$tref"; then
+      GATE_STALE="$GATE_STALE$gid -> $tref; "
+    else
+      GATE_STALE_PRE="$GATE_STALE_PRE$gid -> $tref; "
+    fi
   done <<GATEROWS
 $GATE_PATHS
 GATEROWS
+
+  # Reported before any reject fires, so the operator sees the whole picture -
+  # what this branch answers for, and what it merely inherited - whichever way
+  # the stage ends.
+  GATE_PRE_NOTE=""
+  if [ -n "$GATE_UNPROVEN_PRE" ]; then
+    GATE_PRE_NOTE="${GATE_PRE_NOTE}unproven: ${GATE_UNPROVEN_PRE% }; "
+  fi
+  if [ -n "$GATE_STALE_PRE" ]; then
+    GATE_PRE_NOTE="${GATE_PRE_NOTE}test file missing: ${GATE_STALE_PRE%; }; "
+  fi
+  if [ -n "$GATE_PRE_NOTE" ]; then
+    echo "gates: pre-existing ledger debt in gates this branch did not touch, reported and NOT rejected: ${GATE_PRE_NOTE%; }"
+  fi
 
   if [ -n "$GATE_UNDECLARED" ]; then
     note=""
@@ -384,17 +540,21 @@ GATEROWS
 
   if [ -n "$GATE_UNPROVEN" ]; then
     verify_reject \
-      "the gate ledger holds unproven gates: ${GATE_UNPROVEN% } - an unproven gate has never been observed red, so it proves nothing. Register the gate while its test genuinely fails and let ledger verify stamp first_observed_red itself, rather than hand-writing that timestamp" \
+      "the gate ledger holds unproven gates this branch touched: ${GATE_UNPROVEN% } - an unproven gate has never been observed red, so it proves nothing. Register the gate while its test genuinely fails and let ledger verify stamp first_observed_red itself, rather than hand-writing that timestamp${GATE_UNPROVEN_PRE:+ (pre-existing and not your responsibility: ${GATE_UNPROVEN_PRE% })}" \
       "gates/ledger.json in your worktree, and CONTRIBUTING.md on born-green gates; run bash $SCRIPT_DIR/fm-gates-lib.sh $WORKTREE"
   fi
 
   if [ -n "$GATE_STALE" ]; then
     verify_reject \
-      "the gate ledger references test files that do not exist on disk: ${GATE_STALE%; } - a ledger citing deleted tests is stale by construction" \
+      "the gate ledger references test files that do not exist on disk, in gates this branch touched: ${GATE_STALE%; } - a ledger citing deleted tests is stale by construction${GATE_STALE_PRE:+ (pre-existing and not your responsibility: ${GATE_STALE_PRE%; })}" \
       "gates/ledger.json in your worktree; run bash $SCRIPT_DIR/fm-gates-lib.sh $WORKTREE"
   fi
 
-  echo "gates: acceptable (every gate green, frozen, or a declared red)"
+  if [ -n "$GATE_PRE_NOTE" ]; then
+    echo "gates: acceptable for this branch (every gate green, frozen, or a declared red; pre-existing debt noted above)"
+  else
+    echo "gates: acceptable (every gate green, frozen, or a declared red)"
+  fi
 fi
 
 # --- 2. diff payload ---------------------------------------------------------

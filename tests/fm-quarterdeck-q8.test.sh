@@ -26,7 +26,9 @@
 #     JSON array is BADLEDGER, never coerced into one; and no gate field may
 #     carry a tab or newline, because a delimiter in a structural field FORGES
 #     A ROW - one crafted gate id turned an all-green ledger with an empty
-#     accepted-red.md into a silent skip of an arbitrary failing test; and an
+#     accepted-red.md into a silent skip of an arbitrary failing test; a gate
+#     whose id or status is missing or not a JSON string is BADLEDGER too,
+#     because str()-ing it produced the literal "None" as a gate id; and an
 #     unproven gate is recognised but never acceptable, reported under its own
 #     verdict so a caller can route it to the crewmate who can clear it rather
 #     than to a human who cannot. That coercion was
@@ -329,6 +331,64 @@ open(p, "w").write(json.dumps(d, indent=2))
 PY
 expect_code BADLEDGER "$(fm_gates_classify "$D3")" \
   "a status containing a newline must be BADLEDGER too"
+
+# --- fail closed: a missing or non-string id or status is BADLEDGER ----------
+#
+# The same principle as the two rules above, applied to the field's TYPE. The
+# parser used to str() whatever it found, so a gate with no "id" was classified
+# under the literal id "None": two id-less gates collapsed onto one key, and an
+# accepted-red.md line "- None - reason" would have excused an id-less red. A
+# missing status was saved only by luck - "None" is not a recognised status, so
+# it landed in bad-status - which is a fail-closed accident, not a rule.
+drop_field() {  # <dir> <field>
+  python3 - "$1/gates/ledger.json" "$2" <<'PY'
+import json, sys
+p, field = sys.argv[1], sys.argv[2]
+d = json.load(open(p))
+for g in d["gates"]:
+    if g.get("id") == "fx-green":
+        del g[field]
+        break
+open(p, "w").write(json.dumps(d, indent=2))
+PY
+}
+set_field() {  # <dir> <field> <json-literal>
+  python3 - "$1/gates/ledger.json" "$2" "$3" <<'PY'
+import json, sys
+p, field, raw = sys.argv[1], sys.argv[2], sys.argv[3]
+d = json.load(open(p))
+for g in d["gates"]:
+    if g.get("id") == "fx-green":
+        g[field] = json.loads(raw)
+        break
+open(p, "w").write(json.dumps(d, indent=2))
+PY
+}
+
+N1="$TMP/n1"; fixture "$N1"; drop_field "$N1" id
+expect_code BADLEDGER "$(fm_gates_classify "$N1")" \
+  "a gate with no id must be BADLEDGER - stringifying the missing value gave the
+literal id None, so two id-less gates collapse onto one key and an
+accepted-red.md line '- None - reason' would excuse an id-less red"
+
+N2="$TMP/n2"; fixture "$N2"; set_field "$N2" id null
+expect_code BADLEDGER "$(fm_gates_classify "$N2")" \
+  "an explicitly null gate id must be BADLEDGER too - it is the same missing id
+wearing a JSON literal"
+
+N3="$TMP/n3"; fixture "$N3"; set_field "$N3" id '[1, 2]'
+expect_code BADLEDGER "$(fm_gates_classify "$N3")" \
+  "a non-string gate id must be BADLEDGER - a ledger the harness would not load
+is not one this classifier repairs into a plausible-looking row"
+
+N4="$TMP/n4"; fixture "$N4"; drop_field "$N4" status
+expect_code BADLEDGER "$(fm_gates_classify "$N4")" \
+  "a gate with no status must be BADLEDGER, not classified under the status
+None and routed to bad-status by accident"
+
+N5="$TMP/n5"; fixture "$N5"; set_field "$N5" status 'true'
+expect_code BADLEDGER "$(fm_gates_classify "$N5")" \
+  "a non-string status must be BADLEDGER for the same reason as a non-string id"
 
 # --- the exploit itself, end to end through the runner ----------------------
 #

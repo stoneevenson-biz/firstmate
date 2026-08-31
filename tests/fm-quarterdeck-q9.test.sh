@@ -19,8 +19,14 @@
 #     would stop every one of them.
 #   - gates/ with no accepted-red.md rejects an undeclared red rather than
 #     treating "no declarations" as "nothing to declare".
-#   - gates/ with no ledger escalates: the repo declares itself gate-governed
-#     and the record of what is proven is gone. Fail closed, not open.
+#   - gates/ with no ledger, but WITH gate machinery (verify.sh or
+#     accepted-red.md), escalates: the repo declares itself gate-governed and
+#     the record of what is proven is gone. Fail closed, not open.
+#   - a gates/ dir holding ordinary source and none of that machinery is NOT a
+#     claim of gate governance and must proceed. "gates" is an ordinary
+#     directory name, and fm-verify runs against every ship task in every
+#     project firstmate manages, so escalating on the NAME conscripted
+#     unrelated repos into a captain escalation on every task.
 #   - a ledger carrying a delimiter in a gate id escalates rather than being
 #     announced acceptable: a tab or newline there forges a classifier row.
 #   - a ledger whose "gates" value is not a JSON array escalates rather than
@@ -47,6 +53,20 @@
 #     at clone time, so a base resolved from it can predate the commit that
 #     landed the declaration - and the branch that rebased onto the fetched
 #     origin would be accused of forging a line it merely inherited.
+#   - a declaration reachable only from the LOCAL default, while an origin
+#     exists, ESCALATES. That ref is not a reviewed base: a pooled clone shares
+#     it with the primary checkout, so an ordinary local commit would launder a
+#     branch's own excuse into a baseline. With NO origin at all it is the only
+#     candidate there is, so it is the base and fm-verify says so out loud; with
+#     an origin configured but origin/<default> unresolvable, the base cannot be
+#     established and the stage fails closed rather than degrading to a ref the
+#     crewmate can write.
+#   - an unproven gate or a stale test_ref in a gate THIS BRANCH TOUCHED still
+#     rejects; one it merely inherited is reported as pre-existing ledger debt
+#     and does not. Neither condition is visible to CI - run-all iterates tests
+#     on disk, and an unproven gate's test passes by definition - so rejecting
+#     repo-wide rejected every ship task in a repo carrying that debt, three
+#     times, over work the crewmate did not do and could not undo.
 #   - a gate whose status is unproven REJECTS, and the relay tells the crewmate
 #     to let the gate be observed red. The harness stamps unproven whenever a
 #     gate test passes while first_observed_red is null (CONTRIBUTING.md), so it
@@ -410,17 +430,19 @@ assert_no_grep "escalate:" "$(fm_verdict_file "$S" o)" \
   "a stale local default must never produce a self-authorised-red escalation"
 assert_present "$VERIFY_TRIP" "the run proceeds to the verifier"
 
-# --- case P: a LOCAL default that is AHEAD must not be discarded for origin --
+# --- case P: a declaration on a LOCAL default only is NOT a reviewed base ----
 #
-# The mirror image of case O, and the reason the base is chosen by position
-# rather than by name. Preferring origin/<default> unconditionally reintroduces
-# exactly the defect case O removes, from the other side: a declaration committed
-# to the local default and not yet pushed sits AHEAD of origin/<default>, so a
-# merge base taken there predates it and the inherited line reads as forged.
+# The bypass case. An earlier round chose the furthest-forward merge base so
+# that a declaration committed to an unpushed local default would not read as
+# forged - a usability argument about a guard whose whole purpose is security.
+# The candidates are not equal: origin/<default> takes a push to a protected
+# branch, while refs/heads/<default> takes an ordinary local commit, and
+# firstmate's project clones are POOLED, so a crewmate worktree shares that ref
+# with the primary checkout. Ranking them by position therefore made the bypass
+# the ordinary path rather than an attack, and it is withdrawn.
 #
-# The fixture pushes a declaration-free main, then lands the reviewed
-# declaration on the LOCAL default only. Only a base that takes the
-# furthest-forward candidate lets this run proceed.
+# The fixture pushes a declaration-free main, then lands the declaration on the
+# LOCAL default only. Nobody has reviewed it, so it must reach the captain.
 rm -f "$LENS_TRIP" "$VERIFY_TRIP"
 repo_p="$TMP/p-repo"; wt_p="$TMP/p-wt"
 fm_git_init_commit "$repo_p"
@@ -431,7 +453,7 @@ git -C "$repo_p" push -q origin main
 mkdir -p "$repo_p/gates"
 printf '%s\n' "$DECL_RED" > "$repo_p/gates/accepted-red.md"
 git -C "$repo_p" add gates/accepted-red.md
-git -C "$repo_p" commit -qm "gates: reviewed red baseline"
+git -C "$repo_p" commit -qm "gates: red baseline, local default only"
 git -C "$repo_p" worktree add --quiet -b fm/p "$wt_p"
 mkdir -p "$D/p"
 fm_write_meta "$S/p.meta" \
@@ -439,44 +461,204 @@ fm_write_meta "$S/p.meta" \
   "harness=echo" "kind=ship" "mode=local-only" "yolo=off"
 gates "$wt_p" yes
 run p; codeP=$?
-expect_code 0 "$codeP" "a declaration on a local default that is AHEAD of origin is still
-an inherited baseline; preferring origin unconditionally mirrors the stale-base defect
-and accuses the branch of forging a line it did not write"
-assert_grep "gates: acceptable" "$TMP/p.out" \
-  "the furthest-forward merge base honours the local declaration"
-assert_no_grep "escalate:" "$(fm_verdict_file "$S" p)" \
-  "a local default ahead of origin must never produce a self-authorised-red escalation"
+expect_code 3 "$codeP" "a declaration reachable only from the LOCAL default branch has been
+reviewed by nobody - a pooled clone shares that ref with the primary checkout, so an
+ordinary local commit would otherwise launder a branch's own excuse into a baseline"
+assert_grep "escalate:" "$(fm_verdict_file "$S" p)" \
+  "the unreviewed local-only declaration is recorded as an escalation"
+assert_grep "fx-red" "$(fm_verdict_file "$S" p)" "the escalation names the gate it excuses"
+assert_no_grep "approve:" "$(fm_verdict_file "$S" p)" \
+  "a declaration the crewmate could have written itself must never approve"
+assert_absent "$VERIFY_TRIP" "the escalation precedes the verifier"
+
+# --- case Q: no origin remote at all -> the local default IS the base --------
+#
+# For a local-only project refs/heads/<default> is the only candidate there is,
+# so it is the base, and fm-verify says out loud that the base is only as
+# trustworthy as that branch rather than pretending to a review that never
+# happened.
+rm -f "$LENS_TRIP" "$VERIFY_TRIP"
+WQ=$(task q "$DECL_RED"); gates "$WQ" yes
+[ -z "$(git -C "$TMP/q-repo" remote)" ] || fail "case Q fixture must have no remote at all"
+run q; codeQ=$?
+expect_code 0 "$codeQ" "with no origin remote there is no second candidate, so the local
+default branch is the base and a declaration carried on it is the reviewed baseline"
+assert_grep "gates: acceptable" "$TMP/q.out" \
+  "the local default answers the base comparison for a project with no remote"
+assert_grep "no origin remote" "$TMP/q.out" \
+  "fm-verify must say that a local-only base is only as trustworthy as the local default"
 assert_present "$VERIFY_TRIP" "the run proceeds to the verifier"
 
-# --- case Q: a fetch that cannot succeed degrades, and never wedges the run ---
+# --- case R: an origin that cannot be resolved -> escalate, never degrade ----
 #
-# The base resolution is the only network call on the Quarterdeck accept path,
-# and fm-verify is what stands between a done: claim and acceptance - so a fetch
-# that blocks wedges the task outright. An unreachable origin must fall through
-# to the next candidate and let the run complete, exactly as a reachable one
-# that is merely behind does.
+# The counterpart to case Q, and the reason the fallback is not "try the local
+# branch next". An origin IS configured, so refs/heads/<default> is a ref the
+# crewmate can write; falling back to it when the fetch fails would hand any
+# crewmate the bypass just by making origin unreachable. The base cannot be
+# established, so the stage fails closed.
 rm -f "$LENS_TRIP" "$VERIFY_TRIP"
-repo_q="$TMP/q-repo"; wt_q="$TMP/q-wt"
-fm_git_init_commit "$repo_q"
-git -C "$repo_q" branch -M main
-# An origin that does not exist: `git fetch` fails rather than returning refs.
-git -C "$repo_q" remote add origin "file://$TMP/q-remote-does-not-exist.git"
-mkdir -p "$repo_q/gates"
-printf '%s\n' "$DECL_RED" > "$repo_q/gates/accepted-red.md"
-git -C "$repo_q" add gates/accepted-red.md
-git -C "$repo_q" commit -qm "gates: reviewed red baseline"
-git -C "$repo_q" worktree add --quiet -b fm/q "$wt_q"
-mkdir -p "$D/q"
-fm_write_meta "$S/q.meta" \
-  "window=firstmate:fm-q" "worktree=$wt_q" "project=$repo_q" \
+repo_r="$TMP/r-repo"; wt_r="$TMP/r-wt"
+fm_git_init_commit "$repo_r"
+git -C "$repo_r" branch -M main
+# An origin that does not exist: the fetch fails and no cached origin/main
+# was ever created, so there is no reviewed candidate at all.
+git -C "$repo_r" remote add origin "file://$TMP/r-remote-does-not-exist.git"
+mkdir -p "$repo_r/gates"
+printf '%s\n' "$DECL_RED" > "$repo_r/gates/accepted-red.md"
+git -C "$repo_r" add gates/accepted-red.md
+git -C "$repo_r" commit -qm "gates: reviewed red baseline"
+git -C "$repo_r" worktree add --quiet -b fm/r "$wt_r"
+mkdir -p "$D/r"
+fm_write_meta "$S/r.meta" \
+  "window=firstmate:fm-r" "worktree=$wt_r" "project=$repo_r" \
   "harness=echo" "kind=ship" "mode=local-only" "yolo=off"
-gates "$wt_q" yes
-run q; codeQ=$?
-expect_code 0 "$codeQ" "an unreachable origin must degrade to the local default branch;
-a fetch failure on the accept path must never take a ship task down with it"
-assert_grep "gates: acceptable" "$TMP/q.out" \
-  "the local default still answers the base comparison when the fetch fails"
-assert_present "$VERIFY_TRIP" "the run completes rather than wedging on the fetch"
+gates "$wt_r" yes
+run r; codeR=$?
+expect_code 3 "$codeR" "with an origin configured but origin/<default> unresolvable, the
+reviewed base cannot be established - degrading to the local branch would hand every
+crewmate the bypass simply by making origin unreachable"
+assert_grep "escalate:" "$(fm_verdict_file "$S" r)" \
+  "an unestablishable base is recorded as an escalation"
+assert_no_grep "approve:" "$(fm_verdict_file "$S" r)" \
+  "a declaration whose review cannot be established must never approve"
+assert_absent "$VERIFY_TRIP" "the fail-closed escalation precedes the verifier"
+
+# --- case S: a gates/ dir that is not gate machinery -> not applicable -------
+#
+# "gates" is an ordinary directory name - a Go package, a Python module, a
+# state-machine dir - and fm-verify runs against every ship task in every
+# project firstmate manages. Escalating on the directory NAME conscripted
+# unrelated repos into a captain escalation on every single task, with no
+# crewmate-side remedy. What claims gate governance is the machinery:
+# gates/ledger.json, gates/verify.sh, gates/accepted-red.md.
+rm -f "$LENS_TRIP" "$VERIFY_TRIP"
+WS=$(task s)
+mkdir -p "$WS/gates"
+printf 'package gates\n' > "$WS/gates/registry.go"
+printf 'type Gate struct{}\n' > "$WS/gates/gate.go"
+run s; codeS=$?
+expect_code 0 "$codeS" "a gates/ directory holding ordinary source and no ledger, verify.sh
+or accepted-red.md is not a gate-governed repo, and must proceed rather than escalate
+every ship task in it to the captain"
+assert_no_grep "escalate:" "$(fm_verdict_file "$S" s)" \
+  "a directory that merely shares the name gates/ must never escalate"
+assert_grep "not a gate-governed repo" "$TMP/s.out" \
+  "the not-applicable answer is announced rather than silently assumed"
+assert_present "$VERIFY_TRIP" "the run proceeds to the verifier"
+
+# Case E's counterpart: with the machinery present and the ledger gone, the
+# record of what is proven really is absent, and the escalation is right.
+# (Case E above covers that, and keeps gates/accepted-red.md in place.)
+
+# --- ledger debt: whose is it? ------------------------------------------------
+#
+# An unproven gate and a test_ref naming a file that is not on disk are both
+# invisible to CI - run-all iterates tests/*.test.sh ON DISK, so a ledger citing
+# a deleted test never fails the suite, and an unproven gate's test passes by
+# definition. Rejecting on either one repo-wide therefore rejected EVERY ship
+# task dispatched into a repo carrying that debt: three relays the crewmate
+# could not act on, then a captain escalation, while the pipeline and CI stayed
+# green. So both are scoped to the gates this branch's own diff touches.
+#
+# scope_repo <id> <ledger-json>: a repo whose DEFAULT BRANCH already carries the
+# gate machinery - reviewed baseline, ledger, tests - plus a task worktree
+# branched off it. That is what makes "did this branch touch that gate" a real
+# question: with the ledger arriving in the branch diff, every gate in it is
+# this branch's by construction.
+scope_repo() {
+  local id=$1 ledger=$2 repo="$TMP/$1-repo" wt="$TMP/$1-wt"
+  fm_git_init_commit "$repo"
+  git -C "$repo" branch -M main
+  mkdir -p "$repo/gates" "$repo/tests"
+  printf '%s\n' "$DECL_RED" > "$repo/gates/accepted-red.md"
+  printf '%s\n' "$ledger" > "$repo/gates/ledger.json"
+  : > "$repo/tests/aa.test.sh"; : > "$repo/tests/bb.test.sh"; : > "$repo/tests/cc.test.sh"
+  git -C "$repo" add gates tests
+  git -C "$repo" commit -qm "gates: reviewed baseline"
+  git -C "$repo" worktree add --quiet -b "fm/$id" "$wt"
+  mkdir -p "$D/$id"
+  fm_write_meta "$S/$id.meta" \
+    "window=firstmate:fm-$id" "worktree=$wt" "project=$repo" \
+    "harness=echo" "kind=ship" "mode=local-only" "yolo=off"
+  printf '%s\n' "$wt"
+}
+
+LEDGER_CLEAN='{
+  "version": 1,
+  "gates": [
+    { "id": "fx-green",  "status": "green",  "test_ref": "bash tests/aa.test.sh" },
+    { "id": "fx-frozen", "status": "frozen", "test_ref": "bash tests/bb.test.sh" },
+    { "id": "fx-red",    "status": "red",    "test_ref": "bash tests/cc.test.sh" }
+  ]
+}'
+LEDGER_UNPROVEN=${LEDGER_CLEAN/\"fx-green\",  \"status\": \"green\"/\"fx-green\",  \"status\": \"unproven\"}
+LEDGER_STALE=${LEDGER_CLEAN/bash tests\/aa.test.sh/bash tests\/zz.test.sh}
+
+# unrelated_commit <worktree>: work that touches no gate and no test.
+unrelated_commit() {
+  mkdir -p "$1/src"
+  printf 'hello\n' > "$1/src/thing.txt"
+  git -C "$1" add src/thing.txt
+  git -C "$1" commit -qm "unrelated work"
+}
+
+# --- case T: an unproven gate this branch did NOT touch -> report, not reject -
+rm -f "$LENS_TRIP" "$VERIFY_TRIP"; : > "$TMP/relay.log"
+WT=$(scope_repo t "$LEDGER_UNPROVEN"); unrelated_commit "$WT"
+run t; codeT=$?
+expect_code 0 "$codeT" "pre-existing unproven debt in a gate this branch never touched must
+not reject - it is invisible to CI, so it would reject every ship task in that repo, three
+times, over work the crewmate did not do and cannot undo"
+assert_grep "pre-existing ledger debt" "$TMP/t.out" \
+  "inherited debt is REPORTED rather than silently dropped"
+assert_grep "fx-green" "$TMP/t.out" "the report names the gate carrying the debt"
+assert_no_grep "reject:" "$(fm_verdict_file "$S" t)" "inherited debt must not be a reject"
+assert_present "$VERIFY_TRIP" "the run proceeds to the verifier"
+
+# --- case U: an unproven gate this branch ADDED -> still rejects -------------
+rm -f "$LENS_TRIP" "$VERIFY_TRIP"; : > "$TMP/relay.log"
+WU=$(scope_repo u "$LEDGER_CLEAN")
+python3 - "$WU/gates/ledger.json" <<'PYU'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d["gates"].append({"id": "fx-new", "status": "unproven", "test_ref": "bash tests/dd.test.sh"})
+open(p, "w").write(json.dumps(d, indent=2))
+PYU
+: > "$WU/tests/dd.test.sh"
+git -C "$WU" add gates/ledger.json tests/dd.test.sh
+git -C "$WU" commit -qm "gates: register a new gate"
+run u; codeU=$?
+expect_code 2 "$codeU" "an unproven gate whose ledger entry this branch added is squarely
+the crewmate's, and still rejects"
+assert_grep "fx-new" "$(fm_verdict_file "$S" u)" "the reject names the gate this branch added"
+assert_grep "observed red" "$TMP/relay.log" \
+  "the relay still tells the crewmate to let the gate be observed red"
+assert_absent "$VERIFY_TRIP" "the in-scope reject still precedes the verifier"
+
+# --- case V: a test file THIS BRANCH deleted -> stale, and still rejects -----
+rm -f "$LENS_TRIP" "$VERIFY_TRIP"; : > "$TMP/relay.log"
+WV=$(scope_repo v "$LEDGER_CLEAN")
+git -C "$WV" rm -q tests/aa.test.sh
+git -C "$WV" commit -qm "drop a test the ledger still cites"
+run v; codeV=$?
+expect_code 2 "$codeV" "deleting a test the ledger still cites is this branch's own staleness -
+the deletion is in its diff - and must still reject"
+assert_grep "fx-green" "$(fm_verdict_file "$S" v)" "the stale reject names the gate"
+assert_grep "tests/aa.test.sh" "$(fm_verdict_file "$S" v)" "the stale reject names the test"
+assert_absent "$VERIFY_TRIP" "the in-scope stale reject still precedes the verifier"
+
+# --- case W: a stale test_ref this branch did NOT touch -> report, not reject -
+rm -f "$LENS_TRIP" "$VERIFY_TRIP"; : > "$TMP/relay.log"
+WW=$(scope_repo w "$LEDGER_STALE"); unrelated_commit "$WW"
+run w; codeW=$?
+expect_code 0 "$codeW" "a ledger that already cited a missing test at the base is inherited
+debt, invisible to CI, and must not reject work that never touched that gate"
+assert_grep "pre-existing ledger debt" "$TMP/w.out" \
+  "the inherited stale reference is reported rather than silently dropped"
+assert_grep "tests/zz.test.sh" "$TMP/w.out" "the report names the test the ledger still cites"
+assert_no_grep "reject:" "$(fm_verdict_file "$S" w)" "inherited staleness must not be a reject"
+assert_present "$VERIFY_TRIP" "the run proceeds to the verifier"
 
 # --- case G: the prompt no longer carries a gate rule of its own -------------
 #
