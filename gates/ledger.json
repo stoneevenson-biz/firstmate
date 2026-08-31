@@ -721,7 +721,7 @@
       "test_ref": "bash tests/fm-quarterdeck-q9.test.sh",
       "baseline_ref": null,
       "first_observed_red": "2026-08-29T21:28:42.902Z",
-      "mutation_verified": "2026-08-31T06:09:41.714Z",
+      "mutation_verified": "2026-08-31T06:39:41.182Z",
       "status": "frozen",
       "vacuous": false,
       "regression": false,

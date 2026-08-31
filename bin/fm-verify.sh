@@ -119,45 +119,87 @@ default_branch() {
   return 1
 }
 
-# The REF both stages compare against, resolved the way bin/fm-review-diff.sh
-# resolves it and for the reason that script documents: pooled project clones
-# keep their LOCAL default branch frozen at clone time, so a merge base taken
-# against it can name a commit far behind the real base. The gate stage would
-# then read a declaration the branch merely INHERITED - one the captain merged
-# after this clone last synced - as a line the branch forged for itself, and
-# escalate over it. That is the class of spurious block this stage exists to
-# remove, so the remote-tracking ref is refreshed and preferred.
+# THE BASE IS RESOLVED ONCE, IN THE MAIN BODY, INTO THESE TWO VARIABLES.
+# An earlier draft memoized inside a base_ref() that both stages called as
+# `$(base_ref)`. A subshell's assignments die with the subshell, so the memo was
+# discarded on return every time: the guard was still empty in the parent, both
+# call sites took the fresh branch, and the fetch ran twice. Worse, the promise
+# that both stages compare against the SAME base was false by construction.
+# Assigning in the main body, before either consumer runs, is what makes it true.
 #
-# Unlike fm-review-diff.sh, a failed fetch must NOT abort. fm-verify sits on the
-# accept path, and a network blip must degrade to the next candidate rather than
-# take every ship task down with it. Order: freshly fetched origin/<default>, an
-# origin/<default> that is already present, then the local branch - which is
-# also the only right answer for a local-only project with no remote at all.
-# Resolution is attempted once; both stages read the same answer.
-BASE_REF=""
-BASE_REF_RESOLVED=""
-base_ref() {
-  local default candidate
-  if [ -n "$BASE_REF_RESOLVED" ]; then
-    [ -n "$BASE_REF" ] || return 1
-    printf '%s\n' "$BASE_REF"
-    return 0
+# WHICH candidate wins is not "the one named origin". Pooled project clones keep
+# their LOCAL default branch frozen at clone time, so a merge base taken against
+# it can name a commit far behind the real one - the gate stage would then read a
+# declaration this branch merely INHERITED as a line it forged for itself, and
+# escalate over it. But preferring origin unconditionally just mirrors that bug:
+# a declaration committed to the local default and not yet pushed sits AHEAD of
+# origin/<default>, and the same false escalation lands from the other side.
+#
+# So take the candidate whose merge base with HEAD is FURTHEST FORWARD. That is
+# safe in exactly one direction, which is the reason it is the right rule rather
+# than mere permissiveness: a merge base is always an ancestor of HEAD, and a
+# declaration this branch wrote in its own commit exists on no default-branch
+# candidate at all, so it can never appear at any candidate's merge base. Moving
+# the base forward can therefore only remove FALSE escalations - it cannot
+# manufacture a pass for a genuine self-authorisation.
+FM_BASE_REF=""
+FM_BASE_COMMIT=""
+
+# The fetch is the only network call on the Quarterdeck accept path, and a
+# verifier that HANGS is worse than one that escalates: fm-verify is what stands
+# between a done: claim and acceptance, so a wedged fetch wedges the task. Guard
+# against blocking, not just against failure - an ssh URL for a host absent from
+# known_hosts, or an https URL whose credential helper has expired, otherwise
+# leaves git waiting on an interactive prompt with no tty to answer it. The env
+# guards are what actually remove the hang; the wall-clock cap is defence in
+# depth and is skipped where no timeout(1) exists (macOS ships none by default).
+FM_VERIFY_SSH_BATCH='ssh -oBatchMode=yes -oConnectTimeout=10'
+fetch_default_branch() {
+  local default=$1 secs=${FM_VERIFY_FETCH_TIMEOUT:-30} runner=""
+  if command -v timeout >/dev/null 2>&1; then
+    runner=timeout
+  elif command -v gtimeout >/dev/null 2>&1; then
+    runner=gtimeout
   fi
-  BASE_REF_RESOLVED=yes
-  default=$(default_branch) || return 1
+  if [ -n "$runner" ]; then
+    GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="$FM_VERIFY_SSH_BATCH" \
+      "$runner" "$secs" git -C "$WORKTREE" \
+        -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=15 \
+        fetch origin "+refs/heads/$default:refs/remotes/origin/$default" \
+        --quiet >/dev/null 2>&1 || true
+  else
+    GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="$FM_VERIFY_SSH_BATCH" \
+      git -C "$WORKTREE" \
+        -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=15 \
+        fetch origin "+refs/heads/$default:refs/remotes/origin/$default" \
+        --quiet >/dev/null 2>&1 || true
+  fi
+}
+
+# Leaves both variables empty when no base is resolvable; each consumer decides
+# what that means (the gate stage escalates, the diff payload degrades).
+resolve_base() {
+  local default cand mb best_ref="" best_mb=""
+  default=$(default_branch) || return 0
   if git -C "$WORKTREE" remote get-url origin >/dev/null 2>&1; then
-    git -C "$WORKTREE" fetch origin \
-      "+refs/heads/$default:refs/remotes/origin/$default" --quiet 2>/dev/null || true
+    fetch_default_branch "$default"
   fi
-  for candidate in "refs/remotes/origin/$default" "refs/heads/$default"; do
-    if git -C "$WORKTREE" rev-parse --verify --quiet "$candidate^{commit}" >/dev/null 2>&1; then
-      BASE_REF=$candidate
-      printf '%s\n' "$BASE_REF"
-      return 0
+  for cand in "refs/remotes/origin/$default" "refs/heads/$default"; do
+    git -C "$WORKTREE" rev-parse --verify --quiet "$cand^{commit}" >/dev/null 2>&1 || continue
+    mb=$(git -C "$WORKTREE" merge-base HEAD "$cand" 2>/dev/null) || continue
+    [ -n "$mb" ] || continue
+    # `--is-ancestor A B` succeeds when B is at or after A, so this keeps the
+    # later merge base and is a no-op when the two candidates agree.
+    if [ -z "$best_mb" ] \
+        || git -C "$WORKTREE" merge-base --is-ancestor "$best_mb" "$mb" 2>/dev/null; then
+      best_ref=$cand
+      best_mb=$mb
     fi
   done
-  return 1
+  FM_BASE_REF=$best_ref
+  FM_BASE_COMMIT=$best_mb
 }
+resolve_base
 
 # --- 1. gate ledger adjudication (structural, ahead of both models) -----------
 #
@@ -261,12 +303,10 @@ if [ "$GATE_HEADER" != NOGATES ]; then
   if [ -n "$GATE_DECLARED" ]; then
     gate_base_why=""
     gate_self=""
-    gate_base_ref=""
-    if ! gate_base_ref=$(base_ref); then
+    gate_base_ref=$FM_BASE_REF
+    gate_base=$FM_BASE_COMMIT
+    if [ -z "$gate_base_ref" ] || [ -z "$gate_base" ]; then
       gate_base_why="no base branch is resolvable there"
-    elif ! gate_base=$(git -C "$WORKTREE" merge-base HEAD "$gate_base_ref" 2>/dev/null) \
-        || [ -z "$gate_base" ]; then
-      gate_base_why="no merge base with $gate_base_ref is resolvable there"
     elif ! gate_tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-verify-base.XXXXXX" 2>/dev/null); then
       gate_base_why="a scratch dir for the base comparison could not be created"
     else
@@ -360,10 +400,9 @@ fi
 # --- 2. diff payload ---------------------------------------------------------
 DIFF_FILE="$DATA/$ID/lens-diff.patch"
 {
-  if DIFF_BASE_REF=$(base_ref) \
-      && base=$(git -C "$WORKTREE" merge-base HEAD "$DIFF_BASE_REF" 2>/dev/null); then
-    git -C "$WORKTREE" log --oneline "$base..HEAD"
-    git -C "$WORKTREE" diff "$base..HEAD"
+  if [ -n "$FM_BASE_COMMIT" ]; then
+    git -C "$WORKTREE" log --oneline "$FM_BASE_COMMIT..HEAD"
+    git -C "$WORKTREE" diff "$FM_BASE_COMMIT..HEAD"
   else
     echo "(no base branch resolvable; showing HEAD commit only)"
     git -C "$WORKTREE" show HEAD

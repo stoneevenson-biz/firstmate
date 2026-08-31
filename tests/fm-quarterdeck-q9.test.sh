@@ -410,6 +410,74 @@ assert_no_grep "escalate:" "$(fm_verdict_file "$S" o)" \
   "a stale local default must never produce a self-authorised-red escalation"
 assert_present "$VERIFY_TRIP" "the run proceeds to the verifier"
 
+# --- case P: a LOCAL default that is AHEAD must not be discarded for origin --
+#
+# The mirror image of case O, and the reason the base is chosen by position
+# rather than by name. Preferring origin/<default> unconditionally reintroduces
+# exactly the defect case O removes, from the other side: a declaration committed
+# to the local default and not yet pushed sits AHEAD of origin/<default>, so a
+# merge base taken there predates it and the inherited line reads as forged.
+#
+# The fixture pushes a declaration-free main, then lands the reviewed
+# declaration on the LOCAL default only. Only a base that takes the
+# furthest-forward candidate lets this run proceed.
+rm -f "$LENS_TRIP" "$VERIFY_TRIP"
+repo_p="$TMP/p-repo"; wt_p="$TMP/p-wt"
+fm_git_init_commit "$repo_p"
+git -C "$repo_p" branch -M main
+fm_git_add_origin "$repo_p" "$TMP/p-remote.git"
+git -C "$repo_p" push -q origin main
+# The declaration lands on local main only - origin/main stays behind it.
+mkdir -p "$repo_p/gates"
+printf '%s\n' "$DECL_RED" > "$repo_p/gates/accepted-red.md"
+git -C "$repo_p" add gates/accepted-red.md
+git -C "$repo_p" commit -qm "gates: reviewed red baseline"
+git -C "$repo_p" worktree add --quiet -b fm/p "$wt_p"
+mkdir -p "$D/p"
+fm_write_meta "$S/p.meta" \
+  "window=firstmate:fm-p" "worktree=$wt_p" "project=$repo_p" \
+  "harness=echo" "kind=ship" "mode=local-only" "yolo=off"
+gates "$wt_p" yes
+run p; codeP=$?
+expect_code 0 "$codeP" "a declaration on a local default that is AHEAD of origin is still
+an inherited baseline; preferring origin unconditionally mirrors the stale-base defect
+and accuses the branch of forging a line it did not write"
+assert_grep "gates: acceptable" "$TMP/p.out" \
+  "the furthest-forward merge base honours the local declaration"
+assert_no_grep "escalate:" "$(fm_verdict_file "$S" p)" \
+  "a local default ahead of origin must never produce a self-authorised-red escalation"
+assert_present "$VERIFY_TRIP" "the run proceeds to the verifier"
+
+# --- case Q: a fetch that cannot succeed degrades, and never wedges the run ---
+#
+# The base resolution is the only network call on the Quarterdeck accept path,
+# and fm-verify is what stands between a done: claim and acceptance - so a fetch
+# that blocks wedges the task outright. An unreachable origin must fall through
+# to the next candidate and let the run complete, exactly as a reachable one
+# that is merely behind does.
+rm -f "$LENS_TRIP" "$VERIFY_TRIP"
+repo_q="$TMP/q-repo"; wt_q="$TMP/q-wt"
+fm_git_init_commit "$repo_q"
+git -C "$repo_q" branch -M main
+# An origin that does not exist: `git fetch` fails rather than returning refs.
+git -C "$repo_q" remote add origin "file://$TMP/q-remote-does-not-exist.git"
+mkdir -p "$repo_q/gates"
+printf '%s\n' "$DECL_RED" > "$repo_q/gates/accepted-red.md"
+git -C "$repo_q" add gates/accepted-red.md
+git -C "$repo_q" commit -qm "gates: reviewed red baseline"
+git -C "$repo_q" worktree add --quiet -b fm/q "$wt_q"
+mkdir -p "$D/q"
+fm_write_meta "$S/q.meta" \
+  "window=firstmate:fm-q" "worktree=$wt_q" "project=$repo_q" \
+  "harness=echo" "kind=ship" "mode=local-only" "yolo=off"
+gates "$wt_q" yes
+run q; codeQ=$?
+expect_code 0 "$codeQ" "an unreachable origin must degrade to the local default branch;
+a fetch failure on the accept path must never take a ship task down with it"
+assert_grep "gates: acceptable" "$TMP/q.out" \
+  "the local default still answers the base comparison when the fetch fails"
+assert_present "$VERIFY_TRIP" "the run completes rather than wedging on the fetch"
+
 # --- case G: the prompt no longer carries a gate rule of its own -------------
 #
 # Comments are stripped first: the file's header deliberately QUOTES the deleted
