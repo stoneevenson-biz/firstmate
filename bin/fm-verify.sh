@@ -378,9 +378,27 @@ case "$GATE_HEADER" in
   BADLEDGER)
     verify_escalate "gates/ledger.json in $WORKTREE is unreadable or the wrong shape${GATE_WHY:+: $GATE_WHY} - gate state cannot be classified; fail closed"
     ;;
+  OK | NOACCEPTED)
+    ;;
+  *)
+    # The header set is a cross-file contract, documented under "Headers:" in
+    # bin/fm-gates-lib.sh. Anything outside it means this script and that
+    # library disagree about what was said - a version skew, or a corrupted
+    # capture - and a header nothing here understands carries no rows either.
+    # Falling through with empty rows made every awk filter below come back
+    # empty and the stage announce "gates: acceptable" over a ledger it had read
+    # not one gate from: the accept path claiming a property it never
+    # established, which is the fail-open this whole stage exists to remove
+    # (the same shape already closed twice in the library, at the non-array
+    # coercion and the all-or-nothing row build). So it names what it saw and
+    # fails closed.
+    verify_escalate "the gate classifier returned a header this script has no rule for: '$GATE_HEADER'${GATE_WHY:+ (stderr: $GATE_WHY)} - the header set is a contract with bin/fm-gates-lib.sh (NOGATES, NOLEDGER, BADLEDGER, NOACCEPTED, OK), so this is either a version skew between the two or a corrupt classification; nothing can be concluded about the gates either way. Ask the classifier directly with: bash $SCRIPT_DIR/fm-gates-lib.sh $WORKTREE. Fail closed"
+    ;;
 esac
 
-if [ "$GATE_HEADER" != NOGATES ] && [ "$GATE_HEADER" != NOLEDGER ]; then
+# Positive, not exclusionary: only a header whose rows this stage knows how to
+# read reaches it, so a new or unrecognised header cannot arrive here at all.
+if [ "$GATE_HEADER" = OK ] || [ "$GATE_HEADER" = NOACCEPTED ]; then
   # Unrecognised statuses first: they mean the ledger says something this repo
   # has no rule for, which no crewmate edit can resolve.
   GATE_UNKNOWN=$(printf '%s\n' "$GATE_ROWS" \

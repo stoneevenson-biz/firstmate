@@ -103,6 +103,10 @@
 #     to let the gate be observed red. The harness stamps unproven whenever a
 #     gate test passes while first_observed_red is null (CONTRIBUTING.md), so it
 #     is ordinary WIP, not a ledger a human has to interpret.
+#   - a classifier header outside the documented set ESCALATES and names itself.
+#     The gate stage was entered by EXCLUDING the inapplicable headers, so any
+#     other one fell through with no rows and the stage announced "gates:
+#     acceptable" over a ledger it had read not one gate from.
 #   - the verifier prompt no longer carries a gate rule of its own. Two
 #     authorities over one decision is what produced the contradiction.
 #
@@ -934,6 +938,50 @@ assert_no_grep "unproven gates this branch touched" "$TMP/relay.log" \
   "the reject must not claim the branch touched a gate it never saw - fail closed must not
 mean fail dishonest"
 assert_absent "$VERIFY_TRIP" "the fail-closed reject still precedes the verifier"
+
+# --- case AE: an unrecognised classifier header must never read as acceptable ---
+#
+# The header set is a cross-file contract, documented under "Headers:" in
+# bin/fm-gates-lib.sh. fm-verify handled NOGATES, NOLEDGER and BADLEDGER and then
+# entered the gate stage by EXCLUDING the two inapplicable ones, so any other
+# header fell through carrying no rows fm-verify could read: every awk filter
+# came back empty and the stage announced "gates: acceptable (every gate green,
+# frozen, or a declared red)" over a ledger it had read not one gate from. That is
+# the accept path claiming a property it never established - the third instance of
+# the shape already closed twice inside the classifier, at the non-array coercion
+# and the all-or-nothing row build.
+#
+# The classifier is stubbed rather than broken, because reaching this state for
+# real needs a version skew between the two files, which is precisely what the
+# escalation has to survive. The stub is a whole shim bin/ of symlinks with one
+# file replaced, so nothing but the classifier's answer differs from any other
+# case here.
+rm -f "$LENS_TRIP" "$VERIFY_TRIP"; : > "$TMP/relay.log"
+WAE=$(task ae "$DECL_RED"); gates "$WAE" yes
+SHIM="$TMP/shim-bin"; mkdir -p "$SHIM"
+for shim_f in "$ROOT"/bin/*; do ln -sf "$shim_f" "$SHIM/$(basename "$shim_f")"; done
+rm -f "$SHIM/fm-gates-lib.sh"
+cat > "$SHIM/fm-gates-lib.sh" <<'SHIMLIB'
+# A header from outside the documented set - a newer classifier, or a corrupted
+# capture. It carries no rows, exactly as NOGATES and NOLEDGER do not.
+fm_gates_classify() { echo "SOMENEWHEADER"; }
+SHIMLIB
+FM_ROOT_OVERRIDE="$ROOT" FM_VERIFY_CMD="$TMP/verify.sh" \
+  "$SHIM/fm-verify.sh" ae >"$TMP/ae.out" 2>&1
+codeAE=$?
+expect_code 3 "$codeAE" "a classifier header this script has no rule for must ESCALATE:
+nothing can be concluded about the gates, and the captain has to tell a version skew
+from a corruption"
+assert_no_grep "gates: acceptable" "$TMP/ae.out" \
+  "the stage must never announce acceptable over a ledger it read no gate from - that is
+the accept path claiming a property it never established"
+assert_grep "SOMENEWHEADER" "$TMP/ae.out" \
+  "the escalation must name the header it actually saw, or the captain cannot tell a
+version skew from a corrupt classification"
+assert_grep "escalate:" "$(fm_verdict_file "$S" ae)" \
+  "the escalation is recorded on the verdict trail like any other"
+assert_absent "$LENS_TRIP" "an unclassifiable ledger must fail closed BEFORE the lens"
+assert_absent "$VERIFY_TRIP" "an unclassifiable ledger must fail closed BEFORE the verifier"
 
 # --- case G: the prompt no longer carries a gate rule of its own -------------
 #
