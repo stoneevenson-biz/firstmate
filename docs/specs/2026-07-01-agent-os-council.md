@@ -141,6 +141,15 @@ copy of `gates/accepted-red.md`.
 A gate the worktree calls a declared red and the base calls an undeclared one is
 a declaration this branch introduced.
 The declaration format therefore still has exactly one parser.
+The declared-red set reaches that comparison as an `awk` **input file**, never as
+`awk -v`: `awk` escape-processes a `-v` assignment, so a gate id holding the two
+characters `\n` arrived inside `awk` as a real newline and split into two keys
+while the base row still carried the literal backslash — the set never matched,
+and a red the branch excused itself walked straight past the guard.
+Field values read from input are not escape-processed, so both sides of the
+comparison are byte-exact.
+The fix belongs at that call site rather than in the classifier: `structural()`
+refuses characters that would forge a *row*, and a backslash does not.
 
 **Which base, and why the candidates are not equal.** There are **two bases**,
 answering two different questions, and the difference in their policies is
@@ -208,6 +217,14 @@ The changed-file set is collected with `--no-renames`, so a renamed test file
 appears as both its old and its new path: rename detection prints only the
 destination, which let a crewmate who renamed a test and forgot to update the
 gate's `test_ref` fall out of scope in exactly the case the check exists for.
+The ledger's test path is normalized once — a leading `./` stripped, doubled
+slashes collapsed — before either the scope comparison or the existence check
+reads it, so the two agree on which path they are talking about.
+They disagreed: the scope check compares byte for byte while the existence check
+hands the path to the filesystem, so a ledger writing `bash ./tests/aa.test.sh`
+had its file correctly seen as gone and then excused as inherited debt — the
+same fail-open as the rename case, decided by nothing but how the path happened
+to be spelled.
 It stays fail-closed where it must — if the base, the diff, or the base copy of
 the ledger cannot be read, scope is unknown and every offending gate is treated
 as this branch's own.

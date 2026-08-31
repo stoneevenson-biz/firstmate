@@ -433,10 +433,29 @@ if [ "$GATE_HEADER" != NOGATES ] && [ "$GATE_HEADER" != NOLEDGER ]; then
         else
           # Anything the worktree calls a declared red but the base calls an
           # UNDECLARED red is a declaration this branch introduced.
+          #
+          # THE DECLARED SET IS AN INPUT FILE, NEVER `awk -v`. awk performs
+          # ESCAPE-SEQUENCE processing on a -v assignment, so a gate id holding
+          # the two characters \n arrived inside awk as a real newline and split
+          # into the two keys "fx" and "red", while the base row still carried
+          # the literal backslash. `$2 in d` therefore never matched, gate_self
+          # stayed empty, and a declaration this branch wrote into its own diff
+          # sailed straight through the one guard that exists to catch it -
+          # verified, and the same forgery class as a delimiter in a gate id.
+          # Escaping around -v would be one clever id away from the same bug, so
+          # the escape processing is removed rather than worked around: awk's
+          # two-file idiom reads the set as its FIRST INPUT, and field values
+          # read from input are not escape-processed, so both sides of the
+          # comparison are byte-exact. The set lives in the scratch dir the base
+          # comparison already makes, so the existing rm -rf still removes it on
+          # every exit path. GATE_DECLARED is non-empty here, so FNR == NR
+          # cannot mistake the first classification row for a declaration.
+          printf '%s\n' "$GATE_DECLARED" > "$gate_tmp/declared-red.txt"
           gate_self=$(printf '%s\n' "$gate_base_raw" | tail -n +2 \
-            | awk -F'\t' -v want="$GATE_DECLARED" '
-                BEGIN { n = split(want, a, "\n"); for (i = 1; i <= n; i++) d[a[i]] = 1 }
-                $1 == "bad-red" && ($2 in d) { printf "%s ", $2 }')
+            | awk -F'\t' '
+                FNR == NR { d[$0] = 1; next }
+                $1 == "bad-red" && ($2 in d) { printf "%s ", $2 }' \
+              "$gate_tmp/declared-red.txt" -)
         fi
       fi
       rm -rf "$gate_tmp"
@@ -535,6 +554,31 @@ for gid in head:
     fi
   fi
 
+  # ONE SPELLING OF THE LEDGER'S TEST PATH, FOR EVERY READER OF IT.
+  #
+  # The scope check compares that path against git's changed-file list BYTE FOR
+  # BYTE, while the existence check hands it to the filesystem, which normalizes
+  # on its own. Those two disagreed: a ledger writing "bash ./tests/aa.test.sh"
+  # yields the token ./tests/aa.test.sh, so `[ -e ]` resolved it and correctly
+  # reported the file gone, while the scope grep compared it against git's
+  # tests/aa.test.sh and missed - so a test file THIS BRANCH deleted was excused
+  # as somebody else's pre-existing debt, a fail-open decided by nothing but how
+  # the path happens to be spelled in the ledger. Same class as the rename case:
+  # a spelling difference must not let a gate slip out of its own check.
+  #
+  # So the token is normalized ONCE, here, and every consumer - the scope grep,
+  # the existence test, and the operator-facing message - reads the same string.
+  # git prints repo-relative paths with no leading ./ and no doubled slashes, so
+  # normalizing the ledger side is what makes the two comparable.
+  gate_norm_path() {  # <ledger test path> -> git's spelling of the same path
+    local p=$1
+    # Slashes first, so .//tests/x collapses to ./tests/x and then loses the
+    # ./ rather than being left as /tests/x.
+    while [ "${p%%//*}" != "$p" ]; do p=${p//\/\//\/}; done
+    while [ "${p#./}" != "$p" ]; do p=${p#./}; done
+    printf '%s' "$p"
+  }
+
   # gate_in_scope <gate-id> <test-path>: 0 when this branch is answerable for
   # that gate. Unknown scope answers 0 - fail closed, never excuse the lot.
   gate_in_scope() {
@@ -557,7 +601,7 @@ for gid in head:
   while IFS= read -r gate_row; do
     [ -n "$gate_row" ] || continue
     gid=${gate_row%%"$TAB"*}
-    tref=${gate_row#*"$TAB"}
+    tref=$(gate_norm_path "${gate_row#*"$TAB"}")
     if gate_in_scope "$gid" "$tref"; then
       GATE_UNPROVEN="$GATE_UNPROVEN$gid "
     else
@@ -587,7 +631,7 @@ UNPROVENROWS
   while IFS= read -r gate_row; do
     [ -n "$gate_row" ] || continue
     gid=${gate_row%%"$TAB"*}
-    tref=${gate_row#*"$TAB"}
+    tref=$(gate_norm_path "${gate_row#*"$TAB"}")
     if [ -e "$WORKTREE/$tref" ]; then continue; fi
     if gate_in_scope "$gid" "$tref"; then
       GATE_STALE="$GATE_STALE$gid -> $tref; "

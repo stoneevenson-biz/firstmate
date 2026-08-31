@@ -83,6 +83,16 @@
 #     origin-only base is a security rule about authorising a declaration; a
 #     patch file authorises nothing, so the diff payload keeps its permissive
 #     fallback and says out loud when it degrades.
+#   - a BACKSLASH in a gate id cannot walk a self-authorised red past the guard.
+#     awk escape-processes a -v assignment, so an id holding the two characters
+#     \n arrived inside awk as a real newline and split in two while the base row
+#     kept the backslash: the declared set never matched, and a red the branch
+#     excused itself was announced acceptable. The set is read as an input file
+#     instead, where no escape processing runs.
+#   - a ./-prefixed test_ref cannot slip out of its own staleness scope. The
+#     scope check compares byte for byte while the existence check normalizes, so
+#     a file this branch DELETED was seen as gone and then excused as inherited
+#     debt - a fail-open decided by nothing but how the path was spelled.
 #   - a gate whose status is unproven REJECTS, and the relay tells the crewmate
 #     to let the gate be observed red. The harness stamps unproven whenever a
 #     gate test passes while first_observed_red is null (CONTRIBUTING.md), so it
@@ -790,6 +800,78 @@ assert_grep "untrusted as an authorisation base" "$TMP/aa.out" \
   "the fallback is announced on stdout, where an operator reads it, not only inside
 the patch file"
 assert_present "$VERIFY_TRIP" "the run proceeds to the verifier"
+
+# --- case AB: a backslash in a gate id must not walk past the self-auth guard --
+#
+# awk performs ESCAPE-SEQUENCE processing on a -v assignment, so passing the
+# declared-red set as -v want="..." made a gate id holding the two characters \n
+# arrive inside awk as a real newline and split into the keys "fx" and "red",
+# while the base row still carried the literal backslash. `$2 in d` never
+# matched, so a declaration this branch added to its own diff sailed through the
+# one guard that exists to catch it - the same forgery class as a delimiter in a
+# gate id, and defeating the whole property the stage claims to establish.
+#
+# The fix removes the escape processing rather than escaping around it: the set
+# is read as awk's first INPUT FILE, and field values read from input are not
+# escape-processed. Restoring the -v form makes this case pass with exit 0.
+rm -f "$LENS_TRIP" "$VERIFY_TRIP"; : > "$TMP/relay.log"
+WAB=$(task ab "$DECL_OTHER")
+mkdir -p "$WAB/gates" "$WAB/tests"
+: > "$WAB/tests/aa.test.sh"; : > "$WAB/tests/cc.test.sh"
+cat > "$WAB/gates/ledger.json" <<'JSON'
+{
+  "version": 1,
+  "gates": [
+    { "id": "fx-green", "status": "green", "test_ref": "bash tests/aa.test.sh" },
+    { "id": "fx\\nred", "status": "red",   "test_ref": "bash tests/cc.test.sh" }
+  ]
+}
+JSON
+cat > "$WAB/gates/accepted-red.md" <<'DECL'
+# Accepted red gates
+
+- fx\nred - a red this branch excuses by writing the excuse itself.
+DECL
+run ab; codeAB=$?
+expect_code 3 "$codeAB" "a gate id holding a literal backslash-n must not slip past the
+self-authorisation guard: awk escape-processes a -v assignment, so the declared set arrived
+with that id split in two while the base row kept the backslash, and a red the branch
+excused itself was announced acceptable"
+assert_grep "escalate:" "$(fm_verdict_file "$S" ab)" \
+  "the self-authorised red is recorded as an escalation, backslash in the id or not"
+assert_grep 'fx\nred' "$(fm_verdict_file "$S" ab)" \
+  "the escalation names the gate whose declaration this branch wrote"
+assert_no_grep "approve:" "$(fm_verdict_file "$S" ab)" \
+  "a branch must never authorise its own red, however the gate is spelled"
+assert_no_grep "gates: acceptable" "$TMP/ab.out" \
+  "fm-verify must not announce a self-authorised red as acceptable"
+assert_absent "$VERIFY_TRIP" "the self-authorisation escalation still precedes the verifier"
+
+# --- case AC: a ./-prefixed test_ref must not slip out of its own scope --------
+#
+# The scope check compares the ledger's test path against git's changed-file list
+# byte for byte, while the existence check hands it to the filesystem, which
+# normalizes. So a ledger writing "bash ./tests/aa.test.sh" had its file
+# correctly seen as GONE and then incorrectly excused as somebody else's
+# pre-existing debt, because ./tests/aa.test.sh never matched git's
+# tests/aa.test.sh - a fail-open decided by nothing but how the path happens to
+# be spelled. Same class as the rename case: a spelling difference must not let
+# a gate slip out of its own check.
+rm -f "$LENS_TRIP" "$VERIFY_TRIP"; : > "$TMP/relay.log"
+LEDGER_DOTSLASH=${LEDGER_CLEAN/bash tests\/aa.test.sh/bash .\/tests\/aa.test.sh}
+[ "$LEDGER_DOTSLASH" != "$LEDGER_CLEAN" ] || fail "case AC fixture must actually ./-prefix a test_ref"
+WAC=$(scope_repo ac "$LEDGER_DOTSLASH")
+git -C "$WAC" rm -q tests/aa.test.sh
+git -C "$WAC" commit -qm "drop a test the ledger still cites as ./tests/aa.test.sh"
+run ac; codeAC=$?
+expect_code 2 "$codeAC" "deleting a test the ledger cites as ./tests/<x> is this branch's own
+staleness exactly as tests/<x> would be - the deletion is in its diff - and must reject
+rather than be excused as inherited debt because of a leading ./"
+assert_grep "fx-green" "$(fm_verdict_file "$S" ac)" "the stale reject names the gate"
+assert_grep "tests/aa.test.sh" "$(fm_verdict_file "$S" ac)" "the stale reject names the test"
+assert_no_grep "pre-existing ledger debt" "$TMP/ac.out" \
+  "a gate this branch is answerable for must not be reported as somebody else's debt"
+assert_absent "$VERIFY_TRIP" "the in-scope stale reject still precedes the verifier"
 
 # --- case G: the prompt no longer carries a gate rule of its own -------------
 #
