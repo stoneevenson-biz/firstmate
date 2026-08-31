@@ -119,6 +119,46 @@ default_branch() {
   return 1
 }
 
+# The REF both stages compare against, resolved the way bin/fm-review-diff.sh
+# resolves it and for the reason that script documents: pooled project clones
+# keep their LOCAL default branch frozen at clone time, so a merge base taken
+# against it can name a commit far behind the real base. The gate stage would
+# then read a declaration the branch merely INHERITED - one the captain merged
+# after this clone last synced - as a line the branch forged for itself, and
+# escalate over it. That is the class of spurious block this stage exists to
+# remove, so the remote-tracking ref is refreshed and preferred.
+#
+# Unlike fm-review-diff.sh, a failed fetch must NOT abort. fm-verify sits on the
+# accept path, and a network blip must degrade to the next candidate rather than
+# take every ship task down with it. Order: freshly fetched origin/<default>, an
+# origin/<default> that is already present, then the local branch - which is
+# also the only right answer for a local-only project with no remote at all.
+# Resolution is attempted once; both stages read the same answer.
+BASE_REF=""
+BASE_REF_RESOLVED=""
+base_ref() {
+  local default candidate
+  if [ -n "$BASE_REF_RESOLVED" ]; then
+    [ -n "$BASE_REF" ] || return 1
+    printf '%s\n' "$BASE_REF"
+    return 0
+  fi
+  BASE_REF_RESOLVED=yes
+  default=$(default_branch) || return 1
+  if git -C "$WORKTREE" remote get-url origin >/dev/null 2>&1; then
+    git -C "$WORKTREE" fetch origin \
+      "+refs/heads/$default:refs/remotes/origin/$default" --quiet 2>/dev/null || true
+  fi
+  for candidate in "refs/remotes/origin/$default" "refs/heads/$default"; do
+    if git -C "$WORKTREE" rev-parse --verify --quiet "$candidate^{commit}" >/dev/null 2>&1; then
+      BASE_REF=$candidate
+      printf '%s\n' "$BASE_REF"
+      return 0
+    fi
+  done
+  return 1
+}
+
 # --- 1. gate ledger adjudication (structural, ahead of both models) -----------
 #
 # Which way each condition fails, and why:
@@ -194,7 +234,7 @@ if [ "$GATE_HEADER" != NOGATES ]; then
   GATE_UNKNOWN=$(printf '%s\n' "$GATE_ROWS" \
     | awk -F'\t' '$1 == "bad-status" { printf "%s (%s) ", $2, $3 }')
   [ -z "$GATE_UNKNOWN" ] \
-    || verify_escalate "gate ledger holds a status this repo has no rule for: ${GATE_UNKNOWN% } - acceptable is green, or red and declared in gates/accepted-red.md; fail closed"
+    || verify_escalate "gate ledger holds a status this repo has no rule for: ${GATE_UNKNOWN% } - what is acceptable is owned by FM_GATES_CLEAN_STATUSES in bin/fm-gates-lib.sh, and this status is not in it; either the ledger is corrupt, or the status is new and teaching the classifier about it is a deliberate decision. Ask it directly with: bash $SCRIPT_DIR/fm-gates-lib.sh $WORKTREE. Fail closed"
 
   # SELF-AUTHORISED REDS. A declared red is acceptable because someone REVIEWED
   # the declaration - gates/accepted-red.md calls itself "a deliberate,
@@ -221,18 +261,19 @@ if [ "$GATE_HEADER" != NOGATES ]; then
   if [ -n "$GATE_DECLARED" ]; then
     gate_base_why=""
     gate_self=""
-    if ! gate_default=$(default_branch); then
-      gate_base_why="no default branch is resolvable there"
-    elif ! gate_base=$(git -C "$WORKTREE" merge-base HEAD "$gate_default" 2>/dev/null) \
+    gate_base_ref=""
+    if ! gate_base_ref=$(base_ref); then
+      gate_base_why="no base branch is resolvable there"
+    elif ! gate_base=$(git -C "$WORKTREE" merge-base HEAD "$gate_base_ref" 2>/dev/null) \
         || [ -z "$gate_base" ]; then
-      gate_base_why="no merge base with $gate_default is resolvable there"
+      gate_base_why="no merge base with $gate_base_ref is resolvable there"
     elif ! gate_tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-verify-base.XXXXXX" 2>/dev/null); then
       gate_base_why="a scratch dir for the base comparison could not be created"
     else
       mkdir -p "$gate_tmp/gates"
       if ! git -C "$WORKTREE" show "${gate_base}:gates/accepted-red.md" \
           > "$gate_tmp/gates/accepted-red.md" 2>/dev/null; then
-        gate_base_why="gates/accepted-red.md does not exist at the merge base $gate_base"
+        gate_base_why="gates/accepted-red.md does not exist at the merge base $gate_base (via $gate_base_ref)"
       elif ! cp "$WORKTREE/gates/ledger.json" "$gate_tmp/gates/ledger.json" 2>/dev/null; then
         gate_base_why="gates/ledger.json could not be read for the base comparison"
       else
@@ -255,7 +296,7 @@ if [ "$GATE_HEADER" != NOGATES ]; then
       verify_escalate "the gate ledger relies on a red declared in gates/accepted-red.md ($(printf '%s' "$GATE_DECLARED" | tr '\n' ' ')) but $gate_base_why, so whether that declaration was ever reviewed cannot be established; fail closed"
     fi
     if [ -n "$gate_self" ]; then
-      verify_escalate "this branch declares its own red gates in gates/accepted-red.md: ${gate_self% } - a declaration a branch adds to its own diff has been reviewed by nobody, and accepting a new red baseline is a captain decision"
+      verify_escalate "this branch declares its own red gates in gates/accepted-red.md: ${gate_self% } - a declaration a branch adds to its own diff has been reviewed by nobody, and accepting a new red baseline is a captain decision (compared against merge base $gate_base via $gate_base_ref; if that base is behind the real one, the declaration was inherited rather than written here)"
     fi
   fi
 
@@ -319,12 +360,12 @@ fi
 # --- 2. diff payload ---------------------------------------------------------
 DIFF_FILE="$DATA/$ID/lens-diff.patch"
 {
-  DEFAULT=$(default_branch || true)
-  if [ -n "${DEFAULT:-}" ] && base=$(git -C "$WORKTREE" merge-base HEAD "$DEFAULT" 2>/dev/null); then
+  if DIFF_BASE_REF=$(base_ref) \
+      && base=$(git -C "$WORKTREE" merge-base HEAD "$DIFF_BASE_REF" 2>/dev/null); then
     git -C "$WORKTREE" log --oneline "$base..HEAD"
     git -C "$WORKTREE" diff "$base..HEAD"
   else
-    echo "(no default branch resolvable; showing HEAD commit only)"
+    echo "(no base branch resolvable; showing HEAD commit only)"
     git -C "$WORKTREE" show HEAD
   fi
 } | head -c 200000 > "$DIFF_FILE"

@@ -42,6 +42,11 @@
 #     human still has to say yes to.
 #   - a declaration a branch adds for a gate that is GREEN, or that is not in
 #     the ledger at all, excuses nothing and must not escalate.
+#   - a declaration carried on origin/<default> is honoured even when the LOCAL
+#     default branch is behind it. Pooled clones keep their local default frozen
+#     at clone time, so a base resolved from it can predate the commit that
+#     landed the declaration - and the branch that rebased onto the fetched
+#     origin would be accused of forging a line it merely inherited.
 #   - a gate whose status is unproven REJECTS, and the relay tells the crewmate
 #     to let the gate be observed red. The harness stamps unproven whenever a
 #     gate test passes while first_observed_red is null (CONTRIBUTING.md), so it
@@ -102,9 +107,17 @@ DECL_OTHER='# Accepted red gates
 # default branch BEFORE the task branch exists, so it is present at the merge
 # base - a reviewed baseline, which is the only kind fm-verify lets a ledger
 # lean on. Without it the declaration exists only in the branch diff.
+#
+# The fixture branch is pinned to main rather than inherited from the host: any
+# case whose ledger leans on a declared red reaches fm-verify's base comparison,
+# and a host carrying init.defaultBranch=trunk would make every one of them
+# escalate on an unresolvable base - failing with an exit-code mismatch that
+# says nothing about the real cause. fm_git_init_commit is shared with other
+# gates' fixtures, so the pin belongs here rather than in it.
 task() {
   local id=$1 base=${2:-} repo="$TMP/$1-repo" wt="$TMP/$1-wt"
   fm_git_init_commit "$repo"
+  git -C "$repo" branch -M main
   if [ -n "$base" ]; then
     mkdir -p "$repo/gates"
     printf '%s\n' "$base" > "$repo/gates/accepted-red.md"
@@ -355,6 +368,47 @@ assert_no_grep "escalate:" "$(fm_verdict_file "$S" n)" \
 assert_grep "observed red" "$TMP/relay.log" \
   "the relay tells the crewmate to let the gate be observed red first"
 assert_absent "$VERIFY_TRIP" "the unproven reject also precedes the verifier"
+
+# --- case O: a stale LOCAL default must not read an inherited line as forged -
+#
+# Pooled project clones keep their local default branch frozen at clone time
+# (bin/fm-review-diff.sh exists for exactly this), so a merge base taken against
+# it can predate the very commit that landed a declaration. The crewmate rebases
+# onto the fetched origin, inherits that reviewed line, and a base resolved from
+# the stale local branch would accuse it of forging one - a false captain
+# escalation, the class of spurious block this whole stage exists to remove.
+#
+# The fixture makes the two answers disagree: origin/main carries the reviewed
+# declaration and local main is rewound behind it, so only a base resolved from
+# origin lets this run proceed.
+rm -f "$LENS_TRIP" "$VERIFY_TRIP"
+repo_o="$TMP/o-repo"; wt_o="$TMP/o-wt"
+fm_git_init_commit "$repo_o"
+git -C "$repo_o" branch -M main
+stale_o=$(git -C "$repo_o" rev-parse HEAD)
+fm_git_add_origin "$repo_o" "$TMP/o-remote.git"
+mkdir -p "$repo_o/gates"
+printf '%s\n' "$DECL_RED" > "$repo_o/gates/accepted-red.md"
+git -C "$repo_o" add gates/accepted-red.md
+git -C "$repo_o" commit -qm "gates: reviewed red baseline"
+git -C "$repo_o" push -q origin main
+git -C "$repo_o" worktree add --quiet -b fm/o "$wt_o"
+# Only now rewind the LOCAL default, leaving origin/main ahead of it.
+git -C "$repo_o" reset --hard --quiet "$stale_o"
+mkdir -p "$D/o"
+fm_write_meta "$S/o.meta" \
+  "window=firstmate:fm-o" "worktree=$wt_o" "project=$repo_o" \
+  "harness=echo" "kind=ship" "mode=local-only" "yolo=off"
+gates "$wt_o" yes
+run o; codeO=$?
+expect_code 0 "$codeO" "a declaration present on origin/<default> is a reviewed baseline
+even when the local default branch is behind it; resolving the base from that stale
+local branch accuses a rebased crewmate of forging a line it merely inherited"
+assert_grep "gates: acceptable" "$TMP/o.out" \
+  "the inherited declaration is honoured, so the ledger is acceptable"
+assert_no_grep "escalate:" "$(fm_verdict_file "$S" o)" \
+  "a stale local default must never produce a self-authorised-red escalation"
+assert_present "$VERIFY_TRIP" "the run proceeds to the verifier"
 
 # --- case G: the prompt no longer carries a gate rule of its own -------------
 #
