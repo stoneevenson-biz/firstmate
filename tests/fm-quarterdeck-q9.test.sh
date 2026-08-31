@@ -67,6 +67,22 @@
 #     on disk, and an unproven gate's test passes by definition - so rejecting
 #     repo-wide rejected every ship task in a repo carrying that debt, three
 #     times, over work the crewmate did not do and could not undo.
+#   - "touched" is decided per FIELD, over status and test_ref only. `ledger
+#     verify` re-stamps last_verified on every gate it runs and a re-freeze
+#     sweep is mandatory, so comparing whole ledger entries put nearly the whole
+#     ledger back in scope on any gate-driven branch and undid the scoping.
+#   - a RENAMED test file cannot hide from its own staleness check. Rename
+#     detection prints only the destination path, so the old path the ledger
+#     still cites vanished from the changed-file set and the gate fell out of
+#     scope in exactly the case that check exists for.
+#   - gates/LEDGER.md alone is gate machinery, so a repo holding only that and no
+#     ledger.json escalates. `ledger verify` regenerates LEDGER.md, so it exists
+#     in every gate-governed repo, while a repo with no declared reds
+#     legitimately has no accepted-red.md.
+#   - an origin that cannot be resolved must not narrow the LENS payload. The
+#     origin-only base is a security rule about authorising a declaration; a
+#     patch file authorises nothing, so the diff payload keeps its permissive
+#     fallback and says out loud when it degrades.
 #   - a gate whose status is unproven REJECTS, and the relay tells the crewmate
 #     to let the gate be observed red. The harness stamps unproven whenever a
 #     gate test passes while first_observed_red is null (CONTRIBUTING.md), so it
@@ -658,6 +674,121 @@ assert_grep "pre-existing ledger debt" "$TMP/w.out" \
   "the inherited stale reference is reported rather than silently dropped"
 assert_grep "tests/zz.test.sh" "$TMP/w.out" "the report names the test the ledger still cites"
 assert_no_grep "reject:" "$(fm_verdict_file "$S" w)" "inherited staleness must not be a reject"
+assert_present "$VERIFY_TRIP" "the run proceeds to the verifier"
+
+# --- case X: a gate whose ONLY diff is a refreshed last_verified -------------
+#
+# The scope comparison must key on the fields the two conditions actually turn
+# on, not on the whole entry. `ledger verify` re-stamps last_verified on every
+# gate it RUNS, and CONTRIBUTING.md mandates a re-freeze sweep after any change,
+# so comparing whole entries put nearly the entire ledger back in scope on an
+# ordinary gate-driven branch - undoing the scoping altogether.
+rm -f "$LENS_TRIP" "$VERIFY_TRIP"; : > "$TMP/relay.log"
+WX=$(scope_repo x "$LEDGER_STALE")
+python3 - "$WX/gates/ledger.json" <<'PYX2'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+for g in d["gates"]:
+    g["last_verified"] = "2026-08-31T00:00:00Z"
+    g["mutation_verified"] = "2026-08-31T00:00:00Z"
+    g["first_observed_red"] = "2026-08-30T00:00:00Z"
+open(p, "w").write(json.dumps(d, indent=2))
+PYX2
+git -C "$WX" add gates/ledger.json
+git -C "$WX" commit -qm "gates: re-stamp every gate after a verify sweep"
+run x; codeX=$?
+expect_code 0 "$codeX" "a gate whose only difference from the base is a bookkeeping re-stamp
+was not touched in any sense the debt conditions care about; comparing whole ledger entries
+put the entire ledger back in scope on every gate-driven branch and undid the scoping"
+assert_grep "pre-existing ledger debt" "$TMP/x.out" \
+  "the inherited staleness is still reported, just not charged to this branch"
+assert_grep "tests/zz.test.sh" "$TMP/x.out" "the report names the test the ledger still cites"
+assert_no_grep "reject:" "$(fm_verdict_file "$S" x)" \
+  "a re-stamped gate must not be rejected as though this branch had touched it"
+assert_present "$VERIFY_TRIP" "the run proceeds to the verifier"
+
+# --- case Y: a RENAMED test file cannot hide from its own staleness check -----
+#
+# Rename detection is on by default (diff.renames since git 2.9) and prints only
+# the DESTINATION path, so a crewmate who renames a test file and forgets to
+# update the gate's test_ref left the ledger entry unchanged AND the old path
+# invisible: the gate fell out of scope and its staleness was merely reported -
+# in exactly the case the staleness check exists for. --no-renames puts both
+# paths in the changed-file set.
+rm -f "$LENS_TRIP" "$VERIFY_TRIP"; : > "$TMP/relay.log"
+WY=$(scope_repo y "$LEDGER_CLEAN")
+git -C "$WY" mv tests/aa.test.sh tests/renamed-aa.test.sh
+git -C "$WY" commit -qm "rename a test the ledger still cites by its old path"
+run y; codeY=$?
+expect_code 2 "$codeY" "renaming a test file without updating the gate's test_ref is this
+branch's own staleness - the old path is in its diff - and must still reject; rename
+detection hides that old path unless the diff is taken with --no-renames"
+assert_grep "fx-green" "$(fm_verdict_file "$S" y)" "the stale reject names the gate"
+assert_grep "tests/aa.test.sh" "$(fm_verdict_file "$S" y)" \
+  "the stale reject names the path the ledger still cites, not the new one"
+assert_absent "$VERIFY_TRIP" "the in-scope stale reject still precedes the verifier"
+
+# --- case Z: gates/LEDGER.md alone is gate machinery -> escalate --------------
+#
+# LEDGER.md is regenerated by `ledger verify` (CONTRIBUTING.md), so it exists in
+# every gate-governed repo, while a repo with no declared reds legitimately has
+# no accepted-red.md and gates/verify.sh is a firstmate convention rather than
+# something the CLI creates. Omitting it let a gate-governed repo holding only
+# ledger.json + LEDGER.md proceed SILENTLY once its ledger.json went missing -
+# the exact fail-open this test exists to prevent. It also cannot conscript an
+# unrelated Go or Python gates/ package, which will not contain it (case S).
+rm -f "$LENS_TRIP" "$VERIFY_TRIP"
+WZ=$(task z)
+mkdir -p "$WZ/gates"
+printf '# Gate ledger\n\nGenerated by the ledger CLI; never hand-edited.\n' > "$WZ/gates/LEDGER.md"
+run z; codeZ=$?
+expect_code 3 "$codeZ" "gates/ holding only LEDGER.md and no ledger.json is a gate-governed
+repo whose record of what is proven is gone, and must escalate rather than proceed silently"
+assert_grep "escalate:" "$(fm_verdict_file "$S" z)" "the missing ledger is recorded as an escalation"
+assert_grep "LEDGER.md" "$(fm_verdict_file "$S" z)" \
+  "the escalation names the machinery that made this a gate-governed repo"
+assert_no_grep "approve:" "$(fm_verdict_file "$S" z)" "an unprovable ledger must never approve"
+assert_absent "$VERIFY_TRIP" "the fail-closed escalation precedes the verifier"
+
+# --- case AA: an unresolvable origin must not narrow the LENS payload ---------
+#
+# The two bases answer different questions. Origin-only is right for the
+# self-authorisation guard, where a ref the crewmate can write must not certify
+# the crewmate's own declaration. It is wrong for the diff payload, which
+# authorises nothing: tying the lens to it meant an origin that merely could not
+# be REACHED cut the review down to `git show HEAD` - the top commit alone - for
+# every project, including the majority with no gates/ dir at all. Worse review,
+# identical safety.
+rm -f "$LENS_TRIP" "$VERIFY_TRIP"
+repo_aa="$TMP/aa-repo"; wt_aa="$TMP/aa-wt"
+fm_git_init_commit "$repo_aa"
+git -C "$repo_aa" branch -M main
+git -C "$repo_aa" remote add origin "file://$TMP/aa-remote-does-not-exist.git"
+git -C "$repo_aa" worktree add --quiet -b fm/aa "$wt_aa"
+mkdir -p "$D/aa"
+fm_write_meta "$S/aa.meta" \
+  "window=firstmate:fm-aa" "worktree=$wt_aa" "project=$repo_aa" \
+  "harness=echo" "kind=ship" "mode=local-only" "yolo=off"
+# Two commits, so "whole branch" and "HEAD only" are distinguishable.
+printf 'one\n' > "$wt_aa/first.txt"
+git -C "$wt_aa" add first.txt
+git -C "$wt_aa" commit -qm "branch work: the first commit"
+printf 'two\n' > "$wt_aa/second.txt"
+git -C "$wt_aa" add second.txt
+git -C "$wt_aa" commit -qm "branch work: the second commit"
+run aa; codeAA=$?
+expect_code 0 "$codeAA" "a repo with no gates/ dir and an unreachable origin has nothing to
+adjudicate and must still proceed"
+assert_grep "branch work: the first commit" "$D/aa/lens-diff.patch" \
+  "the foreign lens must see the WHOLE branch: the origin-only base is a security rule
+about authorising a declaration, and a patch file authorises nothing, so an unreachable
+origin must not silently narrow the review to the top commit"
+assert_grep "first.txt" "$D/aa/lens-diff.patch" \
+  "the earlier commit's changes are in the payload, not just the last commit's"
+assert_grep "untrusted as an authorisation base" "$TMP/aa.out" \
+  "the fallback is announced on stdout, where an operator reads it, not only inside
+the patch file"
 assert_present "$VERIFY_TRIP" "the run proceeds to the verifier"
 
 # --- case G: the prompt no longer carries a gate rule of its own -------------

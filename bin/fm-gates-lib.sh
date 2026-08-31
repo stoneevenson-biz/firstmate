@@ -208,10 +208,19 @@ def flat(s):
 # key, and an accepted-red.md line "- None - reason" would have excused an
 # id-less red. A missing status was worse only by luck - it landed in bad-status
 # and escalated - so both are refused here rather than repaired downstream.
-def structural(value, field, index):
+# test_ref is refused on TYPE alone, by field_type: a present-but-non-string one
+# used to stringify, yield no ".test.sh" token, and leave that gate silently
+# exempt from fm-verify's freshness cross-check - a fail-open dressed as a no-op.
+# Its CONTENTS are not the row grammar (only the extracted token is), so a
+# legitimate multi-word command keeps its whitespace.
+def field_type(value, field, index):
     if not isinstance(value, str):
         raise SystemExit(
             "gate #%d: %s must be a string, got %s" % (index, field, type(value).__name__))
+    return value
+
+def structural(value, field, index):
+    field_type(value, field, index)
     if any(c in value for c in "\t\r\n"):
         raise SystemExit(
             "gate #%d: %s contains a tab or newline, which would forge a row" % (index, field))
@@ -225,11 +234,20 @@ for i, g in enumerate(gates):
     status = structural(g.get("status"), "status", i)
 
     # test_ref is a shell command ("bash tests/x.test.sh"); take the path token.
-    # split() breaks on every whitespace character, so a token cannot carry a
-    # delimiter - it is checked anyway rather than resting on that.
+    # A MISSING or null test_ref is legitimate and NOT an error: it means this
+    # gate simply has no freshness check. Only a present value of the wrong type
+    # is refused.
+    test_ref = g.get("test_ref")
+    if test_ref is None:
+        test_ref = ""
+    else:
+        field_type(test_ref, "test_ref", i)
     test_path = ""
-    for tok in str(g.get("test_ref") or "").split():
+    for tok in test_ref.split():
         if tok.endswith(".test.sh"):
+            # The type refusal above plus split() - which breaks on every
+            # whitespace character - together make a delimiter in this token
+            # impossible. Kept as a belt-and-braces assertion, not as the guard.
             test_path = structural(tok, "test_ref", i)
             break
 

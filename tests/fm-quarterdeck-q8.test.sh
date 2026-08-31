@@ -28,7 +28,12 @@
 #     A ROW - one crafted gate id turned an all-green ledger with an empty
 #     accepted-red.md into a silent skip of an arbitrary failing test; a gate
 #     whose id or status is missing or not a JSON string is BADLEDGER too,
-#     because str()-ing it produced the literal "None" as a gate id; and an
+#     because str()-ing it produced the literal "None" as a gate id; a PRESENT
+#     test_ref of the wrong type is BADLEDGER for the same reason, since
+#     stringifying a list or an object yielded no ".test.sh" token and quietly
+#     exempted that gate from fm-verify's freshness cross-check, while a MISSING
+#     or null test_ref stays legitimate because it genuinely means "no freshness
+#     check for this gate"; and an
 #     unproven gate is recognised but never acceptable, reported under its own
 #     verdict so a caller can route it to the crewmate who can clear it rather
 #     than to a human who cannot. That coercion was
@@ -389,6 +394,33 @@ None and routed to bad-status by accident"
 N5="$TMP/n5"; fixture "$N5"; set_field "$N5" status 'true'
 expect_code BADLEDGER "$(fm_gates_classify "$N5")" \
   "a non-string status must be BADLEDGER for the same reason as a non-string id"
+
+# A PRESENT test_ref of the wrong type is the same refusal. str()-ing a list or
+# an object produced a value with no ".test.sh" token, so the gate simply fell
+# out of fm-verify's freshness cross-check - a fail-open dressed as a no-op,
+# which is worse than a loud refusal because nothing at all announces it.
+N6="$TMP/n6"; fixture "$N6"; set_field "$N6" test_ref '["bash", "tests/aa.test.sh"]'
+expect_code BADLEDGER "$(fm_gates_classify "$N6")" \
+  "a list-valued test_ref must be BADLEDGER - stringifying it yields no .test.sh
+token, so the gate is silently exempted from the freshness check instead"
+
+N7="$TMP/n7"; fixture "$N7"; set_field "$N7" test_ref '{"cmd": "bash tests/aa.test.sh"}'
+expect_code BADLEDGER "$(fm_gates_classify "$N7")" \
+  "an object-valued test_ref must be BADLEDGER for the same reason as a list-valued one"
+
+# The one legitimate absence: a MISSING or null test_ref is not an error at all.
+# It means this gate has no freshness check, which is what case J freezes at the
+# fm-verify level. Refusing it would reject ledgers the harness accepts.
+N8="$TMP/n8"; fixture "$N8"; drop_field "$N8" test_ref
+expect_code OK "$(header "$(fm_gates_classify "$N8")")" \
+  "a gate with NO test_ref is legitimate - it simply has no freshness check - and
+must not be swept up by the type refusal"
+assert_contains "$(row "$(fm_gates_classify "$N8")" fx-green)" "ok | green |" \
+  "the test_ref-less gate still classifies on its status"
+
+N9="$TMP/n9"; fixture "$N9"; set_field "$N9" test_ref null
+expect_code OK "$(header "$(fm_gates_classify "$N9")")" \
+  "an explicitly null test_ref is the same legitimate absence wearing a JSON literal"
 
 # --- the exploit itself, end to end through the runner ----------------------
 #

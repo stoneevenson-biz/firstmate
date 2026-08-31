@@ -105,8 +105,19 @@ verify_escalate() {  # <reason>
   exit 3
 }
 
-# The branch base is needed by two stages: the gate stage, to tell a reviewed
-# declared red from one this branch wrote for itself, and the diff payload.
+# TWO BASES, TWO QUESTIONS, TWO POLICIES - and the difference is deliberate.
+#
+#   FM_AUTH_BASE_*  answers "was this declaration reviewed by somebody other
+#                   than the crewmate?" That is a SECURITY question, so it is
+#                   origin-only and fails closed. It also scopes ledger debt,
+#                   which fails closed the same way.
+#   FM_DIFF_BASE_*  answers "how much of this branch should the foreign lens
+#                   read?" That is review COVERAGE, not authorisation, so it
+#                   keeps the permissive fallback. Narrowing the lens to one
+#                   commit because a fetch failed makes the review worse for
+#                   every project with no gates/ dir at all - which is most of
+#                   them - and buys no safety whatsoever, since nothing is
+#                   authorised by the size of a patch file.
 default_branch() {
   local ref branch
   ref=$(git -C "$WORKTREE" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)
@@ -119,13 +130,14 @@ default_branch() {
   return 1
 }
 
-# THE BASE IS RESOLVED ONCE, IN THE MAIN BODY, INTO THESE VARIABLES.
+# THE AUTHORISATION BASE IS RESOLVED ONCE, IN THE MAIN BODY, INTO THESE VARIABLES.
 # An earlier draft memoized inside a base_ref() that both stages called as
 # `$(base_ref)`. A subshell's assignments die with the subshell, so the memo was
 # discarded on return every time: the guard was still empty in the parent, both
 # call sites took the fresh branch, and the fetch ran twice. Worse, the promise
-# that both stages compare against the SAME base was false by construction.
-# Assigning in the main body, before either consumer runs, is what makes it true.
+# that the self-authorisation check and the debt scoping compare against the
+# SAME base was false by construction. Assigning in the main body, before either
+# consumer runs, is what makes it true.
 #
 # WHICH candidate wins is a SECURITY question, so the candidates are not equal
 # and must not be ranked as though they were. The self-authorisation guard means
@@ -146,14 +158,19 @@ default_branch() {
 # So: with an origin, the base is the merge base against origin/<default> and
 # nothing else. A failed fetch falls back to an already-present
 # origin/<default>, never to the local branch, and an origin/<default> that
-# cannot be resolved at all leaves the base UNSET so every consumer fails
-# closed. With no origin at all there is no second candidate, so the local
-# default IS the base - and fm-verify says out loud that it is only as
-# trustworthy as that branch.
-FM_BASE_REF=""
-FM_BASE_COMMIT=""
-FM_BASE_WHY=""
-FM_BASE_LOCAL_ONLY=no
+# cannot be resolved at all leaves the base UNSET so both of ITS consumers - the
+# self-authorisation check and the ledger-debt scoping - fail closed. With no
+# origin at all there is no second candidate, so the local default IS the base -
+# and fm-verify says out loud that it is only as trustworthy as that branch.
+#
+# None of that reasoning reaches the DIFF PAYLOAD, which authorises nothing; see
+# resolve_diff_base below.
+FM_AUTH_BASE_REF=""
+FM_AUTH_BASE_COMMIT=""
+FM_AUTH_BASE_WHY=""
+FM_AUTH_BASE_LOCAL_ONLY=no
+FM_DIFF_BASE_REF=""
+FM_DIFF_BASE_COMMIT=""
 
 # The fetch is the only network call on the Quarterdeck accept path, and a
 # verifier that HANGS is worse than one that escalates: fm-verify is what stands
@@ -184,42 +201,78 @@ fetch_default_branch() {
       --quiet >/dev/null 2>&1 || true
 }
 
-# Leaves FM_BASE_REF/FM_BASE_COMMIT empty when no reviewed base is resolvable,
-# with FM_BASE_WHY naming the step that failed. Each consumer decides what that
-# means: the gate stage escalates over a declaration it cannot check and treats
-# every offending gate as this branch's own, and the diff payload degrades.
-resolve_base() {
+# Leaves FM_AUTH_BASE_REF/FM_AUTH_BASE_COMMIT empty when no REVIEWED base is
+# resolvable, with FM_AUTH_BASE_WHY naming the step that failed. Both of its
+# consumers then fail closed: the gate stage escalates over a declaration it
+# cannot check, and the debt scoping treats every offending gate as this
+# branch's own.
+resolve_auth_base() {
   local default cand mb
   if ! default=$(default_branch); then
-    FM_BASE_WHY="no default branch could be determined for that worktree"
+    FM_AUTH_BASE_WHY="no default branch could be determined for that worktree"
     return 0
   fi
   if git -C "$WORKTREE" remote get-url origin >/dev/null 2>&1; then
     fetch_default_branch "$default"
     cand="refs/remotes/origin/$default"
   else
-    FM_BASE_LOCAL_ONLY=yes
+    FM_AUTH_BASE_LOCAL_ONLY=yes
     cand="refs/heads/$default"
   fi
   if ! git -C "$WORKTREE" rev-parse --verify --quiet "$cand^{commit}" >/dev/null 2>&1; then
-    if [ "$FM_BASE_LOCAL_ONLY" = yes ]; then
-      FM_BASE_WHY="$cand could not be resolved, and there is no origin remote to fall back to"
+    if [ "$FM_AUTH_BASE_LOCAL_ONLY" = yes ]; then
+      FM_AUTH_BASE_WHY="$cand could not be resolved, and there is no origin remote to fall back to"
     else
-      FM_BASE_WHY="$cand could not be resolved - the fetch did not succeed and no cached copy exists - and refs/heads/$default is not a reviewed base while an origin remote exists, because a pooled clone shares that ref with the primary checkout"
+      FM_AUTH_BASE_WHY="$cand could not be resolved - the fetch did not succeed and no cached copy exists - and refs/heads/$default is not a reviewed base while an origin remote exists, because a pooled clone shares that ref with the primary checkout"
     fi
     return 0
   fi
   if ! mb=$(git -C "$WORKTREE" merge-base HEAD "$cand" 2>/dev/null) || [ -z "$mb" ]; then
-    FM_BASE_WHY="HEAD and $cand share no merge base"
+    FM_AUTH_BASE_WHY="HEAD and $cand share no merge base"
     return 0
   fi
-  FM_BASE_REF=$cand
-  FM_BASE_COMMIT=$mb
+  FM_AUTH_BASE_REF=$cand
+  FM_AUTH_BASE_COMMIT=$mb
 }
-resolve_base
+resolve_auth_base
 
-if [ "$FM_BASE_LOCAL_ONLY" = yes ] && [ -n "$FM_BASE_REF" ]; then
-  echo "base: $WORKTREE has no origin remote, so the base is $FM_BASE_REF - for a local-only project the base is only as trustworthy as the local default branch"
+if [ "$FM_AUTH_BASE_LOCAL_ONLY" = yes ] && [ -n "$FM_AUTH_BASE_REF" ]; then
+  echo "base: $WORKTREE has no origin remote, so the base is $FM_AUTH_BASE_REF - for a local-only project the base is only as trustworthy as the local default branch"
+fi
+
+# The DIFF PAYLOAD base. This one decides how much of the branch the foreign lens
+# gets to read, and a patch file authorises nothing, so the origin-only rule
+# above deliberately does NOT apply here. Tying the lens to the authorisation
+# base meant that an origin which merely could not be REACHED - offline, or a
+# remote-tracking ref never fetched - silently cut the review down to `git show
+# HEAD`, the top commit alone, for every project including the majority that
+# have no gates/ dir at all. Worse review, identical safety.
+#
+# So: origin/<default> when it resolved, else the merge base with the local
+# default, else HEAD only - and the degradation is said OUT LOUD on stdout, not
+# left inside the patch file where no operator reads it.
+resolve_diff_base() {
+  local default mb
+  if [ -n "$FM_AUTH_BASE_COMMIT" ]; then
+    FM_DIFF_BASE_REF=$FM_AUTH_BASE_REF
+    FM_DIFF_BASE_COMMIT=$FM_AUTH_BASE_COMMIT
+    return 0
+  fi
+  default=$(default_branch) || return 0
+  git -C "$WORKTREE" show-ref --verify --quiet "refs/heads/$default" || return 0
+  mb=$(git -C "$WORKTREE" merge-base HEAD "refs/heads/$default" 2>/dev/null) || return 0
+  [ -n "$mb" ] || return 0
+  FM_DIFF_BASE_REF="refs/heads/$default"
+  FM_DIFF_BASE_COMMIT=$mb
+}
+resolve_diff_base
+
+if [ -z "$FM_AUTH_BASE_COMMIT" ]; then
+  if [ -n "$FM_DIFF_BASE_COMMIT" ]; then
+    echo "diff: no reviewed base for the lens payload (${FM_AUTH_BASE_WHY:-no base branch is resolvable there}), so the diff is taken against $FM_DIFF_BASE_REF - untrusted as an authorisation base, but it still shows the whole branch"
+  else
+    echo "diff: no base branch is resolvable at all (${FM_AUTH_BASE_WHY:-unknown reason}), so the foreign lens sees the HEAD commit ONLY, not the whole branch"
+  fi
 fi
 
 # --- 1. gate ledger adjudication (structural, ahead of both models) -----------
@@ -298,19 +351,29 @@ case "$GATE_HEADER" in
     # repos into a captain escalation on every single task, with no
     # crewmate-side remedy and no override short of FM_VERIFY_OVERRIDE.
     #
-    # What claims gate governance is the machinery, not the name: gates/verify.sh
-    # or gates/accepted-red.md. With one of those present and no ledger, the
-    # record of what is proven really is gone and the fail-closed escalation is
-    # right. With neither, this is somebody else's gates/ dir and gate
+    # What claims gate governance is the machinery, not the name: gates/verify.sh,
+    # gates/accepted-red.md, or gates/LEDGER.md. With one of those present and no
+    # ledger, the record of what is proven really is gone and the fail-closed
+    # escalation is right. With none, this is somebody else's gates/ dir and gate
     # adjudication simply does not apply.
+    #
+    # LEDGER.md earns its place in that set rather than padding it: CONTRIBUTING.md
+    # records that `ledger verify` REGENERATES it, so it exists in every
+    # gate-governed repo, whereas a repo with no declared reds legitimately has no
+    # accepted-red.md and gates/verify.sh is a firstmate convention rather than
+    # something the CLI creates. Without it, a gate-governed repo holding only
+    # ledger.json + LEDGER.md whose ledger.json went missing proceeded SILENTLY -
+    # the exact fail-open this test exists to prevent. It also cannot re-conscript
+    # an unrelated Go or Python gates/ package, which will not contain it.
     #
     # This is POLICY, so it lives here. bin/fm-gates-lib.sh still reports
     # NOLEDGER for the same input: its headers are a shared contract with
     # tests/run-all.sh, which has its own answer (skip nothing, out loud).
-    if [ -f "$WORKTREE/gates/verify.sh" ] || [ -f "$WORKTREE/gates/accepted-red.md" ]; then
-      verify_escalate "gates/ in $WORKTREE holds gate machinery (verify.sh or accepted-red.md) but gates/ledger.json does not exist - nothing can be proven about the gates in that repo; fail closed"
+    if [ -f "$WORKTREE/gates/verify.sh" ] || [ -f "$WORKTREE/gates/accepted-red.md" ] \
+        || [ -f "$WORKTREE/gates/LEDGER.md" ]; then
+      verify_escalate "gates/ in $WORKTREE holds gate machinery (verify.sh, accepted-red.md or LEDGER.md) but gates/ledger.json does not exist - nothing can be proven about the gates in that repo; fail closed"
     fi
-    echo "gates: $WORKTREE has a gates/ dir with no ledger, no verify.sh and no accepted-red.md - not a gate-governed repo, so gate adjudication is not applicable"
+    echo "gates: $WORKTREE has a gates/ dir with no ledger, no verify.sh, no accepted-red.md and no LEDGER.md - not a gate-governed repo, so gate adjudication is not applicable"
     ;;
   BADLEDGER)
     verify_escalate "gates/ledger.json in $WORKTREE is unreadable or the wrong shape${GATE_WHY:+: $GATE_WHY} - gate state cannot be classified; fail closed"
@@ -350,10 +413,10 @@ if [ "$GATE_HEADER" != NOGATES ] && [ "$GATE_HEADER" != NOLEDGER ]; then
   if [ -n "$GATE_DECLARED" ]; then
     gate_base_why=""
     gate_self=""
-    gate_base_ref=$FM_BASE_REF
-    gate_base=$FM_BASE_COMMIT
+    gate_base_ref=$FM_AUTH_BASE_REF
+    gate_base=$FM_AUTH_BASE_COMMIT
     if [ -z "$gate_base_ref" ] || [ -z "$gate_base" ]; then
-      gate_base_why="the reviewed base could not be established (${FM_BASE_WHY:-no base branch is resolvable there})"
+      gate_base_why="the reviewed base could not be established (${FM_AUTH_BASE_WHY:-no base branch is resolvable there})"
     elif ! gate_tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-verify-base.XXXXXX" 2>/dev/null); then
       gate_base_why="a scratch dir for the base comparison could not be created"
     else
@@ -414,17 +477,37 @@ if [ "$GATE_HEADER" != NOGATES ] && [ "$GATE_HEADER" != NOLEDGER ]; then
   # every gate in scope the moment a branch registered one new gate, which is
   # the ordinary shape of gate-driven work and would leave this scoping doing
   # nothing at all.
+  #
+  # --no-renames IS LOAD-BEARING, not tidiness. Rename detection is on by
+  # default (diff.renames since git 2.9) and prints only the DESTINATION path, so
+  # a crewmate who renames a test file and forgets to update the gate's test_ref
+  # left the ledger entry unchanged AND the old path invisible - the gate fell
+  # out of scope and its staleness was merely reported, in exactly the case the
+  # staleness check exists for. With --no-renames a rename appears as both paths,
+  # so the old one lands in the scope set.
   gate_scope_known=no
   gate_changed_files=""
   gate_touched_ids=""
-  if [ -n "$FM_BASE_COMMIT" ] \
-      && gate_tracked=$(git -C "$WORKTREE" diff --name-only "$FM_BASE_COMMIT" -- 2>/dev/null) \
+  if [ -n "$FM_AUTH_BASE_COMMIT" ] \
+      && gate_tracked=$(git -C "$WORKTREE" diff --name-only --no-renames "$FM_AUTH_BASE_COMMIT" -- 2>/dev/null) \
       && gate_untracked=$(git -C "$WORKTREE" ls-files --others --exclude-standard 2>/dev/null); then
     gate_changed_files=$(printf '%s\n%s\n' "$gate_tracked" "$gate_untracked")
-    if gate_base_ledger=$(git -C "$WORKTREE" show "$FM_BASE_COMMIT:gates/ledger.json" 2>/dev/null); then
+    if gate_base_ledger=$(git -C "$WORKTREE" show "$FM_AUTH_BASE_COMMIT:gates/ledger.json" 2>/dev/null); then
       if gate_touched_ids=$(printf '%s' "$gate_base_ledger" \
           | python3 -c '
 import json, sys
+
+# ONLY the fields the scope question actually turns on: status decides unproven,
+# test_ref decides staleness. Comparing whole serialized entries put the ENTIRE
+# ledger in scope on any ordinary gate-driven branch and left this scoping doing
+# nothing, because "ledger verify" re-stamps every gate it RUNS (CONTRIBUTING.md)
+# and mandates a re-freeze sweep after any change: commit
+# 5709948 of this repo added 39 last_verified lines while adding 2 gates. A gate
+# whose only difference is a bookkeeping re-stamp was not touched in any sense
+# these two conditions care about, so last_verified, mutation_verified and
+# first_observed_red are excluded BY BEING ABSENT from this list. Add a future
+# stamp field to the ledger without adding it here.
+SCOPE_FIELDS = ("status", "test_ref")
 
 def entries(doc):
     gates = doc.get("gates")
@@ -434,7 +517,7 @@ def entries(doc):
     for g in gates:
         if not isinstance(g, dict) or not isinstance(g.get("id"), str):
             raise SystemExit("base ledger holds a gate with no string id")
-        out[g["id"]] = json.dumps(g, sort_keys=True)
+        out[g["id"]] = json.dumps([g.get(f) for f in SCOPE_FIELDS], sort_keys=True)
     return out
 
 base = entries(json.load(sys.stdin))
@@ -560,9 +643,9 @@ fi
 # --- 2. diff payload ---------------------------------------------------------
 DIFF_FILE="$DATA/$ID/lens-diff.patch"
 {
-  if [ -n "$FM_BASE_COMMIT" ]; then
-    git -C "$WORKTREE" log --oneline "$FM_BASE_COMMIT..HEAD"
-    git -C "$WORKTREE" diff "$FM_BASE_COMMIT..HEAD"
+  if [ -n "$FM_DIFF_BASE_COMMIT" ]; then
+    git -C "$WORKTREE" log --oneline "$FM_DIFF_BASE_COMMIT..HEAD"
+    git -C "$WORKTREE" diff "$FM_DIFF_BASE_COMMIT..HEAD"
   else
     echo "(no base branch resolvable; showing HEAD commit only)"
     git -C "$WORKTREE" show HEAD

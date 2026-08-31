@@ -124,9 +124,9 @@ Anything else is unrecognised and fails closed.
 | `gates/` but no `accepted-red.md` | **reject** any red | No declarations exist, so every red is undeclared by construction. A fully green ledger with no `accepted-red.md` still passes. |
 | a gate's `test_ref` names a file not on disk, in a gate **this branch touched** | **reject** | A ledger claiming green for a gate whose test is gone is stale by construction. |
 | the same, in a gate this branch did **not** touch | **report** | Neither this nor `unproven` is visible to CI - `run-all.sh` iterates `tests/*.test.sh` on disk, so a ledger citing a deleted test never fails the suite. Rejecting repo-wide therefore rejected *every* ship task dispatched into a repo carrying that debt, three times, then escalated, over work the crewmate did not do and could not undo - the same defect class this stage exists to remove, only deterministic instead of random. So it is named in the stage's output as pre-existing ledger debt and does not reject. See "whose debt is it" below. |
-| `gates/` but no `ledger.json`, with `gates/verify.sh` or `gates/accepted-red.md` present | **escalate** | The repo declares itself gate-governed and the record of what is proven is absent. Infrastructure, not work. |
-| `gates/` but no `ledger.json`, `verify.sh` or `accepted-red.md` | proceed | A directory named `gates/` is not a claim of gate governance - it is an ordinary directory name (a Go package, a Python module, a state-machine dir), and `fm-verify` runs against every ship task in every project firstmate manages. Keying the escalation on the NAME conscripted unrelated repos into a captain escalation on every single task, with no crewmate-side remedy and no override short of `FM_VERIFY_OVERRIDE`. What claims governance is the machinery. This is policy, so it lives in `fm-verify.sh`; `fm_gates_classify` still reports `NOLEDGER`, because that header is a shared contract with `run-all.sh`, which has its own answer (skip nothing, out loud). |
-| ledger unreadable or wrong shape | **escalate** | A parse failure is not a finding a crewmate can fix by editing code. "Wrong shape" includes a `gates` value that is not a JSON array: `CONTRIBUTING.md` and frozen gate `m0-ledger-shape` both make that fatal, so it is never coerced into a list — an object would otherwise yield zero rows and read as acceptable. An *empty* array is valid and acceptable. It also includes any gate whose id, status, or test path carries a tab or newline: the classifier rows are tab-separated, so a delimiter in a structural field forges an extra row, and one crafted gate id was enough to make `run-all.sh` skip an arbitrary failing test over an all-green ledger that declared nothing. |
+| `gates/` but no `ledger.json`, with `gates/verify.sh`, `gates/accepted-red.md` or `gates/LEDGER.md` present | **escalate** | The repo declares itself gate-governed and the record of what is proven is absent. Infrastructure, not work. `LEDGER.md` belongs in that evidence set because `ledger verify` regenerates it, so it exists in every gate-governed repo, whereas a repo with no declared reds legitimately has no `accepted-red.md` and `gates/verify.sh` is a firstmate convention rather than something the CLI creates - without it, a gate-governed repo holding only `ledger.json` + `LEDGER.md` whose `ledger.json` went missing proceeded *silently*. |
+| `gates/` but no `ledger.json`, `verify.sh`, `accepted-red.md` or `LEDGER.md` | proceed | A directory named `gates/` is not a claim of gate governance - it is an ordinary directory name (a Go package, a Python module, a state-machine dir), and `fm-verify` runs against every ship task in every project firstmate manages. Keying the escalation on the NAME conscripted unrelated repos into a captain escalation on every single task, with no crewmate-side remedy and no override short of `FM_VERIFY_OVERRIDE`. What claims governance is the machinery. This is policy, so it lives in `fm-verify.sh`; `fm_gates_classify` still reports `NOLEDGER`, because that header is a shared contract with `run-all.sh`, which has its own answer (skip nothing, out loud). |
+| ledger unreadable or wrong shape | **escalate** | A parse failure is not a finding a crewmate can fix by editing code. "Wrong shape" includes a `gates` value that is not a JSON array: `CONTRIBUTING.md` and frozen gate `m0-ledger-shape` both make that fatal, so it is never coerced into a list — an object would otherwise yield zero rows and read as acceptable. An *empty* array is valid and acceptable. It also includes any gate whose id, status, or test path carries a tab or newline: the classifier rows are tab-separated, so a delimiter in a structural field forges an extra row, and one crafted gate id was enough to make `run-all.sh` skip an arbitrary failing test over an all-green ledger that declared nothing. The same refusal covers a field's TYPE: a missing or non-string `id` or `status` used to stringify to the literal `"None"`, collapsing two id-less gates onto one key, and a present-but-non-string `test_ref` yielded no `.test.sh` token and quietly exempted that gate from the freshness cross-check - a fail-open dressed as a no-op. A *missing* or null `test_ref` stays legitimate, because it genuinely means this gate has no freshness check. |
 | status `unproven`, in a gate **this branch touched** (untouched: **report**, as above) | **reject** | Recognised, not acceptable, and crewmate-actionable. `CONTRIBUTING.md` ("Born-green gates are refused") records that the harness stamps `unproven` whenever a gate test passes while `first_observed_red` is null, so it is the ordinary transient state of gate-driven development and the commonest non-clean status a crewmate can produce. The fix is work - register the gate while its test genuinely fails and let `ledger verify` stamp `first_observed_red` itself - so it goes back to the crewmate, never to the captain. The classifier reports it under its own verdict, `bad-unproven`, so the two failure directions cannot be collapsed again. |
 | unrecognised status | **escalate** | Never a pass; a ledger this repo cannot interpret needs a human. |
 | a declared red whose declaration this branch added itself | **escalate** | `gates/accepted-red.md` calls itself a deliberate, reviewable statement, so a line a branch writes into its own diff has been reviewed by nobody. A crewmate whose gate will not go green could otherwise excuse it by writing the excuse, and both this stage and `run-all.sh` would honour it. It escalates rather than rejects because adding a baseline is legitimate work that a human still has to approve. Only declarations the ledger actually *relies on* count - declaring a green gate, or one absent from the ledger, excuses nothing. If the base cannot be resolved, or `gates/accepted-red.md` does not exist there, every relied-upon declaration is unverifiable and it escalates: fail closed. |
@@ -142,9 +142,12 @@ A gate the worktree calls a declared red and the base calls an undeclared one is
 a declaration this branch introduced.
 The declaration format therefore still has exactly one parser.
 
-**Which base, and why the candidates are not equal.** The base is resolved
-once, in `fm-verify.sh`'s main body, and both consumers (the self-authorisation
-check and the diff payload) share it.
+**Which base, and why the candidates are not equal.** There are **two bases**,
+answering two different questions, and the difference in their policies is
+deliberate.
+The *authorisation* base is resolved once, in `fm-verify.sh`'s main body
+(`FM_AUTH_BASE_*`), and is shared by the self-authorisation check and the
+ledger-debt scoping.
 Choosing it is a *security* question, because the guard means nothing if the
 base is a ref the crewmate controls.
 `refs/remotes/origin/<default>` takes a push to a protected default branch,
@@ -169,6 +172,19 @@ The fetch is the only network call on the accept path, so it is guarded against
 blocking as well as failure (`GIT_TERMINAL_PROMPT=0`, batch-mode ssh, an
 http low-speed cap, and a `timeout(1)` wall clock where one exists).
 
+The *diff payload* base (`FM_DIFF_BASE_*`) is a separate resolver, and none of
+that reasoning applies to it.
+It decides how much of the branch the foreign lens gets to read, which is review
+*coverage*, not authorisation - a patch file authorises nothing - so it keeps the
+permissive fallback: `origin/<default>` when it resolved, else the merge base
+with `refs/heads/<default>`, else the `HEAD` commit alone.
+Sharing the origin-only base with the lens was a regression: an origin that
+merely could not be *reached* silently cut the review down to one commit for
+every project including the majority that have no `gates/` dir at all - worse
+review, identical safety.
+Either degradation is announced on stdout, where an operator reads it, rather
+than only inside the patch file.
+
 **Whose debt is it.** The freshness and `unproven` checks are scoped to the gates
 this branch's own diff touches: a gate is this branch's when its entry in
 `gates/ledger.json` changed against the base, or the test file its `test_ref`
@@ -177,6 +193,21 @@ must still reject).
 The comparison is per **entry**, not per file: whole-file granularity would put
 every gate in scope the moment a branch registered one new gate, which is the
 ordinary shape of gate-driven work.
+It is also per **field**, over `status` and `test_ref` only - the two fields the
+conditions actually turn on.
+Comparing whole serialized entries reintroduced the same defect from the other
+direction: `ledger verify` re-stamps `last_verified` on every gate it *runs* and
+`CONTRIBUTING.md` mandates a re-freeze sweep after any change, so an ordinary
+gate-driven branch differs on nearly every entry (commit `5709948` added 39
+`last_verified` lines while adding 2 gates) and the whole ledger came back into
+scope.
+`last_verified`, `mutation_verified` and `first_observed_red` are therefore
+excluded by being absent from that field list; a future stamp field is added to
+it deliberately or not at all.
+The changed-file set is collected with `--no-renames`, so a renamed test file
+appears as both its old and its new path: rename detection prints only the
+destination, which let a crewmate who renamed a test and forgot to update the
+gate's `test_ref` fall out of scope in exactly the case the check exists for.
 It stays fail-closed where it must — if the base, the diff, or the base copy of
 the ledger cannot be read, scope is unknown and every offending gate is treated
 as this branch's own.
