@@ -34,6 +34,11 @@
 #                       (default: claude -p --permission-mode bypassPermissions)
 #        FM_LENS_CMD    lens command; diff on stdin, review on stdout
 #        FM_RELAY_CMD   reject relay; default bin/fm-send.sh (word-split)
+#        FM_VERIFY_FETCH_TIMEOUT
+#                       seconds allowed for the one origin fetch that resolves
+#                       the authorisation base (default 30); the cap is skipped
+#                       where no timeout(1)/gtimeout exists, so the env guards
+#                       in fetch_default_branch are what remove the hang
 # Exit: 0 approve or skip, 2 reject, 3 escalate, 1 usage error.
 # Usage: fm-verify.sh <task-id>
 set -eu
