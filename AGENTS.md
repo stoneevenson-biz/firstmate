@@ -83,6 +83,7 @@ state/               volatile runtime signals; gitignored
   <id>.turn-ended    touched by turn-end hooks
   <id>.meta          written by fm-spawn: window=, worktree=, project=, harness=, mux=, name=, kind=, mode=, yolo=; `bin/fm-herdr.sh` owns what window= and mux= mean (section 8); kind=secondmate also records home= and projects= (fm-pr-check appends pr=)
   <id>.check.sh      optional slow poll you write per task (e.g. merged-PR check)
+  <id>.verifying     written by bin/fm-verify.sh at entry and removed on exit; while it exists a `done:` claim is awaiting a verdict rather than stale, so supervision holds the stale wake instead of reporting a finished crewmate as wedged (section 8). It ages out (`FM_VERIFY_RUNNING_TTL`, default 3600s) so a killed verifier cannot suppress supervision forever
   <id>.orphan-pane   kept by fm-teardown ONLY when it could not close the task's pane: the task's meta lines plus orphan-pane=, orphan-mux=, orphan-since=. Deliberately outside the `*.meta` glob so a finished task never reads as in flight; close the leftover pane, then delete the file - a later teardown that does close the pane clears it, so its presence always means a pane is still open
   .wake-queue        durable queued wakes: epoch<TAB>seq<TAB>kind<TAB>key<TAB>payload
   .afk               durable away-mode flag; present = sub-supervisor may inject escalations (set by /afk, cleared on user return)
@@ -581,7 +582,8 @@ The panes are the ground truth - herdr for anything spawned after the cutover, t
 For `kind=secondmate`, an idle pane is healthy.
 A secondmate may be sitting on its own watcher with no visible pane changes, so parent supervision uses status writes plus heartbeat review, not pane-staleness.
 `fm-watch.sh` therefore skips stale-pane wakes for windows whose meta records `kind=secondmate`.
-This exception is narrow: ordinary crewmates still trip stale detection when their pane stops changing without a busy signature.
+This exception is narrow: ordinary crewmates still trip stale detection - a herdr crewmate whose `agent_status` reads `unknown`, or a pre-cutover pane that stops changing without a busy signature.
+A crewmate that already reported `done:` and is waiting on its Quarterdeck verdict is *awaiting verdict*, not stale, and raises no wake until the ball comes back to it (section 8, "herdr workspace hygiene").
 
 **Watcher liveness is guarded, not just disciplined.**
 Arming the watcher is the last action of every wake-handling turn - but the protocol no longer relies on remembering that.
@@ -825,11 +827,8 @@ loud refusal - none of them loses work - but each is worth acting on:
   own session instead of trusting them. Deferred because their exposure predates the
   cutover - this branch built the net and waived them, rather than introducing the gap.
 
-The two "not yet migrated" gaps above - `fm-watch.sh` (with the away-mode daemon's
-`window_for_task`) and the context watchdog - should move onto `fm-herdr.sh` once the
-drain is empty, and the watchdog first.
-`bin/fm-teardown.sh` HAS moved: it closes through `fm_herdr_close_pane`, which routes a
-herdr pane to herdr and a draining window to tmux.
+`bin/fm-teardown.sh` has moved too: it closes through `fm_herdr_close_pane`, which routes
+a herdr pane to herdr and a draining window to tmux.
 
 ### Away-mode stub
 
