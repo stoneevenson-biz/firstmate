@@ -696,25 +696,46 @@ plan that changes nothing, `--apply` to create the missing workspaces, and
 `--name <pane> <project> <work>` to name a live pane. It is deliberately not called `herdr`,
 which would shadow the real binary and make every call site depend on `PATH` order.
 
-Not yet migrated, and the gaps are NOT equally covered - know which is which before
-relying on any of them:
+**Supervision has followed the crew onto herdr** (gates w1-w7; spec
+`docs/specs/2026-08-31-supervision-on-herdr.md`). Both halves the cutover left behind are
+migrated, and each senses on the surface the task's own `state/<id>.meta` records:
 
-- `bin/fm-watch.sh` still reads `window=` and calls tmux on it, which is what keeps the
-  drain working. For a herdr crewmate, stale-pane detection is inert, so a wedged crewmate
-  is caught by its status file and the heartbeat review instead. That is a degraded path
-  with a real fallback. (`bin/fm-ff-lib.sh` is NOT part of this gap - it only collects
-  `window=` values into `FF_NUDGE_WINDOWS` for `bin/fm-send.sh`, which resolves a herdr
-  pane id correctly; it calls tmux nowhere.) Whoever migrates fm-watch must move
-  `window_for_task` in `bin/fm-supervise-daemon.sh` in the same change: it enumerates
-  `tmux list-windows -a` for `:fm-` names, and away-mode's stale recheck reads an empty
-  result as "task torn down, nothing to escalate". That path is dormant only because
-  fm-watch never emits a stale wake for a herdr pane; the moment it does, a wedged
-  crewmate would be silently dropped instead of escalated.
-- **The context watchdog has NO fallback.** `bin/fm-ctx-statusline.sh` stamps a session
-  `managed:false` when `TMUX_PANE` is unset, and `fm-context-watch.sh` re-confirms the
-  target through tmux at fire time, so no herdr crewmate is ever selected for a compaction
-  checkpoint. A crewmate that reaches its context ceiling simply dies with no handoff
-  written. Until this moves, watch context on long crewmates yourself.
+- `bin/fm-watch.sh` senses a herdr crewmate's `agent_status` from ONE `herdr api snapshot`
+  per cycle - O(1) at any fleet width, and aimed at the pinned session, because every herdr
+  verb defaults to `default` and answers a wrong-session probe with an EMPTY fleet rather
+  than an error. `agent_status: unknown` is the herdr-side "stopped without reporting", and
+  it is the ONLY value that means it: `idle` and `done` do not, because an agent between
+  turns, one awaiting a verdict, and one whose turn ended while its own background shells
+  keep running are all idle. A pane absent from the snapshot raises nothing - that is
+  orphan detection, which stays out of scope - but its bookkeeping IS reset, because a pane
+  that no longer holds an agent has ended whatever episode was in progress. That matters
+  because the stale suppressor is per EPISODE, not per pane: a herdr observation is
+  categorical (`unknown` every time) where a tmux one was a content hash, and
+  `stuck-crewmate-recovery` relaunches an agent in the same pane, so a crewmate that
+  wedges, is relaunched and wedges again must wake again. The `kind=secondmate` exemption
+  is unchanged. `bin/fm-supervise-daemon.sh` moved in the same change, as it had to:
+  `window_to_task` and `window_for_task` now map through the meta (a herdr pane id encodes
+  no task id), so away-mode escalates a wedged herdr crewmate instead of reading "no
+  window" as "torn down, nothing to escalate", and its busy read routes to herdr too.
+- **The context watchdog fires on herdr.** `fm_ctx_managed_target` in `bin/fm-ctx-lib.sh`
+  is the one owner of "firstmate owns this pane", opt-in by construction on each surface:
+  under tmux the pane's session is `FM_TMUX_SESSION`; under herdr `$FM_HERDR_PANE` is set,
+  which only `bin/fm-spawn.sh` injects into the launch string of a pane it created (herdr
+  sets no environment variable in a pane, so the pin is the only way a session learns its
+  own address - and it rides the same prefix as `FM_HOME`, so the restarted-by-hand caveat
+  below applies to it too). The pane id is also the stable window key, because it survives
+  a `/clear`. At fire time the busy read, the checkpoint delivery and the `/clear` each
+  route by surface, and ownership is re-confirmed against this home's own metas.
+
+**Awaiting a verdict is a supervision state now, not a wedge.** A crewmate that appended
+`done:` has reported; a stale wake on top of that describes firstmate's bookkeeping rather
+than the crewmate, and it told the captain a branch was stalled four times across
+2026-08-28..31 while its fix was already committed and mutation-tested. A `done:` claim
+raises no stale wake while a verify cycle is running (`bin/fm-verify.sh` writes
+`state/<id>.verifying` at entry and removes it on exit), after an `approve:`, or once the
+verdict escalated or hit the attempt cap - in all of which the ball is firstmate's or the
+captain's. A `reject:` hands the ball back, so an idle pane there still wakes. Holding a
+wake writes no suppressor, so the same pane wakes the moment the ball returns.
 
 Twelve more are known and deliberately deferred. Each errs toward a false negative or a
 loud refusal - none of them loses work - but each is worth acting on:

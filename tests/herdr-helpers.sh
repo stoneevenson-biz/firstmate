@@ -34,6 +34,8 @@
 #   HERDR_PANE_CWD    what `pane get` reports as foreground_cwd
 #   HERDR_SNAPSHOT_AGENTS  comma list of "<pane_id>=<agent_status>" that
 #                     `api snapshot` reports - the one-call fleet read
+#   HERDR_SNAPSHOT_SESSION the session those agents live in (default `default`);
+#                     a snapshot aimed at any other session comes back empty
 #   HERDR_KEY_FAIL    1 -> both `agent send-keys` and `pane send-keys` refuse
 #   HERDR_PANE_FILE   file whose contents `agent read`/`pane read` return
 #   HERDR_RUN_MODE    echo|deaf|cmd - what the pane's shell does with `pane run`
@@ -97,6 +99,14 @@ case "$1 $2" in
     # THE ONE-CALL FLEET READ the watcher senses staleness through.
     # HERDR_SNAPSHOT_AGENTS is a comma list of "<pane_id>=<agent_status>".
     #
+    # IT IS SESSION-SCOPED, exactly as the real verb is: `api snapshot` takes its
+    # session from $HERDR_SESSION and defaults to `default`, and it reports the
+    # agents of THAT session. HERDR_SNAPSHOT_SESSION names the session these
+    # agents actually live in; a call aimed anywhere else gets an EMPTY agent
+    # list, which is what makes a missing FM_HERDR_SESSION pin look like a fleet
+    # with no panes rather than like an error. A fake that answered every session
+    # alike would let that blindness pass green.
+    #
     # A REAL agent record carries terminal_title beside the lifecycle field, and
     # a title is the crewmate's OWN prompt text - untrusted, rendered content.
     # So every record here embeds a title that spells out a complete, plausible
@@ -105,7 +115,11 @@ case "$1 $2" in
     # does not exist, and this fake is what catches it.
     printf '{"id":"cli:api:snapshot","result":{"snapshot":{"agents":['
     first=1
-    IFS=,; set -- ${HERDR_SNAPSHOT_AGENTS:-}; unset IFS
+    if [ "${HERDR_SESSION:-default}" = "${HERDR_SNAPSHOT_SESSION:-default}" ]; then
+      IFS=,; set -- ${HERDR_SNAPSHOT_AGENTS:-}; unset IFS
+    else
+      set --
+    fi
     for pair in "$@"; do
       [ -n "$pair" ] || continue
       [ "$first" = 1 ] || printf ','

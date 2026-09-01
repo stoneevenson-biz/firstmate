@@ -107,8 +107,91 @@ test_a_pane_with_no_agent_raises_nothing() {
   pass "w1: a pane the snapshot does not list raises nothing (not orphan detection)"
 }
 
+# RAISING NOTHING IS NOT REMEMBERING NOTHING. The documented recovery path
+# relaunches an agent IN THE SAME PANE, and a pane mid-relaunch holds no agent
+# at all - so the wedge/relaunch/wedge sequence passes through the not-listed
+# branch above. If that branch carried the first wedge's suppressor across, the
+# second wedge would land on a marker that still says "already reported" and the
+# crewmate would be invisible for the life of the pane, exactly as it would with
+# no clearing at all.
+test_a_relaunch_through_no_agent_does_not_poison_the_marker() {
+  local dir state out
+  dir=$(fm_watch_case "$TMP_ROOT" relaunch); state="$dir/state"
+  fm_watch_meta "$state" relaunched wZ:p1 herdr ship
+  fm_watch_prime "$state" wZ:p1 unknown
+  out=$(HERDR_SNAPSHOT_AGENTS='wZ:p1=unknown' fm_watch_run "$dir")
+  printf '%s\n' "$out" | grep -Fx "stale: wZ:p1" >/dev/null \
+    || fail "the first wedge did not wake (got: ${out:-<nothing>})"
+
+  # The agent is killed and relaunched: for a while the pane holds no agent, so
+  # herdr lists nothing for it. Nothing may wake, and nothing may be remembered.
+  out=$(HERDR_SNAPSHOT_AGENTS='wQ:p9=idle' fm_watch_run "$dir" 25)
+  case "$out" in *stale*) fail "a pane mid-relaunch was reported stale: $out" ;; esac
+  [ -e "$state/.stale-wZ_p1" ] \
+    && fail "the suppressor survived the pane losing its agent; the next wedge is invisible"
+
+  # The relaunched agent comes up already unclassifiable, with no healthy sample
+  # in between - the worst ordering, and the one a marker-only fix misses.
+  fm_watch_prime "$state" wZ:p1 unknown
+  out=$(HERDR_SNAPSHOT_AGENTS='wZ:p1=unknown' fm_watch_run "$dir")
+  printf '%s\n' "$out" | grep -Fx "stale: wZ:p1" >/dev/null \
+    || fail "a crewmate that wedged, was relaunched and wedged again stayed silent (got: ${out:-<nothing>})"
+  pass "w1: a relaunch through no-agent ends the episode instead of poisoning it"
+}
+
+# ONCE PER WEDGE, NOT ONCE PER PANE. `.stale-*` means "this stalled episode was
+# already reported". Under tmux the observation was a content HASH, so a fresh
+# wedge always carried a fresh value and the marker aged out by accident; a herdr
+# observation is CATEGORICAL - the literal `unknown` every time. A crewmate that
+# wedges, is relaunched INTO THE SAME PANE by stuck-crewmate-recovery, and wedges
+# again would otherwise match the marker its first wedge left and stay invisible
+# for the life of the pane. That is the guarantee this task exists to restore,
+# defeated after one use, so it is pinned here in the same file as the first
+# wake.
+test_a_recovered_then_rewedged_crewmate_wakes_again() {
+  local dir state out
+  dir=$(fm_watch_case "$TMP_ROOT" rewedge); state="$dir/state"
+  fm_watch_meta "$state" rewedged wZ:p1 herdr ship
+  fm_watch_prime "$state" wZ:p1 "$WEDGED"
+  out=$(HERDR_SNAPSHOT_AGENTS="wZ:p1=$WEDGED" fm_watch_run "$dir")
+  printf '%s\n' "$out" | grep -Fx "stale: wZ:p1" >/dev/null \
+    || fail "the first wedge did not wake (got: ${out:-<nothing>})"
+
+  # The agent is relaunched in the same pane and works for a while. One watcher
+  # run over a healthy pane, which must end the episode rather than remember it.
+  out=$(HERDR_SNAPSHOT_AGENTS='wZ:p1=working' fm_watch_run "$dir" 25)
+  case "$out" in *stale*) fail "a working crewmate woke: $out" ;; esac
+
+  # And now it wedges again, in that same pane, on the same categorical state.
+  out=$(HERDR_SNAPSHOT_AGENTS="wZ:p1=$WEDGED" fm_watch_run "$dir")
+  printf '%s\n' "$out" | grep -Fx "stale: wZ:p1" >/dev/null \
+    || fail "the SECOND wedge on the same pane was suppressed forever (got: ${out:-<nothing>})"
+  pass "w1: a recovered-then-rewedged crewmate wakes again, not once per pane"
+}
+
+# THE PIN HAS TO REACH THE VERB, not just the reachability probe. Every herdr
+# verb takes its session from $HERDR_SESSION and defaults to `default`, and
+# `api snapshot` reports the agents of THAT session - so a watcher that skipped
+# fm_herdr_session would poll `default` while the fleet ran under a pinned name,
+# find none of its own panes, and go blind through the silent not-listed path
+# rather than through an error anyone could see.
+test_the_session_pin_reaches_the_snapshot() {
+  local dir state out
+  dir=$(fm_watch_case "$TMP_ROOT" pinned); state="$dir/state"
+  fm_watch_meta "$state" pinnedcrew wZ:p1 herdr ship
+  fm_watch_prime "$state" wZ:p1 unknown
+  out=$(FM_HERDR_SESSION=captainpin HERDR_SNAPSHOT_SESSION=captainpin \
+        HERDR_SNAPSHOT_AGENTS='wZ:p1=unknown' fm_watch_run "$dir")
+  printf '%s\n' "$out" | grep -Fx "stale: wZ:p1" >/dev/null \
+    || fail "a session-pinned fleet was polled through the wrong session; every pane read as absent (got: ${out:-<nothing>})"
+  pass "w1: FM_HERDR_SESSION reaches the snapshot verb, not just the probe"
+}
+
 test_a_wedged_herdr_crewmate_wakes_the_supervisor
+test_a_recovered_then_rewedged_crewmate_wakes_again
+test_the_session_pin_reaches_the_snapshot
 test_a_herdr_pane_is_never_sensed_through_tmux
 test_the_fleet_is_read_in_one_call
 test_an_idle_herdr_crewmate_is_not_stale
 test_a_pane_with_no_agent_raises_nothing
+test_a_relaunch_through_no_agent_does_not_poison_the_marker

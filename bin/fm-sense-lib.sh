@@ -37,6 +37,16 @@
 #
 # Source this; do not execute it.
 
+# The herdr surface owns session resolution, and this file must go through it
+# rather than call the binary bare. Every herdr verb takes its session from
+# $HERDR_SESSION and defaults to `default`, and FM_HERDR_SESSION only reaches
+# them because fm_herdr_session EXPORTS it - so a watcher that called
+# `herdr api snapshot` without this would poll `default` while the captain's
+# fleet ran under a pinned name, find none of its own panes in the answer, and
+# go silently blind on exactly the crewmates it was migrated to watch.
+# shellcheck source=bin/fm-herdr.sh disable=SC1091  # sibling lib sourced at runtime; not a shellcheck input
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-herdr.sh"
+
 # --- the herdr sense --------------------------------------------------------
 
 # ONE call per poll cycle, whatever the fleet width. Prints "<pane_id>\t<status>"
@@ -64,6 +74,10 @@ fm_sense_herdr_statuses() {
     fi
     return 1
   fi
+  # Re-resolve the pin on every read rather than trusting the export that ran at
+  # source time: a watcher is long-lived, and this is the one call whose answer
+  # is silently EMPTY - not an error - when it is aimed at the wrong session.
+  fm_herdr_session >/dev/null
   snap=$(herdr api snapshot 2>/dev/null) || return 1
   [ -n "$snap" ] || return 1
   printf '%s' "$snap" | python3 -c '

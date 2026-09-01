@@ -765,19 +765,19 @@
     {
       "id": "gate-w1-herdr-stale-detected",
       "title": "A wedged herdr crewmate raises a stale wake; an idle one does not, and the fleet is read in one snapshot call",
-      "observable": "fm-watch senses a herdr crewmate's agent_status from one `herdr api snapshot`: `unknown` raises and durably queues `stale: <pane>`, `idle` and an unlisted pane raise nothing, and tmux capture-pane is never used for a herdr pane",
+      "observable": "fm-watch senses a herdr crewmate's agent_status from one `herdr api snapshot` aimed at the pinned session: `unknown` raises and durably queues `stale: <pane>`, a recovered-then-rewedged pane wakes AGAIN (the suppressor is per episode, not per pane, and survives neither a healthy sample nor a relaunch through no-agent), `idle` and an unlisted pane raise nothing, and tmux capture-pane is never used for a herdr pane",
       "origin_mode": "build",
       "spec_ref": "docs/specs/2026-08-31-supervision-on-herdr.md",
       "blocked_by": [],
       "test_ref": "bash tests/fm-watch-w1.test.sh",
       "baseline_ref": null,
       "first_observed_red": "2026-09-01T03:10:06.264Z",
-      "mutation_verified": "2026-09-01T03:13:44.180Z",
+      "mutation_verified": "2026-09-01T07:14:50.180Z",
       "status": "green",
       "vacuous": false,
       "regression": false,
       "created": "2026-09-01T03:03:48.384Z",
-      "last_verified": "2026-09-01T03:36:29.710Z"
+      "last_verified": "2026-09-01T07:21:53.686Z"
     },
     {
       "id": "gate-w2-tmux-stale-unregressed",
@@ -794,7 +794,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-09-01T03:03:48.384Z",
-      "last_verified": "2026-09-01T03:36:29.710Z"
+      "last_verified": "2026-09-01T07:21:53.686Z"
     },
     {
       "id": "gate-w3-secondmate-idle-silent",
@@ -813,7 +813,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-09-01T03:03:48.384Z",
-      "last_verified": "2026-09-01T03:36:29.710Z"
+      "last_verified": "2026-09-01T07:21:53.686Z"
     },
     {
       "id": "gate-w4-ctx-herdr-e2e",
@@ -832,7 +832,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-09-01T03:03:48.384Z",
-      "last_verified": "2026-09-01T03:36:29.710Z"
+      "last_verified": "2026-09-01T07:21:53.686Z"
     },
     {
       "id": "gate-w5-ctx-herdr-busy-guard",
@@ -849,7 +849,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-09-01T03:03:48.384Z",
-      "last_verified": "2026-09-01T03:36:29.710Z"
+      "last_verified": "2026-09-01T07:21:53.686Z"
     },
     {
       "id": "gate-w6-awaiting-verdict-not-stale",
@@ -866,7 +866,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-09-01T03:03:48.384Z",
-      "last_verified": "2026-09-01T03:36:29.710Z"
+      "last_verified": "2026-09-01T07:21:53.686Z"
     },
     {
       "id": "gate-w7-afk-escalates-herdr-wedge",
@@ -885,7 +885,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-09-01T03:24:45.262Z",
-      "last_verified": "2026-09-01T03:36:29.710Z"
+      "last_verified": "2026-09-01T07:21:53.686Z"
     }
   ]
 }

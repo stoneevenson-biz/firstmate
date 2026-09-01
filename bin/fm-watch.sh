@@ -260,6 +260,10 @@ EOF
     # A secondmate idling on its own watcher is healthy. Its parent supervises
     # it through status writes and heartbeats, not pane-idle staleness.
     [ "$kind" = secondmate ] && continue
+    key=$(printf '%s' "$w" | tr ':/.' '___')
+    hf="$STATE/.hash-$key"
+    cf="$STATE/.count-$key"
+    sf="$STATE/.stale-$key"
     obs=""; stopped=0
     if [ "$mux" = herdr ]; then
       if [ "$snap_tried" = 0 ]; then
@@ -271,7 +275,19 @@ EOF
       # territory - deliberately not sensed here - and an unreachable herdr
       # produces the same emptiness, so both stay silent rather than inventing
       # a wake nobody can act on.
-      [ -n "$st" ] || continue
+      #
+      # RAISING NOTHING IS NOT THE SAME AS REMEMBERING NOTHING. Whatever episode
+      # was in progress is over: herdr no longer knows of an agent there. So the
+      # bookkeeping is reset before continuing, which is what keeps the relaunch
+      # path honest - `stuck-crewmate-recovery` restarts an agent IN THE SAME
+      # PANE, and a pane briefly holding no agent is exactly what that looks
+      # like. Carrying the old suppressor across it would let a crewmate that
+      # wedges, is relaunched, and wedges again come back to a marker that still
+      # says "already reported" and stay invisible.
+      if [ -z "$st" ]; then
+        rm -f "$hf" "$cf" "$sf"
+        continue
+      fi
       obs=$st
       fm_sense_herdr_is_stopped "$st" && stopped=1
     else
@@ -286,10 +302,6 @@ EOF
         stopped=1
       fi
     fi
-    key=$(printf '%s' "$w" | tr ':/.' '___')
-    hf="$STATE/.hash-$key"
-    cf="$STATE/.count-$key"
-    sf="$STATE/.stale-$key"
     prev=$(cat "$hf" 2>/dev/null || true)
     if [ "$obs" = "$prev" ]; then
       n=$(( $(cat "$cf" 2>/dev/null || echo 0) + 1 ))
@@ -313,8 +325,20 @@ EOF
         fi
       fi
     else
+      # THE OBSERVATION CHANGED, SO THE EPISODE ENDED - and the suppressor has to
+      # end with it. .stale-* remembers "this exact stalled state was already
+      # reported"; under tmux that was a content HASH, so a fresh wedge always
+      # carried a fresh value and the marker aged out by accident. A herdr
+      # observation is CATEGORICAL: it is the literal `unknown` every time. A
+      # crewmate that wedged, was relaunched into the same pane by
+      # `stuck-crewmate-recovery`, and wedged again would then match the marker
+      # left by its FIRST wedge and be suppressed for the life of the pane -
+      # exactly one wake per pane, ever. Clearing here is the whole fix, and it
+      # is right on both surfaces: the marker means "already reported THIS
+      # episode", and this branch is where an episode ends.
       printf '%s' "$obs" > "$hf"
       echo 0 > "$cf"
+      rm -f "$sf"
     fi
   done < <(recorded_targets)
 

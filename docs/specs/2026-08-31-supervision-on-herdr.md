@@ -43,7 +43,27 @@ sourced and unit-tested without starting a watcher.
   spec says so plainly rather than guessing.
 * A pane **absent** from the snapshot raises nothing. That is orphan detection, which is
   out of scope, and an unreachable herdr produces the same emptiness — both stay silent
-  rather than inventing a wake nobody can act on.
+  rather than inventing a wake nobody can act on. But raising nothing is not *remembering*
+  nothing: the pane's bookkeeping is reset, because herdr no longer knowing of an agent
+  there ends whatever episode was in progress. See the suppressor below.
+* **The suppressor is per episode, not per pane.** `.stale-<key>` means "this stalled state
+  was already reported", and under tmux the value was a content hash, so a fresh wedge
+  always carried a fresh value and the marker aged out by accident. A herdr observation is
+  *categorical* — the literal `unknown` every time — so keeping the tmux bookkeeping
+  unchanged would have made a herdr pane wake exactly once in its life. Two things end an
+  episode and clear the marker: the observation changing, and the pane ceasing to hold an
+  agent. Both matter, because `stuck-crewmate-recovery` relaunches an agent **in the same
+  pane** and the relaunch passes through "no agent" — so a crewmate that wedges, is
+  relaunched, and wedges again must wake again, even when no healthy sample lands in
+  between.
+* **The session pin reaches the verb, not just the probe.** `fm-sense-lib.sh` sources
+  `fm-herdr.sh` and calls `fm_herdr_session` before every snapshot, because every herdr
+  verb takes its session from `$HERDR_SESSION` and defaults to `default`, and
+  `FM_HERDR_SESSION` only reaches them through that export. Skipping it polls `default`
+  while a pinned fleet runs elsewhere, and the answer comes back *empty rather than
+  failing* — the whole fleet then reads as absent, which is silent blindness rather than an
+  error anyone would see. The test fake models this: its `api snapshot` is session-scoped,
+  so a snapshot aimed at the wrong session returns no agents.
 * The snapshot is parsed, never grepped. An agent record carries `terminal_title`, which
   is the crewmate's own prompt text; a line-oriented extractor lets a title containing
   `"agent_status":"unknown"` forge a stale wake against another pane. The test fake
@@ -137,8 +157,10 @@ the `doctrine` verb; retiring tmux for the crew.
 
 ## Gates
 
-- **w1** a wedged herdr crewmate raises a stale wake — and an idle one does not, the fleet
-  is read in one snapshot call, and a herdr pane is never sensed through tmux
+- **w1** a wedged herdr crewmate raises a stale wake — and does so *again* after recovering
+  or after a relaunch through no-agent (once per wedge, never once per pane); the pin
+  reaches the snapshot verb; an idle one does not wake; the fleet is read in one snapshot
+  call; and a herdr pane is never sensed through tmux
 - **w2** a wedged tmux crewmate still raises one, a pre-seam meta still takes the tmux
   sense, a busy pane is still suppressed, and a pre-seam **secondmate** keeps its exemption
 - **w3** an idle `kind=secondmate` herdr pane raises none, while an ordinary crewmate in the
