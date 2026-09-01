@@ -761,6 +761,40 @@
       "created": "2026-08-31T00:00:00Z",
       "last_verified": "2026-09-01T02:54:03.625Z",
       "mutation_verified": null
+    },
+    {
+      "id": "gate-t1-merge-target-resolution",
+      "title": "The merge target is resolved by one pure rule: named beats inferred, and more than one remote with no explicit choice is a stop",
+      "observable": "fm_merge_target resolves --repo over --remote over a full PR url over a sole remote, returns AMBIGUOUS naming every remote (with its owner/name, or its raw url when it is not a GitHub repo) once two or more remotes exist with no explicit choice and never quietly prefers origin, parses every URL form git stores (scp-style, https, https with credentials, ssh, git, http, with or without .git or a trailing slash) while refusing non-github.com hosts, reads a PR number out of a bare number or a url carrying a trailing path or anchor, and refuses each failure on its own terms - BADREPO for a malformed slug, BADREMOTE for an unknown remote or a sole remote that is not a GitHub repo, NOREMOTE for a clone with none, NOTAGIT with exit 2 for a directory that is not a work tree - while never invoking gh, gh-axi or curl, refuses a slug whose owner or name is `.`, `..` or leads with `-`, and redacts userinfo from every raw URL it prints so a token in a non-GitHub remote never reaches a banner while the URL that was no help still does",
+      "origin_mode": "build",
+      "spec_ref": "docs/specs/2026-08-31-merge-target-pin.md",
+      "blocked_by": [],
+      "test_ref": "bash tests/fm-merge-t1-target.test.sh",
+      "baseline_ref": null,
+      "first_observed_red": "2026-09-01T02:47:37.080Z",
+      "mutation_verified": "2026-09-01T03:00:07.481Z",
+      "status": "frozen",
+      "vacuous": false,
+      "regression": false,
+      "created": "2026-08-31T00:00:00Z",
+      "last_verified": "2026-09-01T02:56:53.506Z"
+    },
+    {
+      "id": "gate-t1-merge-repo-pinned",
+      "title": "A merge lands in the repository that was named: the merge command carries --repo, and an ambiguous target refuses without invoking the tool",
+      "observable": "against a two-remote fixture whose stubbed gh-axi resolves an unpinned merge to the WRONG remote (proven first as a control), fm-merge-pr.sh merges to origin via a PR url and via --remote origin with the command carrying --repo, refuses a bare number with a banner naming both remotes and their repositories without invoking the merge tool at all, still merges a single-remote clone with --repo passed, honours an explicit --repo and refuses a malformed one, merges a named non-origin target while announcing on stderr that it is not this clone's origin and naming the remote it belongs to, prints the pinned command under --dry-run without merging, and resolves project and PR from state/<id>.meta while refusing a local-only task toward fm-merge-local.sh, and refuses a -R/--repo/--repo=/-R= smuggled in after `--` (which gh-axi would honour as the LAST repo flag, overriding the pin) without invoking the merge tool, while ordinary passthrough options still reach it alongside the pin",
+      "origin_mode": "build",
+      "spec_ref": "docs/specs/2026-08-31-merge-target-pin.md",
+      "blocked_by": [],
+      "test_ref": "bash tests/fm-merge-t1-pinned.test.sh",
+      "baseline_ref": null,
+      "first_observed_red": "2026-09-01T02:47:37.080Z",
+      "mutation_verified": "2026-09-01T03:00:08.393Z",
+      "status": "frozen",
+      "vacuous": false,
+      "regression": false,
+      "created": "2026-08-31T00:00:00Z",
+      "last_verified": "2026-09-01T02:56:53.506Z"
     }
   ]
 }

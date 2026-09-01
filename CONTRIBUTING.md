@@ -133,6 +133,8 @@ tests/fm-boot-m4.test.sh                  # boot budget under wedged helpers: wa
 tests/fm-boot-m5.test.sh                  # boot context never fails silently: a raising section leaves an explicit UNAVAILABLE marker
 tests/fm-ci-declared-red.test.sh          # tests/run-all.sh skips a test only when its gate is both red and declared, announces every skip, and fails closed
 tests/fm-status-verb.test.sh              # bin/fm-status.sh appends one line to the right home, and briefs teach the verb instead of a redirect
+tests/fm-merge-t1-target.test.sh          # the merge-target rule: precedence, ambiguity as a stop naming every candidate, every git URL form, each refusal verdict, and purity
+tests/fm-merge-t1-pinned.test.sh          # the merge path passes --repo: a two-remote fixture whose stubbed inference points at the WRONG remote, an ambiguous target refused without invoking the tool, a single-remote clone still merging
 tests/fm-herdr-lib.test.sh                # bin/fm-herdr.sh library verbs: reachability and its escalation, workspace resolution, pane naming, meta-routed target resolution, and drain accounting
 tests/fm-herdr-cli.test.sh                # bin/fm-herdr.sh reconcile CLI: one workspace per project planned then applied, and --name applied to a live pane
 tests/fm-herdr-h*.test.sh                 # the herdr cutover gates: herdr as the only surface, explicit workspace scoping, named-tab spawn, meta-routed steer/peek, live acknowledged delivery, the open drain, teardown closing the pane, startup reporting an undispatchable fleet, and busy-agent acknowledgment

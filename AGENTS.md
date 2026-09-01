@@ -143,6 +143,7 @@ Treat any harness memory of these preferences as a recall cache only; `data/capt
 
 Do not dispatch any work until the tools that work needs are present and GitHub auth is good.
 Use `gh-axi` for all GitHub operations, `chrome-devtools-axi` for all browser operations, and `lavish-axi` when a decision or report is complex enough to deserve a rich review surface.
+The one exception is merging a PR, which goes through `bin/fm-merge-pr.sh` so the target repository is named rather than inferred (section 7).
 Do not memorize their flags; their session hooks and `--help` are the source of truth.
 If the captain names a different crewmate harness at bootstrap or later, write it to `config/crew-harness` (local, gitignored); that is the whole switch.
 
@@ -435,7 +436,7 @@ A ship task's path from `done` to landed on `main` is set by the project's `mode
 When reviewing any crewmate branch diff, use `bin/fm-review-diff.sh <id>` rather than `git diff <default>...branch` directly.
 Pooled clones keep their local default refs frozen at clone time and can lag `origin`; the helper always compares against the authoritative base.
 
-**yolo (orthogonal).** With `yolo=off` (default) every approval is the captain's: ask-user findings, PR merges, the local-only merge. With `yolo=on`, firstmate makes those calls itself without asking - resolve ask-user findings on your judgment, and run `gh-axi pr merge` / `bin/fm-merge-local.sh` once the work is green/approved - EXCEPT anything destructive, irreversible, or security-sensitive, which still escalates to the captain. Never merge a red PR even under yolo. After any merge you perform without asking the captain, post a one-line "merged <full PR URL or local main> after checks passed" FYI so the captain keeps a trail.
+**yolo (orthogonal).** With `yolo=off` (default) every approval is the captain's: ask-user findings, PR merges, the local-only merge. With `yolo=on`, firstmate makes those calls itself without asking - resolve ask-user findings on your judgment, and run `bin/fm-merge-pr.sh <id>` / `bin/fm-merge-local.sh <id>` once the work is green/approved - EXCEPT anything destructive, irreversible, or security-sensitive, which still escalates to the captain. Never merge a red PR even under yolo. After any merge you perform without asking the captain, post a one-line "merged <full PR URL or local main> after checks passed" FYI so the captain keeps a trail.
 
 ### Validate
 
@@ -496,7 +497,32 @@ Run `bin/fm-pr-check.sh <id> <PR url>` - it records `pr=` in the task's meta and
 Tell the captain: the PR's full URL (always the complete `https://...` link, never a bare `#number` - the captain's terminal makes a full URL clickable), a one-paragraph summary, and, for `no-mistakes`, the risk level it emitted.
 (The check contract, for any custom `state/<id>.check.sh` you write yourself: print one line only when firstmate should wake, print nothing otherwise, and finish before `FM_CHECK_TIMEOUT`.)
 
-If the captain says "merge it", run `gh-axi pr merge` yourself; that instruction is the explicit approval. If `yolo=on`, merge a green/approved PR yourself and post the required FYI.
+If the captain says "merge it", run `bin/fm-merge-pr.sh <id>` yourself; that instruction is the explicit approval. If `yolo=on`, merge a green/approved PR yourself and post the required FYI.
+
+### Merging a PR: the target is named, never inferred
+
+**Never run a bare `gh-axi pr merge`.**
+`gh`-shaped tooling does not merge the repository you are standing in: it resolves a *base* repository from the clone's remotes, and for pull-request operations in a fork it prefers the parent.
+This repo's own clone carries two - `origin` (the captain's fork) and `upstream` (a public project) - and on 2026-08-29 an unpinned `gh-axi pr merge 5` there resolved to **upstream**.
+It was a no-op only because that PR had merged months earlier; had it been open, a stranger's contribution would have landed in open source under the captain's name.
+
+So every PR merge goes through `bin/fm-merge-pr.sh <id>`, which resolves the target repository first and passes it as `--repo <owner/name>`.
+The rule has one implementation, `fm_merge_target` in `bin/fm-merge-target-lib.sh`, and the spec is `docs/specs/2026-08-31-merge-target-pin.md`; do not restate either.
+What you need at the call site:
+
+- The ordinary call is `bin/fm-merge-pr.sh <id>`, with nothing else to type: `fm-pr-check` already recorded the PR URL, and a URL names its own repository.
+- **A refusal is a stop, not an obstacle.** More than one remote and no explicit choice refuses, naming every candidate, because a bare PR number exists in each of them. Say which - `--remote origin`, or the full PR URL - rather than reaching for another tool.
+- Merging anywhere that is not this clone's `origin` is announced on stderr. That is the shape of the near-miss; read it before you accept it.
+- `--dry-run` prints the exact pinned command without merging, if you want to see the target before the captain's word arrives.
+- Merge options pass through after `--` (`-- --squash --delete-branch`), but a repo flag there is refused: `gh-axi` keeps the LAST `-R`/`--repo`, so passthrough would otherwise override the pin silently. Name the repository with the script's own `--repo`/`--remote`.
+
+This changes where a merge lands, never whether it may happen: prime directive #2 still applies, and `local-only` tasks still merge through `bin/fm-merge-local.sh`.
+
+**The permission profile's rail has a hole, and it is the captain's to close.**
+`~/.claude/settings.json` denies `Bash(gh pr merge*)` but nothing matching `gh-axi`, so the tool this file mandates walks straight past the guard.
+The rules needed are `Bash(gh-axi pr merge*)` and `Bash(gh-axi release*)`.
+That file is machine-wide and the captain's; firstmate does not edit it, and raises it instead.
+Neither rule blocks `bin/fm-merge-pr.sh`, which invokes `gh-axi` from inside the script rather than as a shell call - which is the point: the pinned path stays open and the unpinned one closes.
 
 ### Ship teardown (only after merge is confirmed)
 

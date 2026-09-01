@@ -52,3 +52,5 @@
 | gate-q9-verify-honours-declared-red | frozen | Quarterdeck honours gates/accepted-red.md, ahead of both models |
 | gate-t1-brief-preflight-rules | green | Brief preflight rules: each rule refuses with the offender named, and the clean brief still passes |
 | gate-t1-brief-preflight-spawn-gate | green | Brief preflight spawn gate: an impossible brief is refused before anything is created |
+| gate-t1-merge-target-resolution | frozen | The merge target is resolved by one pure rule: named beats inferred, and more than one remote with no explicit choice is a stop |
+| gate-t1-merge-repo-pinned | frozen | A merge lands in the repository that was named: the merge command carries --repo, and an ambiguous target refuses without invoking the tool |
