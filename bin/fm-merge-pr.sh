@@ -53,15 +53,16 @@ usage() {
 }
 
 ID=""; PR=""; WANT_REPO=""; WANT_REMOTE=""; PROJ=""; DRYRUN=0
+WANT_REPO_SET=0; WANT_REMOTE_SET=0; PROJ_SET=0
 EXTRA=()
 while [ $# -gt 0 ]; do
   case "$1" in
-    --repo)   [ $# -ge 2 ] || usage; WANT_REPO=$2; shift 2 ;;
-    --repo=*) WANT_REPO=${1#--repo=}; shift ;;
-    --remote)   [ $# -ge 2 ] || usage; WANT_REMOTE=$2; shift 2 ;;
-    --remote=*) WANT_REMOTE=${1#--remote=}; shift ;;
-    --project)   [ $# -ge 2 ] || usage; PROJ=$2; shift 2 ;;
-    --project=*) PROJ=${1#--project=}; shift ;;
+    --repo) [ $# -ge 2 ] || usage; WANT_REPO=$2; WANT_REPO_SET=1; shift 2 ;;
+    --repo=*) WANT_REPO=${1#--repo=}; WANT_REPO_SET=1; shift ;;
+    --remote) [ $# -ge 2 ] || usage; WANT_REMOTE=$2; WANT_REMOTE_SET=1; shift 2 ;;
+    --remote=*) WANT_REMOTE=${1#--remote=}; WANT_REMOTE_SET=1; shift ;;
+    --project) [ $# -ge 2 ] || usage; PROJ=$2; PROJ_SET=1; shift 2 ;;
+    --project=*) PROJ=${1#--project=}; PROJ_SET=1; shift ;;
     --dry-run) DRYRUN=1; shift ;;
     --)
       # Passthrough is for merge OPTIONS (--squash, --delete-branch), never for
@@ -92,6 +93,17 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$ID" ] || usage
 
+# An EMPTY flag value is not a choice, and must never be read as "no flag given"
+# - that would silently hand the decision back to the remote set the caller was
+# in the middle of overriding. `--repo=` is a typo, not consent.
+for empty_flag in "--repo:$WANT_REPO_SET:$WANT_REPO" "--remote:$WANT_REMOTE_SET:$WANT_REMOTE" "--project:$PROJ_SET:$PROJ"; do
+  flag=${empty_flag%%:*}; rest=${empty_flag#*:}; wasset=${rest%%:*}; val=${rest#*:}
+  if [ "$wasset" = 1 ] && [ -z "$val" ]; then
+    echo "REFUSED: $flag was given an empty value; name it or leave the flag out." >&2
+    exit 1
+  fi
+done
+
 META="$STATE/$ID.meta"
 if [ -z "$PROJ" ] || [ -z "$PR" ]; then
   [ -f "$META" ] || { echo "error: no meta for task $ID at $META (pass --project and the PR explicitly to merge without one)" >&2; exit 1; }
@@ -102,8 +114,10 @@ if [ -z "$PROJ" ] || [ -z "$PR" ]; then
   [ -n "$PR" ] || PR=$(grep '^pr=' "$META" | cut -d= -f2- | tail -1 || true)
 fi
 [ -n "$PROJ" ] || { echo "error: task $ID has no project= in $META and no --project was given" >&2; exit 1; }
-[ -n "$PR" ] || { echo "error: task $ID has no pr= in $META; pass the PR url or number" >&2; exit 1; }
 
+# Checked BEFORE the missing-PR error: a local-only task can never have a PR, so
+# "pass the PR url or number" would be advice the caller cannot act on. Both
+# paths refuse, but only one of them says where to go instead.
 if [ -f "$META" ]; then
   MODE=$(grep '^mode=' "$META" | cut -d= -f2- | tail -1 || true)
   if [ "$MODE" = local-only ]; then
@@ -111,6 +125,18 @@ if [ -f "$META" ]; then
     exit 1
   fi
 fi
+
+[ -n "$PR" ] || { echo "error: task $ID has no pr= in $META; pass the PR url or number" >&2; exit 1; }
+
+# The PR reference is validated HERE, before any remote is inspected: a ref this
+# tool cannot read a pull request out of is unusable no matter which repository
+# it would have resolved to, and saying so plainly beats failing later with a
+# target already announced.
+NUM=$(fm_merge_target_pr_number "$PR") || {
+  echo "REFUSED: '$PR' is not a pull request this tool can name." >&2
+  echo "         Give a bare number, or a full https://github.com/<owner>/<repo>/pull/<n> url." >&2
+  exit 1
+}
 
 # --- resolve the target, or refuse ------------------------------------------
 set +e
@@ -153,7 +179,6 @@ fi
 
 TARGET=$(printf '%s\n' "$RESOLVED" | head -1 | cut -f2)
 SOURCE=$(printf '%s\n' "$RESOLVED" | head -1 | cut -f3)
-NUM=$(fm_merge_target_pr_number "$PR") || { echo "error: cannot read a PR number out of '$PR'" >&2; exit 1; }
 
 # Informational only, and deliberately loud: merging into anything that is not
 # this clone's origin is legitimate (an upstream contribution) but it is also
@@ -168,7 +193,11 @@ fi
 printf 'merge target: %s (from %s) - PR %s\n' "$TARGET" "$SOURCE" "$NUM" >&2
 
 if [ "$DRYRUN" = 1 ]; then
-  printf 'gh-axi pr merge %s --repo %s%s\n' "$NUM" "$TARGET" "${EXTRA[*]:+ ${EXTRA[*]}}"
+  printf 'gh-axi pr merge %s --repo %s' "$NUM" "$TARGET"
+  for arg in ${EXTRA[@]+"${EXTRA[@]}"}; do
+    printf ' %s' "$(fm_merge_target_shquote "$arg")"
+  done
+  printf '\n'
   exit 0
 fi
 

@@ -514,6 +514,7 @@ What you need at the call site:
 - **A refusal is a stop, not an obstacle.** More than one remote and no explicit choice refuses, naming every candidate, because a bare PR number exists in each of them. Say which - `--remote origin`, or the full PR URL - rather than reaching for another tool.
 - Merging anywhere that is not this clone's `origin` is announced on stderr. That is the shape of the near-miss; read it before you accept it.
 - `--dry-run` prints the exact pinned command without merging, if you want to see the target before the captain's word arrives.
+- A PR reference is a bare number or a full `https://github.com/<owner>/<repo>/pull/<n>` URL. Anything else refuses: a `/pull/<n>` on another host names a pull request this fleet cannot merge, and borrowing just its number would merge an unrelated PR in whichever repository did resolve.
 - Merge options pass through after `--` (`-- --squash --delete-branch`), but a repo flag there is refused: `gh-axi` keeps the LAST `-R`/`--repo`, so passthrough would otherwise override the pin silently. Name the repository with the script's own `--repo`/`--remote`.
 
 This changes where a merge lands, never whether it may happen: prime directive #2 still applies, and `local-only` tasks still merge through `bin/fm-merge-local.sh`.

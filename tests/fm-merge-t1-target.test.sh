@@ -21,6 +21,10 @@
 #   - a SOLE remote is not a choice between candidates and resolves.
 #   - every URL form git actually stores parses to the same owner/name, and a
 #     non-GitHub URL parses to nothing rather than to a guess.
+#   - THE NUMBER AND THE REPOSITORY COME FROM ONE PARSE: a ref containing
+#     `/pull/<digits>` that is not a validated github.com PR url yields no
+#     number at all, so it can never borrow a sole remote's repository and
+#     merge an unrelated pull request there.
 #   - a raw URL is printed for its REASON, never for its credentials: userinfo
 #     is redacted, so a token in a non-GitHub remote does not reach a banner.
 #   - FAIL CLOSED: a malformed --repo, an unknown --remote, a sole remote that
@@ -177,10 +181,34 @@ pass "URL parsing: every form git stores, and a firm no for everything else - in
 ! fm_merge_target_pr_number "not-a-pr" >/dev/null 2>&1 || fail "a bare word is not a PR reference"
 ! fm_merge_target_from_pr_url "https://gitlab.com/o/r/pull/5" >/dev/null 2>&1 \
   || fail "only github.com PR urls name a GitHub repo"
-out=$(fm_merge_target "$SOLO" "https://gitlab.com/o/r/pull/5" "" ""); rc=$?
-expect_code 0 "$rc" "a non-GitHub url is not an explicit choice; the sole remote still resolves"
-[ "$(slug "$out")" = "$ORIGIN_SLUG" ] || fail "a non-GitHub url must not become the target: $out"
-pass "PR references: numbers and github.com urls only, anything else is not a choice"
+
+# THE NUMBER AND THE REPOSITORY MUST COME FROM THE SAME VALIDATED PARSE.
+# Accepting any `*/pull/<digits>` here was a fail-open the whole path inherited:
+# fm_merge_target_from_pr_url refuses a foreign ref as a REPOSITORY, so
+# resolution fell through to the clone's sole remote - and a caller naming a
+# pull request on another system got that NUMBER merged in the captain's own
+# repository instead. The repo was right; the pull request was one nobody named.
+for foreign in \
+  "https://gitlab.com/other/proj/pull/23" \
+  "ticket/pull/9" \
+  "../../etc/pull/7" \
+  "https://github.com/o/r/issues/5" \
+  "https://github.com/o/r/pull/abc" \
+  "https://github.example.com/o/r/pull/4" \
+  "not-a-pr"
+do
+  ! fm_merge_target_pr_number "$foreign" >/dev/null 2>&1 \
+    || fail "must not read a PR number out of '$foreign' (got $(fm_merge_target_pr_number "$foreign"))"
+done
+pass "PR references: numbers and validated github.com urls only - a foreign /pull/<n> yields NO number"
+
+# --- 5b. a foreign ref never reaches a merge, even where the repo resolves ---
+FOREIGN_OUT=$("$ROOT/bin/fm-merge-pr.sh" t1x "https://gitlab.com/other/proj/pull/23" \
+  --project "$SOLO" --dry-run 2>&1); FRC=$?
+expect_code 1 "$FRC" "a foreign PR ref must refuse even in an unambiguous clone"
+assert_contains "$FOREIGN_OUT" "REFUSED" "the refusal is loud"
+assert_not_contains "$FOREIGN_OUT" "gh-axi pr merge" "no merge command may be produced for a foreign ref"
+pass "a foreign /pull/<n> ref refuses outright - it never borrows the sole remote's repository"
 
 # --- 6. every refusal has its own verdict, and none falls through -----------
 for bad in "not a slug" "owner" "a/b/c" "own er/name" "/name" "owner/" \

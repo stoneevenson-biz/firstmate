@@ -104,8 +104,23 @@ fm_merge_target_redact_url() {
       case "${rest%%/*}" in
         *@*) printf '%s://***@%s\n' "$scheme" "${rest#*@}"; return 0 ;;
       esac ;;
+    # scp-style `user@host:path` has no scheme but carries userinfo just the
+    # same, so it needs the same treatment; a bare local path has neither.
+    *@*:*) printf '***@%s\n' "${url#*@}"; return 0 ;;
   esac
   printf '%s\n' "$url"
+}
+
+# fm_merge_target_shquote <word>: echo <word> safely re-runnable in a shell.
+# Only used to PRINT a command (--dry-run), never to build one - the real
+# invocation passes an argv, which needs no quoting. But a printed command that
+# the caller cannot paste back is not the "exact command" it claims to be.
+fm_merge_target_shquote() {
+  case "${1:-}" in
+    '') printf "''" ;;
+    *[!A-Za-z0-9._/:=@-]*) printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")" ;;
+    *) printf '%s' "$1" ;;
+  esac
 }
 
 # fm_merge_target_from_url <remote-url>: echo owner/name for a GitHub remote in
@@ -154,9 +169,20 @@ fm_merge_target_from_pr_url() {
   printf '%s\n' "$slug"
 }
 
-# fm_merge_target_pr_number <ref>: echo the PR number for a full GitHub PR URL
-# or for a bare number, or return 1. A URL may carry a trailing path or anchor
+# fm_merge_target_pr_number <ref>: echo the PR number for a bare number or for a
+# full GitHub PR URL, or return 1. A URL may carry a trailing path or anchor
 # (`/files`, `#issuecomment-1`), which is stripped.
+#
+# THE NUMBER AND THE REPOSITORY COME FROM THE SAME VALIDATED PARSE. Matching a
+# bare `*/pull/*` here instead was a fail-open, and a bad one: it accepted
+# `https://gitlab.com/other/proj/pull/23`, `ticket/pull/9` and `../../etc/pull/7`
+# alike. `fm_merge_target_from_pr_url` correctly refused such a ref as a
+# REPOSITORY choice, so resolution fell through to the clone's sole remote -
+# and the caller, having named a pull request on another system entirely, got
+# PR 23 of the captain's OWN repository merged instead. The repository was
+# right; the pull request was one nobody named, and a merge does not come back.
+# So anything that is not a bare number must be a ref the repository parser has
+# already accepted. One authority, or the two answers can disagree.
 fm_merge_target_pr_number() {
   local ref=${1:-} num
   case "$ref" in
@@ -164,10 +190,8 @@ fm_merge_target_pr_number() {
     *[!0-9]*) : ;;
     *) printf '%s\n' "$ref"; return 0 ;;
   esac
-  case "$ref" in
-    *"/pull/"*) num=${ref##*/pull/} ;;
-    *) return 1 ;;
-  esac
+  fm_merge_target_from_pr_url "$ref" >/dev/null 2>&1 || return 1
+  num=${ref##*/pull/}
   num=${num%%/*}
   num=${num%%#*}
   num=${num%%\?*}
