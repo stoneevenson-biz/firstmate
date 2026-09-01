@@ -272,6 +272,28 @@ fm_merge_target() {
   return 1
 }
 
+# fm_merge_target_pr_slug_conflict <target> <pr-ref>: echo the repository the
+# ref NAMES when that is not <target>, and return 0 - a conflict exists. Return 1
+# when there is none: a bare number makes no claim about a repository, and a URL
+# naming <target> agrees with it.
+#
+# Restricting the PR number to a VALIDATED github.com url closed the foreign-host
+# half of this hole; this closes the rest of it. A url for `other/proj` combined
+# with `--remote origin` still passed both checks on its own terms - the url was
+# a well-formed GitHub PR reference, and the target was explicitly named - and
+# then merged PR 23 of the CAPTAIN'S repository, because only the number
+# survived the url. Two statements about one merge that disagree do not average
+# out into an answer: PR 23 in `other/proj` is a different pull request from PR
+# 23 in `stoneevenson-biz/firstmate`, and nothing in the input says which the
+# caller meant. So it stops, exactly as an ambiguous remote set does.
+fm_merge_target_pr_slug_conflict() {
+  local target=${1:-} ref=${2:-} slug
+  slug=$(fm_merge_target_from_pr_url "$ref" 2>/dev/null) || return 1
+  [ "$slug" = "$target" ] && return 1
+  printf '%s\n' "$slug"
+  return 0
+}
+
 # fm_merge_target_remote_for <repo-dir> <owner/name>: echo the name of the
 # remote whose URL is that repository, or nothing. Used only to make a message
 # more informative ("that is remote 'upstream'"); it never decides anything.

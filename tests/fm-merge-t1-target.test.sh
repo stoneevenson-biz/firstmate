@@ -21,10 +21,14 @@
 #   - a SOLE remote is not a choice between candidates and resolves.
 #   - every URL form git actually stores parses to the same owner/name, and a
 #     non-GitHub URL parses to nothing rather than to a guess.
-#   - THE NUMBER AND THE REPOSITORY COME FROM ONE PARSE: a ref containing
-#     `/pull/<digits>` that is not a validated github.com PR url yields no
-#     number at all, so it can never borrow a sole remote's repository and
-#     merge an unrelated pull request there.
+#   - THE NUMBER AND THE REPOSITORY COME FROM ONE PARSE, AND THEY MUST AGREE.
+#     A ref containing `/pull/<digits>` that is not a validated github.com PR
+#     url yields no number at all, so it can never borrow a sole remote's
+#     repository and merge an unrelated pull request there; and a url that IS
+#     valid but names a repository other than the resolved target is a
+#     CONFLICT, because once --repo or --remote wins precedence only the NUMBER
+#     survives the url. PR 23 in `other/proj` is not PR 23 in the captain's own
+#     repository, and nothing in the input says which was meant.
 #   - a raw URL is printed for its REASON, never for its credentials: userinfo
 #     is redacted, so a token in a non-GitHub remote does not reach a banner.
 #   - FAIL CLOSED: a malformed --repo, an unknown --remote, a sole remote that
@@ -201,6 +205,49 @@ do
     || fail "must not read a PR number out of '$foreign' (got $(fm_merge_target_pr_number "$foreign"))"
 done
 pass "PR references: numbers and validated github.com urls only - a foreign /pull/<n> yields NO number"
+
+# A FOREIGN HOST IS ITS OWN NAMED CASE, not one entry in a loop: it is the ref
+# the Quarterdeck reproduced, and the one a reader will come here to check.
+! fm_merge_target_pr_number "https://gitlab.com/other/proj/pull/23" >/dev/null 2>&1 \
+  || fail "a gitlab.com PR url must yield no PR number"
+! fm_merge_target_from_pr_url "https://gitlab.com/other/proj/pull/23" >/dev/null 2>&1 \
+  || fail "a gitlab.com PR url must name no GitHub repository"
+pass "a gitlab.com /pull/<n> url is refused outright: no repository AND no number"
+
+# --- 5c. a url and a target that disagree are two answers, not one ----------
+#
+# Restricting the number to a VALIDATED github.com url closes the foreign-host
+# half. This is the rest: a well-formed url for `other/proj` plus an explicitly
+# named target passed both checks on their own terms, and then only the NUMBER
+# survived the url - merging PR 23 of the target repository instead.
+CONF=$(fm_merge_target_pr_slug_conflict "$ORIGIN_SLUG" "https://github.com/other/proj/pull/23") \
+  || fail "a url naming another repository must be reported as a conflict"
+[ "$CONF" = "other/proj" ] || fail "the conflict must name the repository the url claims: $CONF"
+
+! fm_merge_target_pr_slug_conflict "$ORIGIN_SLUG" "https://github.com/$ORIGIN_SLUG/pull/9" >/dev/null 2>&1 \
+  || fail "a url naming the target agrees with it and is no conflict"
+! fm_merge_target_pr_slug_conflict "$ORIGIN_SLUG" 9 >/dev/null 2>&1 \
+  || fail "a bare number claims no repository and can conflict with none"
+! fm_merge_target_pr_slug_conflict "$ORIGIN_SLUG" "https://gitlab.com/o/r/pull/9" >/dev/null 2>&1 \
+  || fail "a ref that names no GitHub repository makes no claim to conflict with"
+pass "a PR url that names a different repository than the target is a conflict, and only that"
+
+for bad_pair in "--remote:origin" "--repo:$ORIGIN_SLUG"; do
+  flag=${bad_pair%%:*}; val=${bad_pair#*:}
+  CONF_OUT=$("$ROOT/bin/fm-merge-pr.sh" t1y "https://github.com/other/proj/pull/23" \
+    --project "$SOLO" "$flag" "$val" --dry-run 2>&1); CRC=$?
+  expect_code 1 "$CRC" "a url/target conflict must refuse ($flag)"
+  assert_contains "$CONF_OUT" "CONFLICTS WITH THE MERGE TARGET" "the refusal names the conflict ($flag)"
+  assert_contains "$CONF_OUT" "other/proj" "the refusal names the url's repository ($flag)"
+  assert_contains "$CONF_OUT" "$ORIGIN_SLUG" "the refusal names the resolved target ($flag)"
+  assert_not_contains "$CONF_OUT" "gh-axi pr merge" "no merge command may be produced on a conflict ($flag)"
+done
+
+AGREE=$("$ROOT/bin/fm-merge-pr.sh" t1z "https://github.com/$ORIGIN_SLUG/pull/9" \
+  --project "$SOLO" --remote origin --dry-run 2>/dev/null); ARC=$?
+expect_code 0 "$ARC" "a url that agrees with the target still merges"
+assert_contains "$AGREE" "gh-axi pr merge 9 --repo $ORIGIN_SLUG" "the agreeing case is unchanged"
+pass "url/target conflict refuses through the merge path; agreement still merges"
 
 # --- 5b. a foreign ref never reaches a merge, even where the repo resolves ---
 FOREIGN_OUT=$("$ROOT/bin/fm-merge-pr.sh" t1x "https://gitlab.com/other/proj/pull/23" \

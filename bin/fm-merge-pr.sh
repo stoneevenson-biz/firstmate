@@ -180,6 +180,26 @@ fi
 TARGET=$(printf '%s\n' "$RESOLVED" | head -1 | cut -f2)
 SOURCE=$(printf '%s\n' "$RESOLVED" | head -1 | cut -f3)
 
+# A url naming a DIFFERENT repository than the resolved target is two statements
+# about one merge that disagree. Only the number survives a url once --repo or
+# --remote has won precedence, so without this the caller's own PR reference
+# silently becomes a number applied to somebody else's repository.
+if CONFLICT=$(fm_merge_target_pr_slug_conflict "$TARGET" "$PR"); then
+  {
+    printf '●%s\n' "$RULE"
+    printf '●  MERGE REFERENCE CONFLICTS WITH THE MERGE TARGET - REFUSING\n'
+    printf '●  The pull request url names   %s\n' "$CONFLICT"
+    printf '●  The resolved target is       %s   (from %s)\n' "$TARGET" "$SOURCE"
+    printf '●  PR %s in %s is not PR %s in %s,\n' "$NUM" "$CONFLICT" "$NUM" "$TARGET"
+    printf '●  and nothing here says which one you meant. Give the url for the\n'
+    printf '●  repository you are merging in, or a bare number with the target:\n'
+    printf '●      bin/fm-merge-pr.sh %s https://github.com/%s/pull/%s\n' "$ID" "$TARGET" "$NUM"
+    printf '●      bin/fm-merge-pr.sh %s %s --repo %s\n' "$ID" "$NUM" "$TARGET"
+    printf '●%s\n' "$RULE"
+  } >&2
+  exit 1
+fi
+
 # Informational only, and deliberately loud: merging into anything that is not
 # this clone's origin is legitimate (an upstream contribution) but it is also
 # the shape of the 2026-08-29 near-miss, so it is never silent.
