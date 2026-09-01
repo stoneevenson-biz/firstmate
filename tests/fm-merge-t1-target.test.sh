@@ -21,6 +21,13 @@
 #   - a SOLE remote is not a choice between candidates and resolves.
 #   - every URL form git actually stores parses to the same owner/name, and a
 #     non-GitHub URL parses to nothing rather than to a guess.
+#   - ONE PARSE OF ONE URL. The url is taken apart in the order a url is
+#     defined - fragment, query, scheme, host, path - and both the repository
+#     and the number come out of that single parse, so they cannot disagree.
+#     The accepted shape is exactly `http(s)://github.com/<owner>/<repo>/pull/
+#     <digits>`; a foreign host, a second `/pull/<n>` in the query or the
+#     fragment, and anything trailing in the path are each REFUSED, and each is
+#     gated as its own case so no one tweak can silently re-open a single one.
 #   - THE NUMBER AND THE REPOSITORY COME FROM ONE PARSE, AND THEY MUST AGREE.
 #     A ref containing `/pull/<digits>` that is not a validated github.com PR
 #     url yields no number at all, so it can never borrow a sole remote's
@@ -179,68 +186,132 @@ got=$(fm_merge_target_from_url "https://tok@github.com/$ORIGIN_SLUG.git") \
 [ "$got" = "$ORIGIN_SLUG" ] || fail "credential form parsed '$got'"
 pass "URL parsing: every form git stores, and a firm no for everything else - including a host whose PATH merely contains '@github.com/'"
 
-# --- 5. PR references -------------------------------------------------------
-[ "$(fm_merge_target_pr_number 5)" = 5 ] || fail "a bare number is a PR number"
-[ "$(fm_merge_target_pr_number "https://github.com/$ORIGIN_SLUG/pull/12")" = 12 ] || fail "url -> number"
-[ "$(fm_merge_target_pr_number "https://github.com/$ORIGIN_SLUG/pull/12/files")" = 12 ] || fail "url with path -> number"
-[ "$(fm_merge_target_pr_number "https://github.com/$ORIGIN_SLUG/pull/12#issuecomment-1")" = 12 ] || fail "url with anchor -> number"
-[ "$(fm_merge_target_pr_number "https://github.com/$ORIGIN_SLUG/pull/12?w=1")" = 12 ] || fail "url with query -> number"
+# --- 5. PR references: ONE parse, and every rejection gated on its own -------
+#
+# Three wrong-merge defects came out of this parser, all the same shape: a value
+# read from a reference that did not name it. Each was patched where it was
+# found and the next arrived through the next door - a foreign host lending its
+# number, a url outvoted on repository but not on number, then the slug read at
+# the first `/pull/` and the number at the last. So the matching is gone and the
+# url is taken apart in the order a url is defined: fragment, query, scheme,
+# host, path. Both answers come from that ONE parse, which is why they can no
+# longer disagree.
+#
+# EVERY REJECTION BELOW IS ITS OWN CASE with its own `pass`, deliberately, so
+# that no single tweak to the parser can silently re-open one of them: a change
+# that reopens the anchor hole fails the anchor case by name, and says so.
 
-# THE NUMBER COMES FROM THE SAME `/pull/` THE SLUG WAS PARSED FROM - the FIRST.
-# Reading the LAST one instead was a wrong-merge of its own: a url carrying a
-# second `/pull/<n>` in its query, anchor or trailing path merged THAT number.
-# The repository agreed with itself, so no conflict check could catch it; the
-# only wrong thing was which pull request - and a merge does not come back.
-for sneaky in \
+# 5.1 what is accepted: exactly the canonical form, with an innocent query or
+#     fragment allowed because neither can reach the path parser.
+[ "$(fm_merge_target_pr_number 5)" = 5 ] || fail "a bare number is a PR number"
+for good in \
+  "https://github.com/$ORIGIN_SLUG/pull/12" \
+  "http://github.com/$ORIGIN_SLUG/pull/12" \
+  "https://github.com/$ORIGIN_SLUG/pull/12?w=1" \
+  "https://github.com/$ORIGIN_SLUG/pull/12#issuecomment-1" \
+  "https://github.com/$ORIGIN_SLUG/pull/12?w=1#top"
+do
+  [ "$(fm_merge_target_pr_number "$good")" = 12 ] || fail "must read 12 from '$good'"
+  [ "$(fm_merge_target_from_pr_url "$good")" = "$ORIGIN_SLUG" ] || fail "must read the slug from '$good'"
+  [ "$(fm_merge_target_parse_pr_url "$good")" = "$ORIGIN_SLUG"$'\t'"12" ] \
+    || fail "one parse must yield both values for '$good'"
+done
+pass "5.1 accepted: the canonical url, http or https, with an innocent query or fragment"
+
+# 5.2 FOREIGN HOST. The ref the Quarterdeck reproduced. It must yield neither a
+#     repository nor a number - a number alone would be lent to whichever
+#     repository the remotes resolved.
+for host in \
+  "https://gitlab.com/other/proj/pull/23" \
+  "https://github.example.com/$ORIGIN_SLUG/pull/12" \
+  "https://evil.example.com/x@github.com/$ORIGIN_SLUG/pull/12" \
+  "https://notgithub.com/$ORIGIN_SLUG/pull/12" \
+  "ticket/pull/9" \
+  "../../etc/pull/7"
+do
+  ! fm_merge_target_from_pr_url "$host" >/dev/null 2>&1 || fail "foreign host must name no repository: $host"
+  ! fm_merge_target_pr_number "$host" >/dev/null 2>&1 || fail "foreign host must yield no number: $host"
+done
+pass "5.2 rejected: a foreign host yields neither a repository nor a number"
+
+# 5.3 A SECOND /pull/<n> IN THE QUERY. A reference names exactly one pull
+#     request; one that mentions a second is ambiguous about its own subject.
+for q in \
+  "https://github.com/$ORIGIN_SLUG/pull/12?next=/pull/99" \
+  "https://github.com/$ORIGIN_SLUG/pull/12?to=https://github.com/other/proj/pull/99" \
+  "https://github.com/$ORIGIN_SLUG/pull/12?a=1&b=/pull/99"
+do
+  ! fm_merge_target_pr_number "$q" >/dev/null 2>&1 \
+    || fail "a second /pull/ in the QUERY must refuse, got $(fm_merge_target_pr_number "$q"): $q"
+  ! fm_merge_target_from_pr_url "$q" >/dev/null 2>&1 || fail "and must name no repository: $q"
+done
+pass "5.3 rejected: a second /pull/<n> in the query string"
+
+# 5.4 A SECOND /pull/<n> IN THE ANCHOR. Same rule, the other delimiter - gated
+#     apart from 5.3 because they are parsed at different steps.
+for a in \
+  "https://github.com/$ORIGIN_SLUG/pull/12#x/pull/99" \
+  "https://github.com/$ORIGIN_SLUG/pull/12#/pull/99" \
+  "https://github.com/$ORIGIN_SLUG/pull/12?w=1#see/pull/99"
+do
+  ! fm_merge_target_pr_number "$a" >/dev/null 2>&1 \
+    || fail "a second /pull/ in the ANCHOR must refuse, got $(fm_merge_target_pr_number "$a"): $a"
+  ! fm_merge_target_from_pr_url "$a" >/dev/null 2>&1 || fail "and must name no repository: $a"
+done
+pass "5.4 rejected: a second /pull/<n> in the fragment"
+
+# 5.5 TRAILING PATH SEGMENTS. Refused rather than trimmed: trimming is how a url
+#     that says one thing came to mean another, and `/pull/12/files/pull/77` is
+#     the same trick wearing a path.
+for t in \
+  "https://github.com/$ORIGIN_SLUG/pull/12/files" \
+  "https://github.com/$ORIGIN_SLUG/pull/12/commits/abc" \
+  "https://github.com/$ORIGIN_SLUG/pull/12/files/pull/77" \
+  "https://github.com/$ORIGIN_SLUG/pull/12/"
+do
+  ! fm_merge_target_pr_number "$t" >/dev/null 2>&1 \
+    || fail "a trailing path segment must refuse, got $(fm_merge_target_pr_number "$t"): $t"
+done
+pass "5.5 rejected: anything trailing the pull request in the path"
+
+# 5.6 MALFORMED PATHS. Not a pull url at all, or no number where one belongs.
+for m in \
+  "https://github.com/$ORIGIN_SLUG/issues/5" \
+  "https://github.com/$ORIGIN_SLUG/pull/abc" \
+  "https://github.com/$ORIGIN_SLUG/pull/" \
+  "https://github.com/$ORIGIN_SLUG/pull" \
+  "https://github.com/$ORIGIN_SLUG" \
+  "https://github.com/owner/pull/12" \
+  "not-a-pr" \
+  ""
+do
+  ! fm_merge_target_pr_number "$m" >/dev/null 2>&1 || fail "malformed ref must refuse: '$m'"
+done
+pass "5.6 rejected: a path that is not exactly <owner>/<repo>/pull/<digits>"
+
+# 5.7 END TO END: none of the above can produce a merge command, and the
+#     canonical form still merges the pull request it names.
+for bad_e2e in \
+  "https://gitlab.com/other/proj/pull/23" \
   "https://github.com/$ORIGIN_SLUG/pull/12?next=/pull/99" \
   "https://github.com/$ORIGIN_SLUG/pull/12#x/pull/99" \
-  "https://github.com/$ORIGIN_SLUG/pull/12/files/pull/77" \
-  "https://github.com/$ORIGIN_SLUG/pull/12?to=https://github.com/other/proj/pull/99"
+  "https://github.com/$ORIGIN_SLUG/pull/12/files"
 do
-  got=$(fm_merge_target_pr_number "$sneaky") || fail "must still read a number from '$sneaky'"
-  [ "$got" = 12 ] || fail "a second /pull/<n> must not win: '$sneaky' gave $got, expected 12"
-  [ "$(fm_merge_target_from_pr_url "$sneaky")" = "$ORIGIN_SLUG" ] \
-    || fail "the slug must come from the same first /pull/: $sneaky"
+  E2E=$("$ROOT/bin/fm-merge-pr.sh" t1w "$bad_e2e" --project "$SOLO" --dry-run 2>&1); ERC=$?
+  expect_code 1 "$ERC" "must refuse through the merge path: $bad_e2e"
+  assert_not_contains "$E2E" "gh-axi pr merge" "no merge command may be produced for: $bad_e2e"
 done
+GOOD_E2E=$("$ROOT/bin/fm-merge-pr.sh" t1w "https://github.com/$ORIGIN_SLUG/pull/12" \
+  --project "$SOLO" --dry-run 2>/dev/null) || fail "the canonical url must merge"
+assert_contains "$GOOD_E2E" "gh-axi pr merge 12 --repo $ORIGIN_SLUG" "the canonical url merges the PR it names"
+assert_not_contains "$GOOD_E2E" "merge 99" "no second number may ever surface"
+pass "5.7 end to end: every rejected shape emits no merge command; the canonical one merges 12"
 
-SNEAK=$("$ROOT/bin/fm-merge-pr.sh" t1w "https://github.com/$ORIGIN_SLUG/pull/12?next=/pull/99" \
-  --project "$SOLO" --dry-run 2>/dev/null); SRC=$?
-expect_code 0 "$SRC" "a url with a second /pull/ in its query still merges the PR it names"
-assert_contains "$SNEAK" "gh-axi pr merge 12 --repo $ORIGIN_SLUG" "the merge must carry the FIRST number"
-assert_not_contains "$SNEAK" "merge 99" "the second /pull/<n> must never become the merged PR"
-pass "a second /pull/<n> in a url's query, anchor or trailing path never becomes the merged PR"
 ! fm_merge_target_pr_number "" >/dev/null 2>&1 || fail "empty is not a PR reference"
 ! fm_merge_target_pr_number "not-a-pr" >/dev/null 2>&1 || fail "a bare word is not a PR reference"
 ! fm_merge_target_from_pr_url "https://gitlab.com/o/r/pull/5" >/dev/null 2>&1 \
   || fail "only github.com PR urls name a GitHub repo"
 
-# THE NUMBER AND THE REPOSITORY MUST COME FROM THE SAME VALIDATED PARSE.
-# Accepting any `*/pull/<digits>` here was a fail-open the whole path inherited:
-# fm_merge_target_from_pr_url refuses a foreign ref as a REPOSITORY, so
-# resolution fell through to the clone's sole remote - and a caller naming a
-# pull request on another system got that NUMBER merged in the captain's own
-# repository instead. The repo was right; the pull request was one nobody named.
-for foreign in \
-  "https://gitlab.com/other/proj/pull/23" \
-  "ticket/pull/9" \
-  "../../etc/pull/7" \
-  "https://github.com/o/r/issues/5" \
-  "https://github.com/o/r/pull/abc" \
-  "https://github.example.com/o/r/pull/4" \
-  "not-a-pr"
-do
-  ! fm_merge_target_pr_number "$foreign" >/dev/null 2>&1 \
-    || fail "must not read a PR number out of '$foreign' (got $(fm_merge_target_pr_number "$foreign"))"
-done
-pass "PR references: numbers and validated github.com urls only - a foreign /pull/<n> yields NO number"
-
-# A FOREIGN HOST IS ITS OWN NAMED CASE, not one entry in a loop: it is the ref
-# the Quarterdeck reproduced, and the one a reader will come here to check.
-! fm_merge_target_pr_number "https://gitlab.com/other/proj/pull/23" >/dev/null 2>&1 \
-  || fail "a gitlab.com PR url must yield no PR number"
-! fm_merge_target_from_pr_url "https://gitlab.com/other/proj/pull/23" >/dev/null 2>&1 \
-  || fail "a gitlab.com PR url must name no GitHub repository"
-pass "a gitlab.com /pull/<n> url is refused outright: no repository AND no number"
 
 # --- 5c. a url and a target that disagree are two answers, not one ----------
 #

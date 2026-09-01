@@ -78,6 +78,19 @@ gh-axi pr merge <n> --repo <owner/name> [passthrough args after --]
 
 **The number and the repository come from the same validated parse.** A PR reference is either a bare number or a github.com PR URL that `fm_merge_target_from_pr_url` has already accepted; anything else yields no number and the call refuses, before any remote is inspected. Reading a number out of any `*/pull/<digits>` string instead was a fail-open the whole path inherited: `fm_merge_target_from_pr_url` correctly refused `https://gitlab.com/other/proj/pull/23` as a *repository* choice, so resolution fell through to the clone's sole remote — and a caller naming a pull request on another system got **PR 23 of the captain's own repository** merged instead. The repository was right; the pull request was one nobody named, and a merge does not come back. `ticket/pull/9` and `../../etc/pull/7` read the same way. Two parsers answering about one reference can disagree, so there is one.
 
+**The url is parsed, not matched.** Three wrong-merge defects came out of this parser and all three were one shape — a value read from a reference that did not name it — so the third fix was not another pattern tweak. `fm_merge_target_parse_pr_url` takes the url apart in the order a url is defined: fragment off first, then query, then scheme, then host matched exactly against `github.com`, then a path of exactly four segments `<owner>/<repo>/pull/<digits>`. Both the repository and the number come out of that one parse, which is why they can no longer disagree.
+
+The accepted shape is exactly `http(s)://github.com/<owner>/<repo>/pull/<digits>`, with an optional query and fragment that name no second pull request. Four things are refused rather than repaired, and each is gated as its own case so that no single tweak can silently re-open one:
+
+| refused | why |
+| --- | --- |
+| a foreign host | `https://gitlab.com/other/proj/pull/23` would otherwise lend its number to whichever repository the remotes resolved |
+| a second `/pull/<n>` in the query | a reference names exactly one pull request; one naming two is ambiguous about its own subject |
+| a second `/pull/<n>` in the fragment | the same rule at the other delimiter, gated apart because they are parsed at different steps |
+| anything trailing in the path | `/files`, `/commits/abc`, `/12/files/pull/77`. Trimming is how a url that says one thing came to mean another |
+
+Refusing a url a human could have meant costs one trimmed paste. Accepting one costs a merge.
+
 **And the number is read at the same `/pull/` the slug was.** Taking the *last* `/pull/<n>` instead of the first was a wrong-merge of its own: `https://github.com/<owner>/<repo>/pull/12?next=/pull/99` merged **PR 99**. The repository agreed with itself, so no cross-check could catch it — the only wrong thing was which pull request, and a merge does not come back. Both parsers now read the first occurrence, so the number and the repository always describe the same reference.
 
 **And the reference must agree with the target.** Restricting the number to a validated github.com URL closes the foreign-host half; this closes the rest. A well-formed URL for `other/proj` combined with `--remote origin` passed both checks on their own terms — the URL was a valid GitHub PR reference, the target was explicitly named — and then only the *number* survived the URL, merging PR 23 of the captain's own repository. Two statements about one merge that disagree do not average into an answer: PR 23 in `other/proj` is a different pull request from PR 23 in `stoneevenson-biz/firstmate`, and nothing in the input says which was meant. So a URL naming a repository other than the resolved target refuses, naming both — exactly as an ambiguous remote set does. A bare number claims no repository and conflicts with nothing; a URL naming the target agrees with it and merges.

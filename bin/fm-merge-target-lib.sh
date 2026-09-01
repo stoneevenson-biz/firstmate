@@ -155,58 +155,87 @@ fm_merge_target_from_url() {
   printf '%s\n' "$path"
 }
 
-# fm_merge_target_from_pr_url <ref>: echo owner/name for a full GitHub PR URL,
-# or return 1 for anything else (a bare number, a URL for another host).
-fm_merge_target_from_pr_url() {
-  local ref=${1:-} rest slug
+# fm_merge_target_parse_pr_url <ref>: echo "<owner>/<repo><TAB><number>" for a
+# canonical GitHub pull-request url, or return 1. ONE parse, BOTH values.
+#
+# WHY THIS IS ONE FUNCTION. Three separate wrong-merge defects came out of this
+# file, and all three were the same shape: a value read from a reference that
+# did not name it.
+#   1. the number was matched out of any `*/pull/<digits>` string, so
+#      `https://gitlab.com/other/proj/pull/23` lent its 23 to whichever
+#      repository the remotes happened to resolve;
+#   2. the number survived a url whose repository lost precedence to
+#      `--remote`/`--repo`, merging PR 23 of a repository the url never named;
+#   3. the slug was taken at the FIRST `/pull/` and the number at the LAST, so
+#      `.../pull/12?next=/pull/99` merged PR 99 while every cross-check saw a
+#      repository agreeing with itself.
+# Each was patched where it was found, and the next one arrived through the next
+# door. So the matching is gone. The url is taken apart in the order a url is
+# actually defined - fragment, then query, then scheme, then host, then path -
+# and BOTH answers come out of that single parse, which is why they can no
+# longer disagree.
+#
+# WHAT IS ACCEPTED is exactly one shape:
+#     http(s)://github.com/<owner>/<repo>/pull/<digits>
+# with an optional query and fragment that name no second pull request. Nothing
+# trailing: `/files`, `/commits`, `/1/files` are refused rather than trimmed,
+# because trimming is how a url that says one thing came to mean another. And a
+# reference names exactly ONE pull request - if the query or the fragment
+# mentions a second, the reference is ambiguous about its own subject, so it
+# stops, the same way an ambiguous remote set does.
+#
+# Refusing a url a human could have meant costs one trimmed paste. Accepting one
+# costs a merge, and a merge does not come back.
+fm_merge_target_parse_pr_url() {
+  local ref=${1:-} frag='' query='' rest owner repo lit num
+
+  # 1. Fragment, then query - BEFORE anything looks at a path. A `/pull/` or a
+  #    `/` living in either must never reach the path parser.
+  case "$ref" in *'#'*) frag=${ref#*'#'}; ref=${ref%%'#'*} ;; esac
+  case "$ref" in *'?'*) query=${ref#*'?'}; ref=${ref%%'?'*} ;; esac
+
+  # 2. One reference, one pull request.
+  case "$query$frag" in *'/pull/'*) return 1 ;; esac
+
+  # 3. Scheme and host, matched exactly - not "contains github.com".
   case "$ref" in
-    https://github.com/*/pull/*) rest=${ref#https://github.com/} ;;
-    http://github.com/*/pull/*)  rest=${ref#http://github.com/} ;;
+    https://github.com/*) rest=${ref#https://github.com/} ;;
+    http://github.com/*)  rest=${ref#http://github.com/} ;;
     *) return 1 ;;
   esac
-  slug=${rest%%/pull/*}
-  fm_merge_target_valid_slug "$slug" || return 1
-  printf '%s\n' "$slug"
+
+  # 4. The path is exactly four segments. Five or more means something trails
+  #    the pull request, and this refuses rather than deciding which part of a
+  #    url the caller meant.
+  case "$rest" in */*/*/*/*) return 1 ;; esac
+  owner=${rest%%/*}; rest=${rest#*/}
+  repo=${rest%%/*};  rest=${rest#*/}
+  lit=${rest%%/*};   num=${rest#*/}
+  [ "$lit" = pull ] || return 1
+  case "$num" in ''|*[!0-9]*) return 1 ;; esac
+  fm_merge_target_valid_slug "$owner/$repo" || return 1
+
+  printf '%s\t%s\n' "$owner/$repo" "$num"
 }
 
-# fm_merge_target_pr_number <ref>: echo the PR number for a bare number or for a
-# full GitHub PR URL, or return 1. A URL may carry a trailing path or anchor
-# (`/files`, `#issuecomment-1`), which is stripped.
-#
-# THE NUMBER AND THE REPOSITORY COME FROM THE SAME VALIDATED PARSE. Matching a
-# bare `*/pull/*` here instead was a fail-open, and a bad one: it accepted
-# `https://gitlab.com/other/proj/pull/23`, `ticket/pull/9` and `../../etc/pull/7`
-# alike. `fm_merge_target_from_pr_url` correctly refused such a ref as a
-# REPOSITORY choice, so resolution fell through to the clone's sole remote -
-# and the caller, having named a pull request on another system entirely, got
-# PR 23 of the captain's OWN repository merged instead. The repository was
-# right; the pull request was one nobody named, and a merge does not come back.
-# So anything that is not a bare number must be a ref the repository parser has
-# already accepted. One authority, or the two answers can disagree.
+# fm_merge_target_from_pr_url <ref>: the repository half of that one parse.
+fm_merge_target_from_pr_url() {
+  local parsed
+  parsed=$(fm_merge_target_parse_pr_url "${1:-}") || return 1
+  printf '%s\n' "${parsed%%	*}"
+}
+
+# fm_merge_target_pr_number <ref>: echo the PR number for a bare number, or the
+# number half of that same one parse. Nothing else is a pull-request reference.
 fm_merge_target_pr_number() {
-  local ref=${1:-} num
+  local ref=${1:-} parsed
   case "$ref" in
     '') return 1 ;;
     *[!0-9]*) : ;;
     *) printf '%s\n' "$ref"; return 0 ;;
   esac
-  fm_merge_target_from_pr_url "$ref" >/dev/null 2>&1 || return 1
-  # `#`, not `##`: the number must come from the SAME `/pull/` the slug was
-  # parsed from, which is the FIRST one. `##` took the LAST, so a url carrying a
-  # second `/pull/<n>` in its query, anchor or trailing path read that number
-  # instead of the one the url names - `.../pull/12?next=/pull/99` merged PR 99.
-  # The repository agreed with itself, so no conflict check could catch it; the
-  # only wrong thing was which pull request.
-  num=${ref#*/pull/}
-  # Query and anchor first, then the path: a `/` inside either would otherwise
-  # truncate at the wrong delimiter.
-  num=${num%%\?*}
-  num=${num%%#*}
-  num=${num%%/*}
-  case "$num" in
-    ''|*[!0-9]*) return 1 ;;
-  esac
-  printf '%s\n' "$num"
+  parsed=$(fm_merge_target_parse_pr_url "$ref") || return 1
+  printf '%s\n' "${parsed#*	}"
 }
 
 # fm_merge_target <repo-dir> [pr-ref] [explicit-repo] [explicit-remote]
