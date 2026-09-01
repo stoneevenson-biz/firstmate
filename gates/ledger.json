@@ -772,12 +772,12 @@
       "test_ref": "bash tests/fm-watch-w1.test.sh",
       "baseline_ref": null,
       "first_observed_red": "2026-09-01T03:10:06.264Z",
-      "mutation_verified": "2026-09-01T07:14:50.180Z",
+      "mutation_verified": "2026-09-01T15:36:52.601Z",
       "status": "green",
       "vacuous": false,
       "regression": false,
       "created": "2026-09-01T03:03:48.384Z",
-      "last_verified": "2026-09-01T07:21:53.686Z"
+      "last_verified": "2026-09-01T15:27:51.520Z"
     },
     {
       "id": "gate-w2-tmux-stale-unregressed",
@@ -789,12 +789,12 @@
       "test_ref": "bash tests/fm-watch-w2.test.sh",
       "baseline_ref": null,
       "first_observed_red": "2026-09-01T03:10:06.264Z",
-      "mutation_verified": "2026-09-01T03:13:44.180Z",
+      "mutation_verified": "2026-09-01T15:36:52.601Z",
       "status": "green",
       "vacuous": false,
       "regression": false,
       "created": "2026-09-01T03:03:48.384Z",
-      "last_verified": "2026-09-01T07:21:53.686Z"
+      "last_verified": "2026-09-01T15:27:51.520Z"
     },
     {
       "id": "gate-w3-secondmate-idle-silent",
@@ -808,12 +808,12 @@
       "test_ref": "bash tests/fm-watch-w3.test.sh",
       "baseline_ref": null,
       "first_observed_red": "2026-09-01T03:10:06.264Z",
-      "mutation_verified": "2026-09-01T03:13:44.180Z",
+      "mutation_verified": "2026-09-01T15:36:52.601Z",
       "status": "green",
       "vacuous": false,
       "regression": false,
       "created": "2026-09-01T03:03:48.384Z",
-      "last_verified": "2026-09-01T07:21:53.686Z"
+      "last_verified": "2026-09-01T15:27:51.520Z"
     },
     {
       "id": "gate-w4-ctx-herdr-e2e",
@@ -832,7 +832,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-09-01T03:03:48.384Z",
-      "last_verified": "2026-09-01T07:21:53.686Z"
+      "last_verified": "2026-09-01T15:27:51.520Z"
     },
     {
       "id": "gate-w5-ctx-herdr-busy-guard",
@@ -849,7 +849,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-09-01T03:03:48.384Z",
-      "last_verified": "2026-09-01T07:21:53.686Z"
+      "last_verified": "2026-09-01T15:27:51.520Z"
     },
     {
       "id": "gate-w6-awaiting-verdict-not-stale",
@@ -861,12 +861,12 @@
       "test_ref": "bash tests/fm-watch-w6.test.sh",
       "baseline_ref": null,
       "first_observed_red": "2026-09-01T03:10:06.264Z",
-      "mutation_verified": "2026-09-01T03:13:44.180Z",
+      "mutation_verified": "2026-09-01T15:36:52.601Z",
       "status": "green",
       "vacuous": false,
       "regression": false,
       "created": "2026-09-01T03:03:48.384Z",
-      "last_verified": "2026-09-01T07:21:53.686Z"
+      "last_verified": "2026-09-01T15:27:51.520Z"
     },
     {
       "id": "gate-w7-afk-escalates-herdr-wedge",
@@ -885,7 +885,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-09-01T03:24:45.262Z",
-      "last_verified": "2026-09-01T07:21:53.686Z"
+      "last_verified": "2026-09-01T15:27:51.520Z"
     }
   ]
 }

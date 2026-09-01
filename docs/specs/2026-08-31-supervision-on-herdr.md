@@ -150,6 +150,21 @@ to give; the two sources are still not interchangeable, and an agent pane never 
 that branch because `agent read` succeeds first. Fixed here because a red ledger blocks the
 branch and the defect is in the herdr read path supervision depends on.
 
+## Why every "nothing happened" assertion carries proof
+
+These gates drive the real watcher and are wall-clock bounded, so two failure modes sit on
+opposite sides of one budget. Too short and a busy machine starves a wake that was coming —
+w1 and w2 flaked red under a full `ledger verify` sweep while passing standalone 24 runs
+running. Too long and a case asserting that *nothing* happens passes trivially, because a
+watcher that never reached its decision looks exactly like one that decided not to wake.
+
+So the budget is generous **and** every negative case demands evidence the decision point
+was reached: `fm_watch_assert_sensed` (the per-target counter advanced, i.e. the wake/no-wake
+branch ran), `fm_watch_assert_ran` (a full cycle completed — the available evidence for a
+`kind=secondmate`, whose bookkeeping is deliberately skipped before any marker is touched),
+and `fm_watch_assert_reset` (the pane's episode was ended because it stopped holding an
+agent). Each assertion is itself proven to fire on an empty state dir.
+
 ## Out of scope
 
 Any sweep, orphan-closing or pane-closing behaviour; the domain registry; the `config` verb;

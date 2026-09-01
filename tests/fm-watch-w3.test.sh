@@ -32,10 +32,11 @@ test_an_idle_secondmate_pane_raises_nothing() {
   dir=$(fm_watch_case "$TMP_ROOT" secondmate); state="$dir/state"
   fm_watch_meta "$state" smhome wZ:p4 herdr "$SM_KIND"
   fm_watch_prime "$state" wZ:p4 unknown
-  out=$(HERDR_SNAPSHOT_AGENTS='wZ:p4=unknown' fm_watch_run "$dir" 25)
+  out=$(HERDR_SNAPSHOT_AGENTS='wZ:p4=unknown' fm_watch_run "$dir" 40)
   case "$out" in
     *stale*) fail "an idle secondmate pane raised a stale wake: $out" ;;
   esac
+  fm_watch_assert_ran "$dir" "the watcher never ran, so the exemption proved nothing"
   FM_STATE_OVERRIDE="$state" "$ROOT/bin/fm-wake-drain.sh" | grep -q 'stale' \
     && fail "a secondmate stale wake was queued even though none was printed"
   pass "w3: an idle kind=secondmate herdr pane raises no stale wake"

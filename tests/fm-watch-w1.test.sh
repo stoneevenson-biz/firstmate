@@ -86,10 +86,11 @@ test_an_idle_herdr_crewmate_is_not_stale() {
   dir=$(fm_watch_case "$TMP_ROOT" idle); state="$dir/state"
   fm_watch_meta "$state" idlecrew wZ:p1 herdr ship
   fm_watch_prime "$state" wZ:p1 idle
-  out=$(HERDR_SNAPSHOT_AGENTS='wZ:p1=idle' fm_watch_run "$dir" 25)
+  out=$(HERDR_SNAPSHOT_AGENTS='wZ:p1=idle' fm_watch_run "$dir" 40)
   case "$out" in
     *stale*) fail "an idle herdr crewmate was reported stale: $out" ;;
   esac
+  fm_watch_assert_sensed "$state" wZ:p1 2 "the watcher never weighed the idle crewmate"
   pass "w1: an idle herdr crewmate raises no stale wake"
 }
 
@@ -100,10 +101,12 @@ test_a_pane_with_no_agent_raises_nothing() {
   dir=$(fm_watch_case "$TMP_ROOT" noagent); state="$dir/state"
   fm_watch_meta "$state" gonecrew wZ:p7 herdr ship
   fm_watch_prime "$state" wZ:p7 unknown
-  out=$(HERDR_SNAPSHOT_AGENTS='wZ:p1=idle' fm_watch_run "$dir" 25)
+  out=$(HERDR_SNAPSHOT_AGENTS='wZ:p1=idle' fm_watch_run "$dir" 40)
   case "$out" in
     *stale*) fail "a pane absent from the snapshot was reported stale: $out" ;;
   esac
+  fm_watch_assert_reset "$state" wZ:p7 \
+    "the unlisted pane was never reached, or its episode was not ended"
   pass "w1: a pane the snapshot does not list raises nothing (not orphan detection)"
 }
 
@@ -125,10 +128,10 @@ test_a_relaunch_through_no_agent_does_not_poison_the_marker() {
 
   # The agent is killed and relaunched: for a while the pane holds no agent, so
   # herdr lists nothing for it. Nothing may wake, and nothing may be remembered.
-  out=$(HERDR_SNAPSHOT_AGENTS='wQ:p9=idle' fm_watch_run "$dir" 25)
+  out=$(HERDR_SNAPSHOT_AGENTS='wQ:p9=idle' fm_watch_run "$dir" 40)
   case "$out" in *stale*) fail "a pane mid-relaunch was reported stale: $out" ;; esac
-  [ -e "$state/.stale-wZ_p1" ] \
-    && fail "the suppressor survived the pane losing its agent; the next wedge is invisible"
+  fm_watch_assert_reset "$state" wZ:p1 \
+    "the suppressor survived the pane losing its agent; the next wedge is invisible"
 
   # The relaunched agent comes up already unclassifiable, with no healthy sample
   # in between - the worst ordering, and the one a marker-only fix misses.
@@ -159,8 +162,10 @@ test_a_recovered_then_rewedged_crewmate_wakes_again() {
 
   # The agent is relaunched in the same pane and works for a while. One watcher
   # run over a healthy pane, which must end the episode rather than remember it.
-  out=$(HERDR_SNAPSHOT_AGENTS='wZ:p1=working' fm_watch_run "$dir" 25)
+  out=$(HERDR_SNAPSHOT_AGENTS='wZ:p1=working' fm_watch_run "$dir" 40)
   case "$out" in *stale*) fail "a working crewmate woke: $out" ;; esac
+  [ "$(cat "$state/.hash-wZ_p1" 2>/dev/null)" = working ] \
+    || fail "the watcher never sensed the recovered crewmate; the silence proves nothing"
 
   # And now it wedges again, in that same pane, on the same categorical state.
   out=$(HERDR_SNAPSHOT_AGENTS="wZ:p1=$WEDGED" fm_watch_run "$dir")

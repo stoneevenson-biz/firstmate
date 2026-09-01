@@ -53,14 +53,20 @@ arrange() {  # <name> <status-line> -> case dir with one idle herdr crewmate
 
 run_it() { HERDR_SNAPSHOT_AGENTS='wZ:p1=unknown' fm_watch_run "$@"; }
 
+# Every held case below asserts the watcher actually REACHED its stale decision
+# and chose not to wake. Without that, a slow box that never got there would
+# read as a correctly-held wake, and the gate would go green on nothing.
+held() {  # <case-dir> <out> <what>
+  case "$2" in *stale*) fail "$3: $2" ;; esac
+  fm_watch_assert_sensed "$1/state" wZ:p1 2 "the watcher never weighed the held case"
+}
+
 test_a_running_verify_cycle_holds_the_stale_wake() {
   local dir out
   dir=$(arrange verifying 'done: fix implemented and gates green')
   [ "${LEDGER_MUTATE:-}" = 1 ] || : > "$dir/state/claimer.verifying"
-  out=$(run_it "$dir" 25)
-  case "$out" in
-    *stale*) fail "a crewmate under an in-flight verify was reported stale: $out" ;;
-  esac
+  out=$(run_it "$dir" 40)
+  held "$dir" "$out" "a crewmate under an in-flight verify was reported stale"
   pass "w6: a done: claim with a verify cycle running raises no stale wake"
 }
 
@@ -68,10 +74,8 @@ test_an_approved_claim_holds_the_stale_wake() {
   local dir out
   dir=$(arrange approved 'done: fix implemented and gates green')
   [ "${LEDGER_MUTATE:-}" = 1 ] || printf 'approve: verifier approve (lens=fugu)\n' > "$dir/state/claimer.verdict"
-  out=$(run_it "$dir" 25)
-  case "$out" in
-    *stale*) fail "an approved claim awaiting firstmate's next instruction was reported stale: $out" ;;
-  esac
+  out=$(run_it "$dir" 40)
+  held "$dir" "$out" "an approved claim awaiting firstmate's next instruction was reported stale"
   pass "w6: an approved done: claim raises no stale wake"
 }
 
@@ -84,10 +88,8 @@ test_a_cap_blocked_verdict_holds_the_stale_wake() {
       printf 'reject: (attempt 3 of 3) z\nescalate: attempt cap reached (3 rejects)\n'; } \
       > "$dir/state/claimer.verdict"
   fi
-  out=$(run_it "$dir" 25)
-  case "$out" in
-    *stale*) fail "a cap-blocked claim waiting on the captain was reported stale: $out" ;;
-  esac
+  out=$(run_it "$dir" 40)
+  held "$dir" "$out" "a cap-blocked claim waiting on the captain was reported stale"
   pass "w6: a cap-blocked verdict raises no stale wake"
 }
 
@@ -121,8 +123,8 @@ test_suppression_does_not_consume_the_wake() {
   local dir out
   dir=$(arrange handback 'done: fix implemented')
   : > "$dir/state/claimer.verifying"
-  out=$(run_it "$dir" 25)
-  case "$out" in *stale*) fail "the held case woke early: $out" ;; esac
+  out=$(run_it "$dir" 40)
+  held "$dir" "$out" "the held case woke early"
   [ -e "$dir/state/.stale-wZ_p1" ] \
     && fail "suppression wrote the stale suppressor; the wake can never fire again"
   rm -f "$dir/state/claimer.verifying"

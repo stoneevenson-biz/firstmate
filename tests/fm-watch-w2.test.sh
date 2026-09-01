@@ -28,7 +28,7 @@ PANE_TEXT='$ waiting at a prompt'
 
 # The fake tmux from herdr-helpers backs capture-pane with $PANE_FILE.
 run_tmux_case() {  # <case-dir> <window> <text> [limit]
-  local dir=$1 window=$2 text=$3 limit=${4:-60} out="$1/watch.out" pid
+  local dir=$1 window=$2 text=$3 limit=${4:-300} out="$1/watch.out" pid
   printf '%s\n' "$text" > "$dir/pane.txt"
   : > "$out"
   PATH="$dir/fakebin:$PATH" CALLS="$dir/calls" PANE_FILE="$dir/pane.txt" \
@@ -79,10 +79,12 @@ test_a_busy_tmux_pane_is_not_stale() {
   fm_watch_meta "$state" busycrew firstmate:fm-busycrew tmux ship
   fm_watch_prime "$state" firstmate:fm-busycrew "$(pane_hash_of 'thinking... (esc to interrupt)
 ')"
-  out=$(run_tmux_case "$dir" firstmate:fm-busycrew 'thinking... (esc to interrupt)' 25)
+  out=$(run_tmux_case "$dir" firstmate:fm-busycrew 'thinking... (esc to interrupt)' 40)
   case "$out" in
     *stale*) fail "a busy tmux pane was reported stale: $out" ;;
   esac
+  fm_watch_assert_sensed "$state" firstmate:fm-busycrew 2 \
+    "the watcher never weighed the busy pane"
   pass "w2: a busy tmux pane raises no stale wake"
 }
 
@@ -99,10 +101,11 @@ test_a_pre_seam_secondmate_keeps_its_exemption() {
   fm_watch_meta "$state" domain firstmate:fm-domain '' secondmate
   fm_watch_prime "$state" firstmate:fm-domain "$(pane_hash_of '$ waiting at a prompt
 ')"
-  out=$(run_tmux_case "$dir" firstmate:fm-domain '$ waiting at a prompt' 25)
+  out=$(run_tmux_case "$dir" firstmate:fm-domain '$ waiting at a prompt' 40)
   case "$out" in
     *stale*) fail "a draining secondmate lost its exemption: $out" ;;
   esac
+  fm_watch_assert_ran "$dir" "the watcher never ran, so the exemption proved nothing"
   pass "w2: a pre-seam meta's kind is still read correctly (secondmate stays exempt)"
 }
 
