@@ -191,10 +191,18 @@ fm_merge_target_pr_number() {
     *) printf '%s\n' "$ref"; return 0 ;;
   esac
   fm_merge_target_from_pr_url "$ref" >/dev/null 2>&1 || return 1
-  num=${ref##*/pull/}
-  num=${num%%/*}
-  num=${num%%#*}
+  # `#`, not `##`: the number must come from the SAME `/pull/` the slug was
+  # parsed from, which is the FIRST one. `##` took the LAST, so a url carrying a
+  # second `/pull/<n>` in its query, anchor or trailing path read that number
+  # instead of the one the url names - `.../pull/12?next=/pull/99` merged PR 99.
+  # The repository agreed with itself, so no conflict check could catch it; the
+  # only wrong thing was which pull request.
+  num=${ref#*/pull/}
+  # Query and anchor first, then the path: a `/` inside either would otherwise
+  # truncate at the wrong delimiter.
   num=${num%%\?*}
+  num=${num%%#*}
+  num=${num%%/*}
   case "$num" in
     ''|*[!0-9]*) return 1 ;;
   esac

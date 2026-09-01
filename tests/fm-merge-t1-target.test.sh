@@ -28,7 +28,10 @@
 #     valid but names a repository other than the resolved target is a
 #     CONFLICT, because once --repo or --remote wins precedence only the NUMBER
 #     survives the url. PR 23 in `other/proj` is not PR 23 in the captain's own
-#     repository, and nothing in the input says which was meant.
+#     repository, and nothing in the input says which was meant. The NUMBER is
+#     read at the same `/pull/` the slug was parsed from - the first - so a url
+#     carrying a second `/pull/<n>` in its query, anchor or trailing path
+#     cannot substitute that number for the one the url names.
 #   - a raw URL is printed for its REASON, never for its credentials: userinfo
 #     is redacted, so a token in a non-GitHub remote does not reach a banner.
 #   - FAIL CLOSED: a malformed --repo, an unknown --remote, a sole remote that
@@ -181,6 +184,31 @@ pass "URL parsing: every form git stores, and a firm no for everything else - in
 [ "$(fm_merge_target_pr_number "https://github.com/$ORIGIN_SLUG/pull/12")" = 12 ] || fail "url -> number"
 [ "$(fm_merge_target_pr_number "https://github.com/$ORIGIN_SLUG/pull/12/files")" = 12 ] || fail "url with path -> number"
 [ "$(fm_merge_target_pr_number "https://github.com/$ORIGIN_SLUG/pull/12#issuecomment-1")" = 12 ] || fail "url with anchor -> number"
+[ "$(fm_merge_target_pr_number "https://github.com/$ORIGIN_SLUG/pull/12?w=1")" = 12 ] || fail "url with query -> number"
+
+# THE NUMBER COMES FROM THE SAME `/pull/` THE SLUG WAS PARSED FROM - the FIRST.
+# Reading the LAST one instead was a wrong-merge of its own: a url carrying a
+# second `/pull/<n>` in its query, anchor or trailing path merged THAT number.
+# The repository agreed with itself, so no conflict check could catch it; the
+# only wrong thing was which pull request - and a merge does not come back.
+for sneaky in \
+  "https://github.com/$ORIGIN_SLUG/pull/12?next=/pull/99" \
+  "https://github.com/$ORIGIN_SLUG/pull/12#x/pull/99" \
+  "https://github.com/$ORIGIN_SLUG/pull/12/files/pull/77" \
+  "https://github.com/$ORIGIN_SLUG/pull/12?to=https://github.com/other/proj/pull/99"
+do
+  got=$(fm_merge_target_pr_number "$sneaky") || fail "must still read a number from '$sneaky'"
+  [ "$got" = 12 ] || fail "a second /pull/<n> must not win: '$sneaky' gave $got, expected 12"
+  [ "$(fm_merge_target_from_pr_url "$sneaky")" = "$ORIGIN_SLUG" ] \
+    || fail "the slug must come from the same first /pull/: $sneaky"
+done
+
+SNEAK=$("$ROOT/bin/fm-merge-pr.sh" t1w "https://github.com/$ORIGIN_SLUG/pull/12?next=/pull/99" \
+  --project "$SOLO" --dry-run 2>/dev/null); SRC=$?
+expect_code 0 "$SRC" "a url with a second /pull/ in its query still merges the PR it names"
+assert_contains "$SNEAK" "gh-axi pr merge 12 --repo $ORIGIN_SLUG" "the merge must carry the FIRST number"
+assert_not_contains "$SNEAK" "merge 99" "the second /pull/<n> must never become the merged PR"
+pass "a second /pull/<n> in a url's query, anchor or trailing path never becomes the merged PR"
 ! fm_merge_target_pr_number "" >/dev/null 2>&1 || fail "empty is not a PR reference"
 ! fm_merge_target_pr_number "not-a-pr" >/dev/null 2>&1 || fail "a bare word is not a PR reference"
 ! fm_merge_target_from_pr_url "https://gitlab.com/o/r/pull/5" >/dev/null 2>&1 \
