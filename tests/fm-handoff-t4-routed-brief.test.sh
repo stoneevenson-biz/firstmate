@@ -63,6 +63,7 @@ make_world() {
 
 ## Queued
 - [ ] feat-x - add feature x (repo: demo)
+- [ ] scout-x - investigate the thing (repo: demo)
 
 ## Done
 BACKLOG
@@ -138,20 +139,21 @@ test_routed_item_reports_to_destination() {
 }
 
 # --- B. an item routed before the channel travelled --------------------------
+#
+# The fixture models THE STATE THE PRE-FIX CODE ACTUALLY PRODUCED, which is the
+# only state the repair path has to converge: the backlog line was moved to the
+# destination and the data/<key>/ dir was left behind in the origin, because the
+# old code moved lines and nothing else. A fixture that pre-copies the dir to the
+# destination models a state that code could not reach, and would miss the
+# defect where the repair leaves the dir in BOTH homes.
 test_rerun_repairs_an_already_routed_item() {
   local origin dest out world
   world=$(make_world b own)
   origin=${world% *}
   dest=${world#* }
 
-  # Model the pre-fix state exactly: the line is already in the destination
-  # backlog and the brief dir already sits in the destination home, but the
-  # brief was scaffolded by the ORIGIN and still pins it.
   FM_HOME="$origin" bash "$BRIEF_SH" feat-x demo >/dev/null 2>&1 \
     || fail "fm-brief.sh must scaffold the ship brief"
-  mkdir -p "$dest/data"
-  cp -R "$origin/data/feat-x" "$dest/data/feat-x"
-  rm -rf "$origin/data/feat-x"
   cat > "$dest/data/backlog.md" <<'BACKLOG'
 ## In flight
 
@@ -160,7 +162,7 @@ test_rerun_repairs_an_already_routed_item() {
 
 ## Done
 BACKLOG
-  # main no longer carries it either - this is a routed item, not a new one.
+  # main no longer carries the line - the old code moved that much and no more.
   cat > "$origin/data/backlog.md" <<'BACKLOG'
 ## In flight
 
@@ -168,7 +170,11 @@ BACKLOG
 
 ## Done
 BACKLOG
-  assert_grep "FM_HOME='$origin'" "$dest/data/feat-x/brief.md" \
+  assert_present "$origin/data/feat-x/brief.md" \
+    "fixture precondition: the pre-fix state leaves the brief dir in the origin"
+  assert_absent "$dest/data/feat-x" \
+    "fixture precondition: the destination has no copy of the dir yet"
+  assert_grep "FM_HOME='$origin'" "$origin/data/feat-x/brief.md" \
     "fixture precondition: the already-routed brief must still pin the origin home"
 
   out=$(FM_HOME="$origin" bash "$HANDOFF" design feat-x) \
@@ -176,9 +182,17 @@ BACKLOG
   assert_contains "$out" "already present" "the re-run should report the item as already present"
   assert_contains "$out" "retargeted" "the re-run should report the repaired reporting channel"
 
+  # The repair is a FULL migration, not just a rewrite: one home ends up owning
+  # the item, and the run says which dir it moved rather than leaving a second
+  # copy behind unmentioned.
+  assert_present "$dest/data/feat-x/brief.md" "the repair did not carry the brief to the destination"
+  assert_absent "$origin/data/feat-x" \
+    "the repair left the brief dir in BOTH homes - the duplicate-ownership half of the defect"
+  assert_contains "$out" "brief dir moved" "the repair must name the dir it moved"
+
   run_brief_report "$dest/data/feat-x/brief.md" "done: repaired report"
   assert_landed "$origin" "$dest" feat-x "done: repaired report" "repaired item"
-  pass "re-running a handoff repairs an item routed before the channel travelled"
+  pass "re-running a handoff fully migrates an item routed before the channel travelled"
 }
 
 # --- C. a destination with no fm-status.sh of its own ------------------------
@@ -205,6 +219,59 @@ test_destination_without_its_own_script() {
   pass "the channel moves even when the destination has no fm-status.sh of its own"
 }
 
+# --- D. a routed SCOUT's deliverable ----------------------------------------
+#
+# A scout's channel is not its status file, it is the REPORT. bin/fm-brief.sh
+# pins that as an absolute path, and bin/fm-teardown.sh reads $DATA/$ID/report.md
+# from its OWN home - so a report path left at the origin means the crewmate
+# writes the findings into a home that no longer owns the task (and which the
+# handoff has just emptied), the owning secondmate never sees the deliverable,
+# and its teardown refuses because the report it looks for is not there.
+#
+# Proven the same way as the status arm: take the path THE BRIEF NAMES, write the
+# report to it, and assert whose home it landed in.
+test_routed_scout_reports_to_destination() {
+  local origin dest world named
+  world=$(make_world d own)
+  origin=${world% *}
+  dest=${world#* }
+
+  FM_HOME="$origin" bash "$BRIEF_SH" scout-x demo --scout >/dev/null 2>&1 \
+    || fail "fm-brief.sh must scaffold the scout brief"
+  assert_grep "$origin/data/scout-x/report.md" "$origin/data/scout-x/brief.md" \
+    "fixture precondition: the scout brief must pin the origin's report path"
+
+  FM_HOME="$origin" bash "$HANDOFF" design scout-x >/dev/null \
+    || fail "handoff failed for a scout item"
+
+  # The path the crewmate is told to write to, read back out of the brief it
+  # receives rather than restated here.
+  named=$(grep -m1 -o "/[^\`]*/scout-x/report.md" "$dest/data/scout-x/brief.md")
+  [ -n "$named" ] || fail "the routed scout brief names no absolute report path"
+
+  mkdir -p "$(dirname "$named")"
+  printf 'findings\n' > "$named"
+
+  if [ "${LEDGER_MUTATE:-}" = 1 ]; then
+    assert_present "$origin/data/scout-x/report.md" \
+      "MUTATION: expected the scout report to still land in the ORIGIN home"
+    pass "MUTATION arm reached"
+    return 0
+  fi
+
+  # This is the exact expression bin/fm-teardown.sh reads in the owning home:
+  # $DATA/$ID/report.md, with DATA=<home>/data.
+  assert_present "$dest/data/scout-x/report.md" \
+    "the scout's deliverable did not land where the owning home's teardown reads it"
+  assert_absent "$origin/data/scout-x" \
+    "the scout wrote its report back into the origin home, which no longer owns the task"
+
+  run_brief_report "$dest/data/scout-x/brief.md" "done: scout reported"
+  assert_landed "$origin" "$dest" scout-x "done: scout reported" "routed scout"
+  pass "a routed scout's report lands in the home whose teardown reads it"
+}
+
 test_routed_item_reports_to_destination
 test_rerun_repairs_an_already_routed_item
 test_destination_without_its_own_script
+test_routed_scout_reports_to_destination

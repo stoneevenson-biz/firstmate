@@ -226,8 +226,8 @@ When a secondmate is created for a domain, the existing main-backlog items that 
 Scope-matching is firstmate's judgment against the secondmate's natural-language scope, not a keyword rule.
 Read `data/backlog.md`, pick queued items that fit the scope, and move them with `bin/fm-backlog-handoff.sh <secondmate-id> <item-key>...`.
 Do not hand off `local-only` items; that work stays with the main firstmate (section 7).
-The item's reporting channel travels with it: the helper carries the item's `data/<id>/` dir into the secondmate home and retargets the brief's pinned status command at that home, so the owning supervisor sees the reports.
-Naming an already-routed item again is the repair path for one routed before that existed.
+The item's reporting channel travels with it: the helper carries the item's `data/<id>/` dir into the secondmate home and retargets the brief's pinned channel - the status command, and a scout's absolute report path - at that home, so the owning supervisor sees the reports and its teardown finds the deliverable.
+Naming an already-routed item again is the repair path for one routed before that existed, and fully migrates it.
 For idempotence, destination validation, and refusal of `## In flight` entries, load `secondmate-provisioning`.
 
 ### Project memory ownership

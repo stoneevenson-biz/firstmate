@@ -42,12 +42,23 @@ Two things move together, because either alone leaves the destination half-equip
 Inside the moved brief, every `fm-status.sh` reporting command and every quoted `<key>.status` path is rewritten to name the destination home: its root as `FM_HOME`, its `state` dir as `FM_STATE_OVERRIDE`, and its own `bin/fm-status.sh` when it has one.
 A destination without its own copy of the script keeps whatever script path the command already had — the pins are what decide where the line lands, and naming a file the destination does not have would break a command that otherwise works.
 
+**A scout's channel is not its status file — it is the report.**
+`bin/fm-brief.sh` pins the deliverable as an absolute path (`Write your findings to <home>/data/<id>/report.md`), and `bin/fm-teardown.sh` reads `$DATA/$ID/report.md` from **its own** home.
+So a report path left pointing at the origin is the same defect as a status path left there, with a worse ending: the crewmate writes the findings into a home that no longer owns the task — and which this very handoff has just emptied — the owning secondmate never sees the deliverable, and its teardown then *refuses*, because the report it looks for was never written where it looks.
+Absolute `<key>/report.md` paths are therefore retargeted alongside the status paths.
+A *relative* `data/<key>/report.md` is left alone: it resolves correctly in whichever home reads it, so rewriting it would only add risk.
+
 ## Three decisions worth stating
 
 **The rewrite is a normalisation, not a diff.**
 Every reporting command in the destination brief is rewritten to the destination home *whatever it said before*, and this runs for every requested key — including one already present in the destination backlog, which the mechanical move itself skips.
 So **re-running the handoff is the repair path** for an item routed before this existed: `bin/fm-backlog-handoff.sh <secondmate-id> <item-key>` converges it in place instead of reporting "already present" and leaving the misroute.
 The alternative — repairing only items that happen to move today — would have left every previously routed item silently broken, discoverable one lost report at a time.
+
+The repair is a **full migration**, not just a rewrite.
+The state the pre-fix code actually produced is: line in the destination backlog, `data/<key>/` still in the origin — because the old code moved lines and nothing else.
+So that path has a dir to carry over and an origin copy to drop, exactly like the moving path, and it reports what it did.
+A repair that copied the dir but left the original would swap one half of the defect for the other: instead of one home owning the task and another owning the channel, both homes would hold a copy and neither would be authoritative — the same duplicate-ownership failure, now created by the fix.
 
 **The rewrite is narrow on purpose.**
 It touches the `fm-status.sh` invocation and quoted `<key>.status` paths, and nothing else.
@@ -80,8 +91,15 @@ The destination's own brief is still retargeted — it is the one that will run.
 Not by grepping the brief text.
 Asserting the string changed proves the string changed; it does not prove the channel moved.
 
-`gate-t4-routed-brief-reports-to-destination` scaffolds a real ship brief with the real `bin/fm-brief.sh`, hands the item off, then **extracts the destination brief's own reporting command and runs it**.
-The assertion is where the line landed: the destination home's state dir, and not the origin's.
-It runs that proof three ways — an item routed with its brief, an item routed before this existed (the repair path), and a destination with no `fm-status.sh` of its own.
+`gate-t4-routed-brief-reports-to-destination` scaffolds a real brief with the real `bin/fm-brief.sh`, hands the item off, then **exercises the destination brief's own channel**.
+For a ship task that means extracting the reporting command and running it; for a scout it means taking the report path the brief names and writing the report to it.
+The assertion is where the thing landed: the destination home, and not the origin's.
+
+It runs that proof four ways:
+
+1. an item routed with its brief;
+2. an item in the state the pre-fix code actually produced — line already in the destination backlog, dir still in the origin — where the re-run must fully migrate it, leave no copy behind, and say so. A fixture that pre-copied the dir to the destination would model a state the old code could not reach, and would miss exactly the both-homes defect;
+3. a destination with no `fm-status.sh` of its own;
+4. a routed **scout**, asserting its report lands at `<destination>/data/<key>/report.md` — the exact path the owning home's `bin/fm-teardown.sh` reads — and that nothing is written back into the emptied origin.
 
 `gate-t4-handoff-safety-preserved` holds each pre-existing refusal against the harder case, with a brief dir present in every arm.

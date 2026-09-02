@@ -82,7 +82,8 @@ It refuses any destination that is not a genuine seeded firstmate home with safe
 The item's reporting channel moves with it.
 A brief pins its home into the `bin/fm-status.sh` command, so an item routed with that pin left behind reports into the origin home, where the owning secondmate's watcher never looks.
 The helper therefore also carries the item's `data/<key>/` dir into the secondmate home and retargets every reporting command inside its brief at that home.
-It retargets for every key you name, including one already present at the destination, so **re-running the handoff is the repair path** for an item routed before that behavior existed - name the item again and its channel converges in place.
+A scout's channel is its **report**, not its status file: the brief pins that deliverable as an absolute path and `bin/fm-teardown.sh` reads it from its own home, so the report path is retargeted alongside the status path - otherwise the findings land in a home that no longer owns the task and the owning secondmate's teardown refuses.
+It retargets for every key you name, including one already present at the destination, so **re-running the handoff is the repair path** for an item routed before that behavior existed - name the item again and it is fully migrated: dir carried over, channel converged, no copy left in the origin.
 When both homes hold a `data/<key>/` dir, the destination's is the live copy: it is retargeted but never clobbered, and the origin's stale copy is named in the output rather than removed, for you to delete once you have looked at it.
 See `docs/specs/2026-09-01-routed-brief-home.md`.
 Do not hand off `local-only` items.

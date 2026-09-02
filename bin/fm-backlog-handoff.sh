@@ -17,13 +17,14 @@
 # and task lifecycle.
 #
 # The item's REPORTING CHANNEL moves with it. A brief pins its home into the
-# fm-status.sh command, so an item routed with that pin left behind reports into
-# the origin home, where the owning supervisor's watcher never looks. So this
-# also carries the item's data/<key>/ dir into the destination home and
-# retargets every reporting command inside its brief at that home - for every
-# requested key, including one already there, which makes a re-run the repair
-# path for an item routed before this existed. See the block above
-# retarget_brief.
+# fm-status.sh command - and a scout brief pins its report path the same way -
+# so an item routed with those left behind reports into the origin home, where
+# the owning supervisor's watcher never looks and its teardown never finds the
+# deliverable. So this also carries the item's data/<key>/ dir into the
+# destination home and retargets the channel inside its brief at that home - for
+# every requested key, including one already there, which makes a re-run the
+# full-migration repair path for an item routed before this existed. See the
+# block above retarget_brief.
 # Usage: fm-backlog-handoff.sh <secondmate-id> <item-key>...
 set -eu
 
@@ -255,8 +256,48 @@ brief_home_pins() {
   ' "$file"
 }
 
-# Rewrite <brief> so every fm-status.sh command and every <key>.status path
-# names <home>. Writes to stdout.
+# All absolute paths in <file> ending in /<key>/report.md, one per line.
+#
+# A scout brief names its deliverable as an absolute path (bin/fm-brief.sh), and
+# bin/fm-teardown.sh reads that report from ITS OWN home. So a report path left
+# pointing at the origin is the same defect as a status path left there, with a
+# worse ending: the crewmate writes the findings into a home that no longer owns
+# the task, the owning secondmate never sees them, and its teardown then refuses
+# because the deliverable it looks for was never written where it looks.
+#
+# Only an ABSOLUTE path names a home. A relative data/<key>/report.md resolves
+# correctly in whichever home reads it, so it is left alone.
+brief_report_paths() {
+  local file=$1
+  awk '
+    BEGIN {
+      q = sprintf("%c", 39)
+      key = ENVIRON["FM_HANDOFF_KEY"]
+      # An empty key would make `want` a substring of every path and this scan
+      # never advance. Refusing to scan is the safe direction: the caller
+      # validates the result, so a missed rewrite fails loudly rather than hangs.
+      if (key == "") exit 0
+      want = "/" key "/report.md"
+    }
+    {
+      line = $0
+      while ((p = index(line, want)) > 0) {
+        e = p + length(want)
+        s = p
+        while (s > 1) {
+          c = substr(line, s - 1, 1)
+          if (c == " " || c == "\t" || c == "`" || c == q || c == "\"" || c == "(" || c == "<") break
+          s--
+        }
+        if (substr(line, s, 1) == "/") print substr(line, s, e - s)
+        line = substr(line, e)
+      }
+    }
+  ' "$file"
+}
+
+# Rewrite <brief> so every fm-status.sh command, every <key>.status path and
+# every absolute <key>/report.md path names <home>. Writes to stdout.
 retarget_brief_text() {
   local brief=$1
   awk '
@@ -265,9 +306,15 @@ retarget_brief_text() {
       cmd_re = "(FM_HOME=" q "[^" q "]*" q " )?(FM_STATE_OVERRIDE=" q "[^" q "]*" q " )?bash " q "[^" q "]*fm-status\\.sh" q
       st_re = q "[^" q "]*\\.status" q
       want = "/" ENVIRON["FM_HANDOFF_KEY"] ".status"
+      want_rep = "/" ENVIRON["FM_HANDOFF_KEY"] "/report.md"
       pins = ENVIRON["FM_HANDOFF_PINS"]
       scriptq = ENVIRON["FM_HANDOFF_SCRIPT_Q"]
       statusq = ENVIRON["FM_HANDOFF_STATUS_Q"]
+      reportp = ENVIRON["FM_HANDOFF_REPORT"]
+      # A degenerate key would make want_rep a substring of every path and the
+      # index() scan below never advance. Skipping is the safe direction: the
+      # caller validates the result, so a missed rewrite fails loudly, not hangs.
+      do_rep = (ENVIRON["FM_HANDOFF_KEY"] != "" && reportp != "")
     }
     {
       line = $0
@@ -295,6 +342,23 @@ retarget_brief_text() {
         out = out substr(line, 1, RSTART - 1) rep
         line = substr(line, RSTART + RLENGTH)
       }
+      line = out line
+      out = ""
+      while (do_rep && (p = index(line, want_rep)) > 0) {
+        e = p + length(want_rep)
+        s = p
+        while (s > 1) {
+          c = substr(line, s - 1, 1)
+          if (c == " " || c == "\t" || c == "`" || c == q || c == "\"" || c == "(" || c == "<") break
+          s--
+        }
+        if (substr(line, s, 1) == "/") {
+          out = out substr(line, 1, s - 1) reportp
+        } else {
+          out = out substr(line, 1, e - 1)
+        }
+        line = substr(line, e)
+      }
       print out line
     }
   ' "$brief"
@@ -304,15 +368,16 @@ retarget_brief_text() {
 # moved. A brief whose command shape this cannot rewrite is a hard failure, not
 # a silent pass - a half-routed brief is the exact defect being fixed here.
 retarget_brief() {
-  local brief=$1 key=$2 home=$3 script tmp pin path want_status
+  local brief=$1 key=$2 home=$3 script tmp pin path want_status want_report
   want_status="$home/state/$key.status"
+  want_report="$home/data/$key/report.md"
   script="$home/bin/fm-status.sh"
   if [ ! -f "$script" ]; then
     script=""
   fi
 
-  if [ -z "$(FM_HANDOFF_KEY="$key" brief_status_paths "$brief")$(brief_home_pins "$brief")" ]; then
-    echo "note: $brief names no reporting command; left unchanged" >&2
+  if [ -z "$(FM_HANDOFF_KEY="$key" brief_status_paths "$brief")$(brief_home_pins "$brief")$(FM_HANDOFF_KEY="$key" brief_report_paths "$brief")" ]; then
+    echo "note: $brief names no reporting channel; left unchanged" >&2
     return 0
   fi
 
@@ -321,6 +386,7 @@ retarget_brief() {
   FM_HANDOFF_PINS="FM_HOME=$(shell_quote "$home") FM_STATE_OVERRIDE=$(shell_quote "$home/state")" \
   FM_HANDOFF_SCRIPT_Q="${script:+$(shell_quote "$script")}" \
   FM_HANDOFF_STATUS_Q="$(shell_quote "$want_status")" \
+  FM_HANDOFF_REPORT="$want_report" \
     retarget_brief_text "$brief" > "$tmp" || {
       echo "error: could not retarget the reporting command in $brief" >&2
       return 1
@@ -346,6 +412,16 @@ EOF
     fi
   done <<EOF
 $(FM_HANDOFF_KEY="$key" brief_status_paths "$brief")
+EOF
+
+  while IFS= read -r path; do
+    [ -z "$path" ] && continue
+    if [ "$path" != "$want_report" ]; then
+      echo "error: $brief still names the report file $path after retargeting to $home" >&2
+      return 1
+    fi
+  done <<EOF
+$(FM_HANDOFF_KEY="$key" brief_report_paths "$brief")
 EOF
 }
 
@@ -487,21 +563,49 @@ migrate_all_briefs() {
   done
 }
 
+# The origin's copy is removed only once the destination is whole, so this runs
+# after COMMITTED - never before, and never on a path that might still roll back.
+commit_brief_sources() {
+  local src
+  while IFS= read -r src; do
+    [ -n "$src" ] || continue
+    rm -rf "$src" || echo "warn: could not remove the migrated brief dir $src" >&2
+  done < "$BRIEF_SRC"
+  return 0
+}
+
+# Every path that migrates briefs reports what it did, including the repair path
+# where no backlog line moves. A dir that silently exists in two homes is the
+# duplicate-ownership half of the defect this script exists to fix.
+report_brief_outcome() {
+  if [ "${#BRIEF_MOVED[@]}" -gt 0 ]; then
+    echo "  brief dir moved: ${BRIEF_MOVED[*]}"
+  fi
+  if [ "${#BRIEF_ROUTED[@]}" -gt 0 ]; then
+    echo "  reporting channel retargeted at $SUB_HOME: ${BRIEF_ROUTED[*]}"
+  fi
+  if [ "${#BRIEF_STRANDED[@]}" -gt 0 ]; then
+    echo "  left in place (destination already holds one): ${BRIEF_STRANDED[*]}"
+  fi
+}
+
 BRIEF_MOVED=()
 BRIEF_ROUTED=()
 BRIEF_STRANDED=()
 
 if [ "${#TO_MOVE[@]}" -eq 0 ]; then
   # Nothing to move, but an item routed before the reporting command travelled
-  # with it still points at this home. Re-running the handoff is the repair.
+  # with it still points at this home. Re-running the handoff is the repair, and
+  # it is a FULL migration: the pre-fix code left the line in the destination
+  # backlog and the data/<key>/ dir here, so this path has a dir to carry over
+  # and an origin copy to drop, exactly like the moving path.
   if [ "${#ALREADY[@]}" -gt 0 ]; then
     migrate_all_briefs "${ALREADY[@]}" || exit 1
   fi
   COMMITTED=1
+  commit_brief_sources
   echo "nothing to move: ${ALREADY[*]:-no keys} already present in $SUB_BACKLOG"
-  if [ "${#BRIEF_ROUTED[@]}" -gt 0 ]; then
-    echo "  reporting channel retargeted at $SUB_HOME: ${BRIEF_ROUTED[*]}"
-  fi
+  report_brief_outcome
   exit 0
 fi
 
@@ -583,22 +687,11 @@ migrate_all_briefs "${TO_MOVE[@]}" ${ALREADY[@]+"${ALREADY[@]}"} || exit 1
 COMMITTED=1
 
 # Only now, with the destination whole, is the origin's copy removed.
-while IFS= read -r src; do
-  [ -n "$src" ] || continue
-  rm -rf "$src" || echo "warn: could not remove the migrated brief dir $src" >&2
-done < "$BRIEF_SRC"
+commit_brief_sources
 
 echo "handed off ${#TO_MOVE[@]} item(s) to $ID: ${TO_MOVE[*]}"
 echo "  into $SUB_BACKLOG"
 if [ "${#ALREADY[@]}" -gt 0 ]; then
   echo "  already present (skipped): ${ALREADY[*]}"
 fi
-if [ "${#BRIEF_MOVED[@]}" -gt 0 ]; then
-  echo "  brief dir moved: ${BRIEF_MOVED[*]}"
-fi
-if [ "${#BRIEF_ROUTED[@]}" -gt 0 ]; then
-  echo "  reporting channel retargeted at $SUB_HOME: ${BRIEF_ROUTED[*]}"
-fi
-if [ "${#BRIEF_STRANDED[@]}" -gt 0 ]; then
-  echo "  left in place (destination already holds one): ${BRIEF_STRANDED[*]}"
-fi
+report_brief_outcome

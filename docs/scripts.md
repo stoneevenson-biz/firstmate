@@ -9,7 +9,7 @@ Each file also starts with a short header comment.
 | `fm-boot-context.sh`     | Strictly read-only `SessionStart` boot-context emitter: fleet identity for every session, steering detail only for the session that holds the lock, under a hard wall-clock budget |
 | `fm-fleet-sync.sh`       | Fetch clones, clean-fast-forward their checked-out default branches, and safely prune branches whose remote is gone |
 | `fm-update.sh`           | Self-update the running firstmate repo and registered secondmate homes with fast-forward-only pulls from origin     |
-| `fm-backlog-handoff.sh`  | Move already-judged in-scope queued backlog items from the main home into a seeded secondmate home, carrying each item's `data/<key>/` dir with it and retargeting the brief's pinned reporting command at the destination home; a re-run repairs an item routed before that travelled |
+| `fm-backlog-handoff.sh`  | Move already-judged in-scope queued backlog items from the main home into a seeded secondmate home, carrying each item's `data/<key>/` dir with it and retargeting the brief's pinned channel - status command and a scout's absolute report path - at the destination home; a re-run fully migrates an item routed before that travelled |
 | `fm-brief.sh`            | Scaffold a ship brief with a worktree-isolation assertion, a report-only scout brief with `--scout`, or a secondmate charter with `--secondmate` |
 | `fm-ensure-agents-md.sh` | Ensure project `AGENTS.md` is the real memory file and `CLAUDE.md` symlinks to it                                   |
 | `fm-guard.sh`            | Warn when the primary checkout is tangled, when queued wakes are pending, or when a stale or missing watcher needs a prominent banner |
