@@ -78,3 +78,5 @@
 | gate-h13-workspace-lookup-fails-closed | frozen | Workspace lookup fails closed: an unreadable listing refuses instead of reading as an empty fleet |
 | gate-c1-helm-writer-only | green | The helm is a writer-only seam that CLAIMS: drive verbs refuse under a live foreign holder, boot paths never do |
 | gate-c2-helm-take-and-isolation | green | Exclusivity under a real race, --take only against a dead holder, no redirect bypass, and a secondmate's own helm |
+| gate-t4-landed-steer-not-reported-swallowed | green | A steer that landed is reported as delivered, not as a swallowed Enter |
+| gate-t4-swallowed-enter-still-refused | green | A genuinely swallowed Enter is still refused: the false negative was not traded for a false positive |
