@@ -73,3 +73,6 @@
 | gate-t2-merge-argv-egress | frozen | The finished merge argv is re-read before exec and must pin the resolved target exactly once |
 | gate-t4-routed-brief-reports-to-destination | frozen | A routed item's brief reports into the destination home, not the origin |
 | gate-t4-handoff-safety-preserved | frozen | Routing the channel did not weaken any handoff refusal |
+| gate-h11-doctrine-renders-the-constants | frozen | Doctrine: the rules are RENDERED from the constants that enforce them, never restated beside them |
+| gate-h12-name-plans-then-applies-atomically | frozen | `name` plans by default and applies both slots or neither, rolling the tab back when the agent rename is refused |
+| gate-h13-workspace-lookup-fails-closed | frozen | Workspace lookup fails closed: an unreadable listing refuses instead of reading as an empty fleet |

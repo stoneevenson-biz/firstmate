@@ -44,7 +44,8 @@ One workspace per project, resolved explicitly from the project name and created
 Each pane is named `<project>-<work>` in kebab-case under 28 characters - `afs-resource-registry`, `firstmate-fleet-view` - because herdr addresses an agent by that name.
 `fm-spawn.sh --name <work>` supplies the work half; without it the half is derived from the task id by dropping its random `-<letter><digit>` suffix.
 The task id itself stays in `state/<id>.meta`, which also records the pane id in `window=` and marks the crewmate `mux=herdr`; firstmate keeps addressing crewmates as `fm-<id>` and resolves them through that file.
-`bin/fm-herdr.sh --name <pane> <project> <work>` renames a live pane to the same convention.
+`bin/fm-herdr.sh --name <pane> <project> <work>` prints what it would rename a live pane to, and `--apply` renames it - both slots or neither, rolling the tab label back if herdr refuses the agent address, since a pane whose visible name reaches nothing is worse than one that is unnamed.
+`bin/fm-herdr.sh doctrine` prints those rules rendered from the constants that enforce them - the regex herdr applies to an agent address, the width budget, the tier vocabulary, the rename order - so an agent learns them from the script rather than from prose that has drifted.
 
 There is no automatic fallback to a headless surface.
 When no herdr server is reachable for the session the verbs actually use, `fm_herdr_require` fails and the spawn stops with nothing created - no window, no tab, no meta - because believing you are watching the fleet while work lands somewhere invisible is worse than being told it cannot start.

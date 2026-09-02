@@ -150,8 +150,39 @@ fm_herdr_field() {  # <json> <key>
 # 28 chars keeps the name readable in herdr's sidebar (sidebar_width 30) and
 # inside the 32-char address limit at once. No task suffix — the id lives in
 # state/<id>.meta, which is where an id belongs.
+#
+# THE CONSTANTS BELOW ARE THE RULES. Everything that enforces a naming or
+# addressing rule reads one of them, and `fm-herdr.sh doctrine` RENDERS them
+# rather than describing them, so the rule an agent is told and the rule the
+# script applies cannot disagree. A second copy written out in prose is the
+# defect that made this necessary: this rule already has more copies than
+# implementations - AGENTS.md, the plan, docs/, this file's own comments - and a
+# copy is the thing that drifts. The slash convention survived in prose after the
+# binary had started rejecting it, which is how a pane ends up unaddressable.
 
+# herdr's OWN constraint on an agent address, verified against herdr 0.8.2:
+# `agent rename` refuses anything else with invalid_agent_name, which is what
+# proved the old `<project>/<work>` convention unusable.
+fm_herdr_name_re='^[a-z][a-z0-9_-]{0,31}$'
+
+# firstmate's tighter budget, inside that constraint.
 fm_herdr_name_max=28
+
+# The shape of a herdr PANE ID, and the discriminator that keeps a tmux
+# session:window off the herdr verbs (see fm_herdr_resolve for why both halves
+# are base-36 uppercase and why the match is anchored).
+fm_herdr_pane_id_re='^w[0-9A-Z]+:p[0-9A-Z]+$'
+
+# herdr's object tiers, outermost first. A target is addressed THROUGH these,
+# and each one has a firstmate rule attached to it (fm_herdr_tier_rule).
+fm_herdr_tiers='session workspace tab pane'
+
+# The order in which `name` mutates its two objects, and it is load-bearing:
+# a rollback can only restore a value it can READ BACK, and herdr 0.8.2's
+# AgentInfo carries no name field at all (the readable name lives on the TAB).
+# So the tab - the slot whose prior value `tab get` returns - goes first, and it
+# is the one that can be put back when the agent rename is refused.
+fm_herdr_name_order='tab agent'
 
 # Sanitize one half of a name. Anything herdr would reject is removed here
 # rather than discovered at rename time. A LEADING DIGIT IS KEPT: herdr's
@@ -209,14 +240,16 @@ fm_herdr_pane_name() {  # <project-short> <work...>
   printf '%s-%s' "$proj" "$work"
 }
 
-# 0 when a name is one herdr will actually accept as an agent address. This is
-# the check a slash fails, and the reason the separator is a hyphen.
+# 0 when a name is one herdr will actually accept as an agent address, AND one
+# that fits firstmate's budget. This is the check a slash fails, and the reason
+# the separator is a hyphen.
+#
+# It tests the regex ITSELF rather than a hand-rolled transcription of it into
+# case globs. The transcription was correct, but it was a second copy of the
+# rule sitting beside the first, and `doctrine` can only render what the check
+# actually applies if there is one thing to render.
 fm_herdr_name_valid() {  # <name>
-  case "$1" in
-    '' ) return 1 ;;
-    *[!a-z0-9_-]* ) return 1 ;;
-    [!a-z]* ) return 1 ;;
-  esac
+  [[ $1 =~ $fm_herdr_name_re ]] || return 1
   [ "${#1}" -le "$fm_herdr_name_max" ]
 }
 
@@ -241,31 +274,131 @@ fm_herdr_name_valid() {  # <name>
 # Ids are never hardcoded: `wJ` is a runtime value that does not survive a
 # server restart.
 
-fm_herdr_workspace_id() {  # <label>
-  herdr workspace list 2>/dev/null | tr '{' '\n' \
-    | grep -F "\"label\":\"$1\"" \
-    | sed -n 's/.*"workspace_id":"\([^"]*\)".*/\1/p' | head -1
+# THE ONE READER of `herdr workspace list`, and the only place its failure is
+# judged. It prints the listing one workspace record per line.
+#
+# AND IT FAILS CLOSED, which is the whole reason it exists. Every lookup below
+# used to run its own `herdr workspace list 2>/dev/null | grep` and read the
+# silence of a failed call as "no such workspace" - so a herdr that was down,
+# restarting, or answering something this parser does not understand looked
+# exactly like a fleet with no workspaces, and the caller's next move on that
+# answer is to CREATE one. A dropped socket would have duplicated the project's
+# workspace and split its panes across the two, which is worse than the missing
+# workspace the create was meant to fix.
+#
+# "There are no workspaces" and "I could not ask" are opposite answers, so they
+# get different return codes and only the first one may be acted on:
+#   0  the listing was read; its records are on stdout (possibly none)
+#   2  the listing could not be read, or is not a workspace listing
+#
+# The envelope is what proves it was read: `workspaces` is the array key the
+# real binary always emits, empty list included, so its presence separates a
+# genuinely empty fleet from a truncated, garbled or error response - which no
+# exit code alone can do, since a CLI that prints an error envelope and exits 0
+# is a shape herdr has shipped before.
+fm_herdr_workspace_records() {
+  local out rc=0 ok=1 arr recs
+  out=$(herdr workspace list 2>/dev/null) || rc=$?
+  [ "$rc" = 0 ] || ok=0
+
+  # THE ENVELOPE, AND THE ARRAY IT MUST ACTUALLY CLOSE.
+  #
+  # A substring test for `"workspaces":` is not structure, and the difference is
+  # not academic: `{"result":{"workspaces":BROKEN}}` and a listing truncated
+  # mid-record both carry that substring, both exit 0, and both then yield no
+  # records - which reads as an EMPTY FLEET, the one answer that licenses a
+  # create. That is the same duplicate-workspace defect this reader exists to
+  # remove, arriving through the door the reader left open.
+  #
+  # So: the opener must be there, a `]` must close it, and the payload must end
+  # where a JSON object ends. A stream cut off part way satisfies none of those.
+  case "$out" in
+    *'"workspaces":['*']'*'}') : ;;
+    *) ok=0 ;;
+  esac
+
+  # The array itself, and only it - which also keeps a field OUTSIDE the array
+  # (a `focused_workspace_id`, say) from answering for a workspace record.
+  # Slicing at the first `]` means a label containing `]` truncates its own
+  # record; the per-record check below then REFUSES, rather than silently
+  # under-reporting the fleet. Fail closed is the right direction for a shape
+  # this parser cannot read.
+  arr=${out#*'"workspaces":['}
+  arr=${arr%%']'*}
+
+  # EVERY record carries a complete id, or this is not a listing. This is the
+  # check a substring test cannot make: `[{"label":"afs","workspace_` has the
+  # opener, has a record, and yields no id at all.
+  recs=$(printf '%s\n' "$arr" | tr '{' '\n' | grep '[^[:space:],]') || recs=""
+  if [ -n "$recs" ] && printf '%s\n' "$recs" | grep -qv '"workspace_id":"[^"]\{1,\}"'; then
+    ok=0
+  fi
+
+  # ONE place decides, so there is one thing to read - and one thing a mutation
+  # test has to remove to prove the fail-closed direction is load-bearing.
+  [ "$ok" = 1 ] || return 2
+  [ -z "$recs" ] || printf '%s\n' "$recs"
 }
 
+# The id of the workspace LABELLED <label>. One owner of that question.
+#   0 the id is on stdout · 1 no workspace carries that label · 2 cannot tell
+fm_herdr_workspace_id() {  # <label>
+  local recs id
+  recs=$(fm_herdr_workspace_records) || return 2
+  id=$(printf '%s\n' "$recs" | grep -F "\"label\":\"$1\"" \
+        | sed -n 's/.*"workspace_id":"\([^"]*\)".*/\1/p' | head -1)
+  [ -n "$id" ] || return 1
+  printf '%s' "$id"
+}
+
+# Is <workspace-id> a live workspace? Same reader, same three answers.
+#
+# The id is READ OUT of each record and compared whole, rather than grepped for
+# as a substring of the listing: a blob-grep for `"workspace_id":"wM"` also
+# matches any other field that happens to quote that id, and a partial id
+# matches a longer one.
+#   0 live · 1 no such workspace · 2 cannot tell
 fm_herdr_workspace_exists() {  # <workspace-id>
-  herdr workspace list 2>/dev/null | tr '{' '\n' | grep -qF "\"workspace_id\":\"$1\""
+  local recs
+  recs=$(fm_herdr_workspace_records) || return 2
+  printf '%s\n' "$recs" \
+    | sed -n 's/.*"workspace_id":"\([^"]*\)".*/\1/p' \
+    | grep -qxF -- "$1"
 }
 
 fm_herdr_workspace_for() {  # <project-label> <cwd>
-  local label=$1 cwd=${2:-} ws out
+  local label=$1 cwd=${2:-} ws out rc=0
   if [ -n "${FM_HERDR_WORKSPACE:-}" ]; then
-    ws=$(fm_herdr_workspace_id "$FM_HERDR_WORKSPACE")
+    ws=$(fm_herdr_workspace_id "$FM_HERDR_WORKSPACE") || rc=$?
+    if [ "$rc" = 2 ]; then
+      echo "fm-herdr: could not read herdr's workspace list; refusing to resolve FM_HERDR_WORKSPACE='$FM_HERDR_WORKSPACE'" >&2
+      return 1
+    fi
     [ -n "$ws" ] || ws=$FM_HERDR_WORKSPACE
-    if fm_herdr_workspace_exists "$ws"; then printf '%s' "$ws"; return 0; fi
+    rc=0; fm_herdr_workspace_exists "$ws" || rc=$?
+    case "$rc" in
+      0) printf '%s' "$ws"; return 0 ;;
+      2) echo "fm-herdr: could not read herdr's workspace list; refusing to resolve FM_HERDR_WORKSPACE='$FM_HERDR_WORKSPACE'" >&2
+         return 1 ;;
+    esac
     echo "fm-herdr: FM_HERDR_WORKSPACE='$FM_HERDR_WORKSPACE' matches no live workspace" >&2
     return 1
   fi
-  ws=$(fm_herdr_workspace_id "$label")
-  if [ -n "$ws" ]; then printf '%s' "$ws"; return 0; fi
+  rc=0
+  ws=$(fm_herdr_workspace_id "$label") || rc=$?
+  case "$rc" in
+    0) printf '%s' "$ws"; return 0 ;;
+    # NOT a create. An unreadable listing is not an empty one, and creating on
+    # it duplicates a workspace that is probably already there.
+    2) echo "fm-herdr: could not read herdr's workspace list, so whether '$label' already has a workspace is unknown." >&2
+       echo "  NOT creating one: an unreadable listing is not an empty one, and creating on it splits the" >&2
+       echo "  project's panes across two workspaces. Check the herdr server, then retry." >&2
+       return 1 ;;
+  esac
   out=$(herdr workspace create --cwd "$cwd" --label "$label" --no-focus 2>&1) || {
     echo "fm-herdr: could not create workspace '$label': $out" >&2; return 1; }
   ws=$(fm_herdr_field "$out" workspace_id)
-  [ -n "$ws" ] || ws=$(fm_herdr_workspace_id "$label")
+  [ -n "$ws" ] || ws=$(fm_herdr_workspace_id "$label") || true
   [ -n "$ws" ] || { echo "fm-herdr: created workspace '$label' but no id came back" >&2; return 1; }
   printf '%s' "$ws"
 }
@@ -497,11 +630,12 @@ fm_herdr_read() {  # <pane> [lines] [source]
 # `web:pane1` and `wide:print`, which are tmux session:window pairs. Keeping the
 # lowercase words on the tmux side is what stops herdr verbs being aimed at them.
 #
-# ONE OWNER. fm_herdr_resolve asks this, and so does the context watchdog's
-# fire-time confirmation; a second copy of the pattern is how the two would come
-# to disagree about the same pane.
+# ONE OWNER, and it is the constant. fm_herdr_resolve asks this predicate, the
+# context watchdog's fire-time confirmation asks it, and `doctrine` RENDERS the
+# very pattern it applies (fm_herdr_pane_id_re) - a second copy of the shape is
+# how any two of the three would come to disagree about the same pane.
 fm_herdr_is_pane_id() {  # <target>
-  [[ $1 =~ ^w[0-9A-Z]+:p[0-9A-Z]+$ ]]
+  [[ $1 =~ $fm_herdr_pane_id_re ]]
 }
 
 fm_herdr_cwd() {  # <pane>
@@ -553,6 +687,45 @@ fm_herdr_launch_failed() {  # <pane>
     | grep -qiE 'parse error|command not found|syntax error near|no such file or directory'
 }
 
+# The label a tab is carrying right now. The ONLY one of the two slots whose
+# prior value can be read back - herdr 0.8.2's AgentInfo has no name field at
+# all - which is what fixes the order the two renames happen in.
+fm_herdr_tab_label() {  # <tab-id>
+  fm_herdr_field "$(herdr tab get "$1" 2>/dev/null)" label
+}
+
+# Rename ONE slot. Split out so the order in fm_herdr_name_order is the thing
+# that decides which happens first, rather than the order two calls happen to
+# be written in.
+#   0 renamed · 1 no agent to rename YET (agent slot only) · 2 refused
+fm_herdr_rename_slot() {  # <slot> <pane> <tab> <name>
+  local slot=$1 pane=$2 tab=$3 name=$4 out
+  case "$slot" in
+    tab)
+      if ! out=$(herdr tab rename "$tab" "$name" 2>&1); then
+        echo "fm-herdr: tab rename failed for $tab: $out" >&2
+        return 2
+      fi ;;
+    agent)
+      # The agent rename can legitimately be early: herdr classifies an agent a
+      # beat after launch, so agent_not_found here means "not yet", not
+      # "refused". Any OTHER failure - a duplicate name, a permission error, a
+      # server problem - leaves the pane without the address it is supposed to
+      # be steered by, and must be reported. Returning 1 for all of them told
+      # the caller every failure was harmless startup lag.
+      if ! out=$(herdr agent rename "$pane" "$name" 2>&1); then
+        case "$out" in
+          *agent_not_found*) return 1 ;;
+          *)
+            echo "fm-herdr: agent rename refused for $pane -> '$name': $out" >&2
+            return 2 ;;
+        esac
+      fi ;;
+    *) echo "fm-herdr: unknown name slot '$slot'" >&2; return 2 ;;
+  esac
+  return 0
+}
+
 # Name the pane for the work. The SAME name goes in both slots — the tab label
 # the captain reads, and the socket-API address herdr steers by.
 #
@@ -560,13 +733,21 @@ fm_herdr_launch_failed() {  # <pane>
 # the exact defect this naming exists to remove, so it is never assumed. The
 # agent rename is best effort by timing alone — herdr classifies an agent a beat
 # after launch — and a spawn must not die waiting for it.
-# Returns: 0 both named; 1 tab named but herdr has not classified an agent yet;
-# 2 a real refusal - the tab rename failed, or the agent rename was refused for
-# any reason other than the agent not existing yet.
+#
+# BUT A REFUSAL IS NOT BEST EFFORT. Two objects are renamed, so a failure
+# between them leaves a pane whose visible name reaches nothing - the
+# mystery-agent state this naming exists to remove, and worse than an unnamed
+# pane, because the captain would address the name he can see. So the slot whose
+# prior value can be read back goes first (fm_herdr_name_order) and is rolled
+# back when the second is refused.
+# Returns: 0 both named; 1 the first slot named but herdr has not classified an
+# agent yet; 2 a real refusal - the first rename failed, or the second was
+# refused for any reason other than the agent not existing yet, in which case
+# the first is rolled back.
 fm_herdr_label() {  # <pane> <name>
-  local pane=$1 name=$2 tab out
+  local pane=$1 name=$2 tab first second prior rc=0
   if ! fm_herdr_name_valid "$name"; then
-    echo "fm-herdr: '$name' is not a valid pane name (want ^[a-z][a-z0-9_-]{0,$((fm_herdr_name_max-1))}$)" >&2
+    echo "fm-herdr: '$name' is not a valid pane name (want $fm_herdr_name_re, at most $fm_herdr_name_max chars)" >&2
     return 2
   fi
   tab=$(fm_herdr_field "$(herdr pane get "$pane" 2>/dev/null)" tab_id)
@@ -574,25 +755,41 @@ fm_herdr_label() {  # <pane> <name>
     echo "fm-herdr: no tab found for $pane; cannot name it" >&2
     return 2
   fi
-  if ! out=$(herdr tab rename "$tab" "$name" 2>&1); then
-    echo "fm-herdr: tab rename failed for $tab: $out" >&2
-    return 2
+
+  # THE ORDER, and the rollback. Two objects are renamed and only one of them
+  # can be put back, so the one that can goes first: the tab's prior label is
+  # readable with `tab get`, an agent's prior name is not readable at all.
+  first=${fm_herdr_name_order%% *}
+  second=${fm_herdr_name_order##* }
+  prior=""
+  if [ "$first" = tab ]; then prior=$(fm_herdr_tab_label "$tab"); fi
+
+  fm_herdr_rename_slot "$first" "$pane" "$tab" "$name" || return $?
+
+  rc=0
+  fm_herdr_rename_slot "$second" "$pane" "$tab" "$name" || rc=$?
+  case "$rc" in
+    0) return 0 ;;
+    # "not yet" is not a failure: the first slot carries the name and herdr has
+    # simply not classified an agent in the pane. Nothing to undo.
+    1) return 1 ;;
+  esac
+
+  # A REFUSAL, so the first rename is undone. A pane whose tab reads
+  # `booking-fix` while herdr still steers it by something else is the
+  # mystery-agent state the naming rule exists to remove, and leaving it behind
+  # is worse than leaving the pane unnamed - the captain would address the name
+  # he can see and reach nothing.
+  if [ -n "$prior" ]; then
+    if fm_herdr_rename_slot "$first" "$pane" "$tab" "$prior" >/dev/null 2>&1; then
+      echo "fm-herdr: rolled the $first back to '$prior'; nothing is half-named" >&2
+    else
+      echo "fm-herdr: could NOT roll the $first back to '$prior'; $pane is half-named as '$name'" >&2
+    fi
+  else
+    echo "fm-herdr: could not read the $first's previous name, so it keeps '$name' while the $second does not" >&2
   fi
-  # The agent rename can legitimately be early: herdr classifies an agent a beat
-  # after launch, so agent_not_found here means "not yet", not "refused". Any
-  # OTHER failure - a duplicate name, a permission error, a server problem -
-  # leaves the pane without the address it is supposed to be steered by, and
-  # must be reported. Returning 1 for all of them told the caller every failure
-  # was harmless startup lag.
-  if ! out=$(herdr agent rename "$pane" "$name" 2>&1); then
-    case "$out" in
-      *agent_not_found*) return 1 ;;
-      *)
-        echo "fm-herdr: agent rename refused for $pane -> '$name': $out" >&2
-        return 2 ;;
-    esac
-  fi
-  return 0
+  return 2
 }
 
 # ALREADY GONE IS A SUCCESSFUL CLOSE. The desired end state is "no such pane",
@@ -755,6 +952,87 @@ fm_herdr_drain_pending() {  # <state-dir>
   return 1
 }
 
+# --- doctrine ---------------------------------------------------------------
+#
+# `fm-herdr.sh doctrine` prints the rules this script enforces, so an agent
+# learns them from the BINARY rather than from prose somewhere else that has
+# drifted. That only works if the output is RENDERED FROM THE ENFORCING VALUES:
+# a heredoc of hand-written rules beside the code is a second copy, and the
+# second copy is the one that goes stale. It is not a hypothetical: the
+# `<project>/<work>` convention stayed in prose after herdr had started refusing
+# it with invalid_agent_name, and prose is what an agent reads.
+#
+# So every rule with a value in it interpolates the same variable the
+# enforcement path reads (fm_herdr_name_re, fm_herdr_name_max,
+# fm_herdr_pane_id_re, fm_herdr_tiers, fm_herdr_name_order), and the PROOF
+# section does not describe fm_herdr_name_valid at all - it CALLS it and prints
+# what it answered. A rule change that this output does not follow is not
+# possible; a rule change that the proof contradicts shows up as a wrong answer
+# in the proof.
+
+# The firstmate rule attached to each of herdr's object tiers. The VOCABULARY is
+# fm_herdr_tiers, so a tier that gains or loses a rule cannot silently drop out
+# of the rendering.
+fm_herdr_tier_rule() {  # <tier>
+  case "$1" in
+    session)
+      printf 'pinned by FM_HERDR_SESSION, which EXPORTS HERDR_SESSION so the probe and the verbs cannot diverge' ;;
+    workspace)
+      printf 'one per project, resolved by label (FM_HERDR_WORKSPACE overrides), created when absent - never by focus' ;;
+    tab)
+      printf 'carries the pane name as its label: the half the captain reads' ;;
+    pane)
+      printf 'the address every agent verb takes; a herdr pane id matches %s' "$fm_herdr_pane_id_re" ;;
+    *)
+      printf 'no rule is recorded for this tier' ;;
+  esac
+}
+
+# One proof row: the name, and what the validator actually said about it.
+fm_herdr_doctrine_proof() {  # <name> [display]
+  local name=$1 shown=${2:-$1} verdict=refused
+  # An `if`, not `valid && verdict=accepted`: the refused rows are the point of
+  # this section, and a construct whose exit status is the VERDICT is one
+  # `set -o errexit` change away from ending the render half way through.
+  if fm_herdr_name_valid "$name"; then verdict=accepted; fi
+  printf '  %-34s %s\n' "$shown" "$verdict"
+}
+
+fm_herdr_doctrine() {
+  local tier n long toolong
+  n=0; long=""
+  while [ "$n" -lt "$fm_herdr_name_max" ]; do long="${long}a"; n=$((n + 1)); done
+  toolong="${long}a"
+
+  printf 'fm-herdr doctrine - rendered from the constants this script enforces.\n'
+  printf 'Nothing below is a second copy: change a constant and this output changes with it.\n\n'
+
+  printf 'TIERS   a target is addressed through these, outermost first\n'
+  for tier in $fm_herdr_tiers; do
+    printf '  %-10s %s\n' "$tier" "$(fm_herdr_tier_rule "$tier")"
+  done
+
+  printf '\nNAMES   the pane name is the ADDRESS, not decoration - herdr steers agents by it\n'
+  printf '  %-10s %s\n' shape    '<project-short>-<what-the-work-is>, kebab-case, one hyphen, never a slash'
+  printf '  %-10s %s   (fm_herdr_name_re; herdr 0.8.2 agent rename refuses anything else)\n' accepted "$fm_herdr_name_re"
+  printf '  %-10s %s characters or fewer   (fm_herdr_name_max)\n' budget "$fm_herdr_name_max"
+  printf '  %-10s %s\n' id 'stays in state/<id>.meta - never in the name'
+
+  printf '\nMUTATION  every verb plans by default; --apply is the only thing that changes anything\n'
+  printf '  %-10s renames the %s, then the %s; a refused %s rename rolls the %s back, so nothing is half-named\n' \
+    name "${fm_herdr_name_order%% *}" "${fm_herdr_name_order##* }" \
+    "${fm_herdr_name_order##* }" "${fm_herdr_name_order%% *}"
+  printf '  %-10s %s\n' reconcile 'creates the one workspace each registered project is missing'
+  printf '  %-10s %s\n' lookups   'fail closed: an unreadable workspace list refuses; it is never read as an empty fleet'
+
+  printf '\nPROOF   fm_herdr_name_valid, called rather than described\n'
+  fm_herdr_doctrine_proof afs-resource-registry
+  fm_herdr_doctrine_proof afs/resource-registry
+  fm_herdr_doctrine_proof 2fa-login
+  fm_herdr_doctrine_proof "$long" "a x $fm_herdr_name_max (the budget)"
+  fm_herdr_doctrine_proof "$toolong" "a x $((fm_herdr_name_max + 1)) (one over)"
+}
+
 # --- the reconcile CLI ------------------------------------------------------
 #
 # Everything above is a library, and below runs only when this file is EXECUTED,
@@ -790,14 +1068,46 @@ fm_herdr_cli() {
     fm_herdr_up || die "no herdr server is running — run \`herdr\` to start or attach it, then retry"
   }
 
+  # --apply IS THE MUTATION FLAG FOR THE WHOLE CLI, so it comes off the argument
+  # list before anything dispatches on what is left.
+  #
+  # THE DEFECT THIS REMOVES. Each verb used to read the flag for itself, and the
+  # dispatch looked only at $1 - so `--apply --name <pane> <project> <work>`
+  # matched no verb, fell through to the workspace reconcile, and the reconcile
+  # then read the same flag and CREATED WORKSPACES. An operator asking to rename
+  # one pane got a different mutating verb, silently, with exit 0. One flag, one
+  # owner, and position cannot change which verb runs.
+  local APPLY=0 cli_args=() a
+  for a in "$@"; do
+    if [ "$a" = "--apply" ]; then APPLY=1; else cli_args+=("$a"); fi
+  done
+  set -- ${cli_args[@]+"${cli_args[@]}"}
+
+  # doctrine: print the rules, from the constants that enforce them. It reads
+  # nothing and touches nothing, so it deliberately does NOT require a server -
+  # an agent asking what the rules are is the one question that must always have
+  # an answer.
+  if [ "${1:-}" = doctrine ]; then
+    fm_herdr_doctrine
+    exit 0
+  fi
+
   # --name: apply the naming convention to a live agent pane. Names BOTH slots -
   # the tab label the captain reads and the address herdr steers by - with the
   # same string, because they are the same name.
+  #
+  # PLAN BY DEFAULT, like every other verb here. This one used to mutate on
+  # sight, which made the two halves of the same CLI disagree about what running
+  # it bare does: `fm-herdr.sh` printed a plan, `fm-herdr.sh --name ...` renamed
+  # a live pane. And it mutates TWO objects, so a mistake is not one rename to
+  # undo - it is a pane whose tab says one thing while herdr steers it by
+  # another. --apply is the whole difference.
   if [ "${1:-}" = "--name" ]; then
+    shift
     require_server
-    [ $# -ge 4 ] || die "usage: --name <pane> <project-short> <what-the-work-is>"
-    local pane=$2 proj=$3 name untruncated label_rc
-    shift 3
+    [ $# -ge 3 ] || die "usage: --name <pane> <project-short> <what-the-work-is> [--apply]"
+    local pane=$1 proj=$2 name untruncated label_rc
+    shift 2
     name=$(fm_herdr_pane_name "$proj" "$*")
     [ -n "$name" ] || die "'$proj' + '$*' leaves nothing usable as a name"
     # Refuse an unreadably long name rather than silently truncating it: a name
@@ -805,29 +1115,36 @@ fm_herdr_cli() {
     # one. (fm_herdr_pane_name truncates for callers that must not fail, e.g. a
     # spawn, where a cosmetic name must never abort the work.)
     untruncated=$(fm_herdr_full_name "$proj" "$*")
-    [ "${#untruncated}" -le 28 ] \
-      || die "'$untruncated' is ${#untruncated} chars; keep it under 28, e.g. afs-resource-registry"
+    [ "${#untruncated}" -le "$fm_herdr_name_max" ] \
+      || die "'$untruncated' is ${#untruncated} chars; keep it to $fm_herdr_name_max, e.g. afs-resource-registry"
     fm_herdr_name_valid "$name" \
-      || die "'$name' is not a name herdr will accept as an address (want ^[a-z][a-z0-9_-]{0,31}$ - a slash is rejected)"
+      || die "'$name' is not a name herdr will accept as an address (want $fm_herdr_name_re, at most $fm_herdr_name_max chars - a slash is rejected)"
+    if [ "$APPLY" != 1 ]; then
+      printf 'would name %s -> %s (the %s, then the %s)\n' \
+        "$pane" "$name" "${fm_herdr_name_order%% *}" "${fm_herdr_name_order##* }"
+      printf 'plan only: nothing was renamed. Run with --apply to apply it.\n'
+      exit 0
+    fi
     label_rc=0
     fm_herdr_label "$pane" "$name" || label_rc=$?
     case "$label_rc" in
       0) printf 'named %s -> %s\n' "$pane" "$name" ;;
       # rc=1 is not a refusal: the tab carries the name and herdr has simply not
       # classified an agent in the pane yet.
-      1) printf 'named %s -> %s (tab only; no agent detected in the pane yet)\n' "$pane" "$name" ;;
+      1) printf 'named %s -> %s (%s only; no agent detected in the pane yet)\n' \
+           "$pane" "$name" "${fm_herdr_name_order%% *}" ;;
       *) die "herdr did not accept '$name' for $pane" ;;
     esac
     exit 0
   fi
 
-  # Default: reconcile one workspace per project against data/projects.md.
-  local APPLY=0
-  [ "${1:-}" = "--apply" ] && APPLY=1
+  # Default: reconcile one workspace per project against data/projects.md. Its
+  # --apply is the same flag every other verb here reads, taken off the argument
+  # list at the top rather than re-parsed per verb.
   [ -f "$REGISTRY" ] || die "no project registry at $REGISTRY"
   require_server
 
-  local made=0 skipped=0 missing=0 name cwd
+  local made=0 skipped=0 missing=0 name cwd ws_id ws_rc
   printf '%-26s %-9s %s\n' PROJECT STATUS CWD
   printf '%-26s %-9s %s\n' "-------" "------" "---"
   while IFS= read -r name; do
@@ -840,7 +1157,17 @@ fm_herdr_cli() {
     # raw listing treated `-` as a word boundary, so project `fm` matched a
     # workspace labelled `fm-x` and was reported as already present - it never got
     # its own workspace, and its first spawn landed in someone else's.
-    if [ -n "$(fm_herdr_workspace_id "$name")" ]; then
+    #
+    # ITS THIRD ANSWER IS THE ONE THAT MATTERS HERE. rc=2 is "the listing could
+    # not be read", which is not "this project has no workspace" - and acting on
+    # it would create a second workspace for every project that already has one.
+    # It is a whole-run condition, not a per-row one, so it stops the run.
+    ws_rc=0
+    ws_id=$(fm_herdr_workspace_id "$name") || ws_rc=$?
+    if [ "$ws_rc" = 2 ]; then
+      die "could not read herdr's workspace list; refusing to reconcile against an unreadable fleet (creating on it would duplicate every project's workspace)"
+    fi
+    if [ -n "$ws_id" ]; then
       printf '%-26s %-9s %s\n' "$name" "exists" "$cwd"; skipped=$((skipped+1)); continue
     fi
     if [ "$APPLY" = 1 ]; then

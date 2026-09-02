@@ -40,6 +40,15 @@
 #   HERDR_PANE_FILE   file whose contents `agent read`/`pane read` return
 #   HERDR_RUN_MODE    echo|deaf|cmd - what the pane's shell does with `pane run`
 #   HERDR_READ_FAIL   1 -> both `agent read` and `pane read` refuse
+#   HERDR_WS_RC       exit code for `workspace list` (default 0) - a listing the
+#                     caller could not READ, which is not an empty fleet
+#   HERDR_WS_RAW      raw text `workspace list` answers with instead of a
+#                     listing - an error envelope, or a truncated line
+#   HERDR_TAB_LABEL   the label `tab get` reports (default herdr's numeric `1`)
+#   HERDR_RENAME_REFUSE  1 -> `agent rename` refuses a VALID name, the way a
+#                     duplicate address does; the only route to a half-named pane
+#                     (HERDR_NO_AGENT=1 instead makes `agent rename` answer
+#                     agent_not_found, which is "not classified yet", not refused)
 #   CALLS             file every invocation's argv is appended to
 #
 # EVERY error envelope goes to STDERR, as the real binary's does, and no branch
@@ -141,7 +150,15 @@ case "$1 $2" in
     # wants them to DIVERGE says so by setting HERDR_SESSION_NAME explicitly.
     printf 'name                 status   directory\n%-20s %s  /x\n' \
       "${HERDR_SESSION_NAME:-${HERDR_SESSION:-default}}" "${HERDR_SERVER:-running}" ;;
-  "workspace list") ws_json ;;
+  "workspace list")
+    # THE TWO ANSWERS THAT ARE NOT A LISTING, and they are why the lookups fail
+    # closed. HERDR_WS_RC makes the call FAIL (a dropped socket, a server that
+    # is restarting); HERDR_WS_RAW makes it answer with something that is not a
+    # workspace listing (an error envelope, a truncated line). Neither is an
+    # empty fleet, and a reader that cannot tell them apart creates a second
+    # workspace for a project that already has one.
+    if [ -n "${HERDR_WS_RAW+x}" ]; then printf '%s\n' "$HERDR_WS_RAW"; else ws_json; fi
+    exit "${HERDR_WS_RC:-0}" ;;
   "workspace create")
     # A created workspace joins the live set for the rest of this process tree.
     label=""; while [ $# -gt 0 ]; do [ "$1" = --label ] && label=$2; shift; done
@@ -200,6 +217,13 @@ case "$1 $2" in
     printf '%s\n' "$4" >> "${HERDR_TABS:-/dev/null}"
     printf '{"id":"cli:tab:rename","result":{"type":"ok"}}\n' ;;
   "tab close")   printf '{"id":"cli:tab:close","result":{"type":"ok"}}\n' ;;
+  "tab get")
+    # The tab's CURRENT label - the only prior name either rename slot can be
+    # read back from, which is what fixes the order the two renames happen in.
+    # herdr 0.8.2's AgentInfo has no name field, so there is no `agent get`
+    # equivalent of this and an agent rename cannot be undone.
+    printf '{"id":"cli:tab:get","result":{"tab":{"agent_status":"idle","label":"%s","tab_id":"%s","workspace_id":"wZ"},"type":"tab_info"}}\n' \
+      "${HERDR_TAB_LABEL:-1}" "$3" ;;
   "pane get")
     # HERDR_NO_TAB drops tab_id, the shape a caller sees when herdr cannot give
     # a tab to rename - which is how a pane ends up unnamed.
@@ -334,6 +358,23 @@ case "$1 $2" in
     printf '{"id":"cli:agent:prompt","result":{"agent":{"agent_status":"done"},"type":"agent_info"}}\n' ;;
   "agent rename")
     name=$4
+    # HERDR_NO_AGENT=1 is herdr BEFORE it has classified an agent in the pane -
+    # the beat after launch, and the state a dead or exited pane stays in. The
+    # real binary answers agent_not_found here, and the seam must read that as
+    # "not yet", not as a refusal; a fake that renamed anyway would hide the
+    # difference between the two.
+    if [ "${HERDR_NO_AGENT:-0}" = 1 ]; then
+      printf '{"error":{"code":"agent_not_found","message":"agent target not found"},"id":"cli:agent:rename"}\n' >&2
+      exit 1
+    fi
+    # HERDR_RENAME_REFUSE=1 refuses a name that is perfectly VALID - the shape
+    # of a duplicate address, a permission error, or a server problem. It is the
+    # only way to reach the half-named state: an invalid name never gets this
+    # far, because fm_herdr_name_valid stops it first.
+    if [ "${HERDR_RENAME_REFUSE:-0}" = 1 ]; then
+      printf '{"error":{"code":"duplicate_agent_name","message":"an agent with that name already exists"},"id":"cli:agent:rename"}\n' >&2
+      exit 1
+    fi
     # THE REAL CONSTRAINT, verified against herdr 0.8.2.
     if printf '%s' "$name" | grep -qE '^[a-z][a-z0-9_-]{0,31}$'; then
       printf '{"id":"cli:agent:rename","result":{"type":"ok"}}\n'

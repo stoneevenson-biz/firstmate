@@ -50,7 +50,7 @@ Carry the same `FM_HOME=` / `HERDR_SESSION=` / `FM_*_OVERRIDE=` env prefix `fm-s
 For a pane predating the cutover, `window=` is a tmux session:window and `bin/fm-send.sh` types into that shell exactly as it always did.
 
 There is no firstmate wrapper for this.
-`fm_herdr_run` in `bin/fm-herdr.sh` is library-level only, and that script's CLI exposes only `--name` and the workspace reconcile, so the binary's verb is the supported route.
+`fm_herdr_run` in `bin/fm-herdr.sh` is library-level only, and that script's CLI exposes only `doctrine`, `--name` and the workspace reconcile, so the binary's verb is the supported route.
 
 ## no-mistakes skill invocation
 

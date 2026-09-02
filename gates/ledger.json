@@ -1124,6 +1124,57 @@
       "regression": false,
       "created": "2026-09-01T00:00:00Z",
       "last_verified": "2026-09-02T06:08:58.032Z"
+    },
+    {
+      "id": "gate-h11-doctrine-renders-the-constants",
+      "title": "Doctrine: the rules are RENDERED from the constants that enforce them, never restated beside them",
+      "observable": "`fm-herdr.sh doctrine` renders the naming and addressing rules from fm_herdr_name_re, fm_herdr_name_max, fm_herdr_pane_id_re, fm_herdr_tiers and fm_herdr_name_order rather than from prose: its output contains the exact regex string fm_herdr_name_valid validates with, follows that constant when it changes while the check follows it too, carries the resolved width cap proven against the check by calling it, names every tier in the vocabulary, and the regex literal has exactly one home in the code outside comments; the verb answers with no herdr server and calls herdr not once",
+      "origin_mode": "build",
+      "spec_ref": "docs/plans/cmux-herdr-surface-split.md",
+      "blocked_by": [],
+      "test_ref": "bash tests/fm-herdr-h11.test.sh",
+      "baseline_ref": null,
+      "first_observed_red": "2026-09-02T05:16:23.227Z",
+      "mutation_verified": "2026-09-02T07:06:53.099Z",
+      "status": "frozen",
+      "vacuous": false,
+      "regression": false,
+      "created": "2026-09-01T00:00:00Z",
+      "last_verified": "2026-09-02T07:00:37.322Z"
+    },
+    {
+      "id": "gate-h12-name-plans-then-applies-atomically",
+      "title": "`name` plans by default and applies both slots or neither, rolling the tab back when the agent rename is refused",
+      "observable": "`fm-herdr.sh --name` renames nothing without --apply and says what it would do; with --apply it names the tab then the agent with the same string, --apply is a flag wherever it appears rather than a word of the work, the first slot renamed is the one whose prior value can be read back (herdr exposes no agent name), a refused agent rename rolls the tab back to its previous label and a rollback that cannot happen is reported naming the pane, and an unusable name is refused identically by both modes without reaching herdr",
+      "origin_mode": "build",
+      "spec_ref": "docs/plans/cmux-herdr-surface-split.md",
+      "blocked_by": [],
+      "test_ref": "bash tests/fm-herdr-h12.test.sh",
+      "baseline_ref": null,
+      "first_observed_red": "2026-09-02T05:16:23.227Z",
+      "mutation_verified": "2026-09-02T07:06:53.340Z",
+      "status": "frozen",
+      "vacuous": false,
+      "regression": false,
+      "created": "2026-09-01T00:00:00Z",
+      "last_verified": "2026-09-02T07:00:37.322Z"
+    },
+    {
+      "id": "gate-h13-workspace-lookup-fails-closed",
+      "title": "Workspace lookup fails closed: an unreadable listing refuses instead of reading as an empty fleet",
+      "observable": "the workspace lookups separate 'no such workspace' (1) from 'could not read the listing' (2) for both a failed and a malformed `workspace list`, an empty but well-formed listing still reads as empty, fm_herdr_workspace_for and the reconcile CLI refuse rather than creating on an unreadable listing while a genuinely absent workspace is still created, the FM_HERDR_WORKSPACE override path fails the same way, and a workspace id is read out of a record and compared whole so another field quoting it cannot answer for a workspace that does not exist",
+      "origin_mode": "build",
+      "spec_ref": "docs/plans/cmux-herdr-surface-split.md",
+      "blocked_by": [],
+      "test_ref": "bash tests/fm-herdr-h13.test.sh",
+      "baseline_ref": null,
+      "first_observed_red": "2026-09-02T05:16:23.227Z",
+      "mutation_verified": "2026-09-02T07:06:54.976Z",
+      "status": "frozen",
+      "vacuous": false,
+      "regression": false,
+      "created": "2026-09-01T00:00:00Z",
+      "last_verified": "2026-09-02T07:00:37.322Z"
     }
   ]
 }

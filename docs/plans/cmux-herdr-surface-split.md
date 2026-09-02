@@ -7,6 +7,11 @@
 > (AGENTS.md, "herdr workspace hygiene"). Panes predating the cutover are still read, steered
 > and closed over tmux until they drain. The rest of this plan stands.
 
+> **Amended (2026-09-01).** Three items the cutover branch scoped out are now in
+> `bin/fm-herdr.sh` and gated: a `doctrine` verb that renders the rules from the constants
+> that enforce them (h11), `--apply` on `--name` with an all-or-nothing rename (h12), and
+> workspace lookups that fail closed (h13). See *The script states its own rules* below.
+
 **Status:** design, grilled. 2026-08-09.
 **Thesis:** cmux is the *glass*, herdr is the *engine room*. Cortana lives on the glass;
 every other agent lives in the engine room.
@@ -269,3 +274,99 @@ this document until reached.
 
 Phase 0 is one crewmate-day and de-risks everything after it. Nothing else starts until
 it's green.
+
+---
+
+## The script states its own rules (2026-09-01)
+
+The cutover left `bin/fm-herdr.sh` correct and mute. It enforced a naming convention, a
+workspace policy and an addressing shape, and an agent could learn none of them from it -
+they lived in prose in `AGENTS.md`, in this plan, in `docs/`, and in the script's own
+comments - more copies than implementations, and a copy is the thing that drifts. The
+`<project>/<work>` convention stayed written down after herdr had started refusing it with
+`invalid_agent_name`, which is how a pane ends up unaddressable while the documentation
+still reads correct. These three changes close that, and each one has a gate, because a
+rule nothing checks is a rule that drifts.
+
+### `doctrine` — rendered, never restated
+
+`bin/fm-herdr.sh doctrine` prints the naming and addressing rules **from the values that
+enforce them**: `fm_herdr_name_re` (herdr 0.8.2's own constraint on an agent address),
+`fm_herdr_name_max` (firstmate's tighter, readable budget), `fm_herdr_pane_id_re` (the shape
+that separates a herdr pane id from a draining tmux `session:window`), `fm_herdr_tiers` (the
+object tiers a target is addressed through) and `fm_herdr_name_order` (which of the two
+rename slots goes first). `fm_herdr_name_valid` tests that same regex rather than a
+hand-rolled transcription of it into case globs, so there is one thing to render and one
+thing to change. The PROOF section goes one step further and does not describe the validator
+at all: it **calls** it and prints what it answered.
+
+A heredoc of prose beside the code would have been the very defect the verb exists to kill,
+so the gate is not "doctrine prints something about names". **h11** changes the constant and
+requires the rendering and the check to move together, requires the exact regex string to
+appear in the output, and counts the literal's occurrences in the script's non-comment lines
+- it must have exactly one home. The verb reads nothing and calls herdr not once: an agent
+asking what the rules are is the one question that must always have an answer.
+
+### `--name --apply` — plan by default, and both slots or neither
+
+Every other verb here plans by default, so the same CLI disagreed with itself about what
+running it bare does: bare reconcile printed a plan, bare `--name` renamed a live pane. It
+now plans unless `--apply` is passed, and `--apply` is recognised as a flag wherever it
+appears rather than swallowed into the work words.
+
+`--apply` is one flag for the whole CLI, taken off the argument list before anything
+dispatches on what is left. Reading it per verb, with a dispatch that inspected only `$1`,
+meant `--apply --name <pane> <project> <work>` matched no verb at all: it fell through to
+the workspace reconcile, which read the same flag and **created workspaces** - an operator
+asking to rename one pane got a different mutating verb, silently, with exit 0. One flag,
+one owner, and position cannot change which verb runs.
+
+Naming mutates **two** objects - the free-form tab label the captain reads, and the
+constrained agent address herdr steers by - so it is all or nothing. The order is not a
+coin toss: a rollback can only restore a value it can read back, and herdr 0.8.2's
+`AgentInfo` carries no name field at all, while `tab get` returns the tab's current label.
+So the **tab goes first**, and it is the one that can be put back when the agent rename is
+refused (a duplicate address, a permission error, a server problem - an invalid name never
+gets that far). A half-renamed pane whose visible name reaches nothing is precisely the
+mystery-agent state the naming convention exists to remove, and it is worse than an unnamed
+pane: the captain would address the name he can see and reach nothing. When the rollback
+itself cannot happen, the pane is named in the report rather than left to be discovered.
+**h12** holds the plan default, the order, the rollback and the report.
+
+### The workspace lookups fail closed
+
+Each workspace question used to run its own `herdr workspace list 2>/dev/null | grep`, and
+read the silence of a failed call as "no such workspace". The next thing a caller does with
+that answer is CREATE one - so a dropped socket, a restarting server or an answer the parser
+does not understand would have duplicated a project's workspace and split its panes across
+the two, which is worse than the missing workspace the create was there to fix.
+
+There is now one reader, `fm_herdr_workspace_records`, and one place its failure is judged.
+"There are no workspaces" and "I could not ask" are opposite answers and get different
+return codes: `0` read, `1` no match, `2` could not read. Only the first two may be acted
+on.
+
+**And the reading is structural, not a substring test.** A first cut asked only whether the
+payload contained `"workspaces":`, which is not structure: `{"result":{"workspaces":BROKEN}}`
+and a listing truncated mid-record both carry that text, both exit 0, and both yield no
+records - which reads as an empty fleet, the one answer that licenses a create. The same
+duplicate-workspace defect, arriving through the door the fix left open. So the opener must
+be there, a `]` must close it, the payload must end where a JSON object ends, and **every
+record in the array must carry a complete `"workspace_id":"..."`** - a listing whose last
+record was cut off mid-key refuses rather than under-reporting the fleet by one workspace.
+An empty but well-formed array is still a readable answer, because fail-closed has to be a
+discrimination and not a block.
+
+Slicing the array at its first `]` means a label containing `]` truncates its own record;
+the per-record check then refuses, which is the right direction for a shape this parser
+cannot read. Taking only the array also kills the last blob-grep: a workspace id is read out
+of a record and compared whole, so a field outside the array that happens to quote the id -
+a `focused_workspace_id`, say - cannot answer for a workspace that does not exist. **h13** pins all three answers, both refusal paths, and the fact that a genuinely
+absent workspace is still created - fail-closed must be a discrimination, not a block.
+
+Adjacent and deliberately unchanged: `fm_herdr_tab_exists` still reads a failed `tab list`
+as "no such tab", so a spawn would proceed into a duplicate-labelled tab rather than stop.
+It is the same shape as the defect above, but the blast radius is a cluttered workspace
+rather than a split one, and making it fail closed turns a transient herdr hiccup into an
+aborted spawn - a change to the spawn contract that belongs in its own slice, with its own
+gate.

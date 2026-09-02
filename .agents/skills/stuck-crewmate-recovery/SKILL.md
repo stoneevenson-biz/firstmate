@@ -42,7 +42,7 @@ Build the launch command from the adapter's entry in `harness-adapters`, and car
 For a pane that predates the cutover, `window=` is a tmux session:window and the old path still applies: `bin/fm-send.sh` types into that shell as it always did.
 
 There is no firstmate wrapper for this today.
-`fm_herdr_run` in `bin/fm-herdr.sh` is library-level only and `bin/fm-herdr.sh`'s CLI exposes just `--name` and the workspace reconcile, so the binary's verb is the supported route.
+`fm_herdr_run` in `bin/fm-herdr.sh` is library-level only and `bin/fm-herdr.sh`'s CLI exposes just `doctrine`, `--name` and the workspace reconcile, so the binary's verb is the supported route.
 
 ## Reading a steer's outcome
 
