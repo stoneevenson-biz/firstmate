@@ -187,9 +187,15 @@ _ctx_target_in_session() {  # <statedir> <target>
   local state=$1 target=$2 sess m
   [ -n "$target" ] || return 1
   if fm_herdr_is_pane_id "$target"; then
-    for m in $(grep -lFx "window=$target" "$state"/*.meta 2>/dev/null); do
+    # Read LINES, not words: a meta path can contain a space (FM_HOME is a
+    # user-chosen directory), and word-splitting a filename into fragments would
+    # silently answer "not ours" for a pane that is.
+    while IFS= read -r m; do
+      [ -n "$m" ] || continue
       grep -q '^mux=herdr$' "$m" && return 0
-    done
+    done <<EOF
+$(grep -lFx "window=$target" "$state"/*.meta 2>/dev/null)
+EOF
     return 1
   fi
   sess=$(tmux display-message -p -t "$target" '#{session_name}' 2>/dev/null) || return 1
