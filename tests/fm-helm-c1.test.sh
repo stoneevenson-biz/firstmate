@@ -453,17 +453,22 @@ test_batch_claims_once_and_never_half_spawns() {
   # full second, so a per-pair rewrite could not hide inside the same timestamp.
   out=$(fm_helm_under_harness "$WRAP/batch" claude bash -c '
     . "$1"
+    # fm_path_mtime is the one implementation of a question with two answers:
+    # stat -f %m is BSD, and on GNU stat -f is FILESYSTEM status, which SUCCEEDS
+    # and prints a block of text - so a stat -f ... || stat -c ... fallback never
+    # fires on Linux and the timestamp comes back as prose instead of a number.
+    FM_WAKE_LIB_READONLY=1 . "$7"
     me=$(fm_lock_harness_pid) || exit 90
     mkdir -p "$2"
     printf "%s\n" "$me" > "$2/.lock"
     sleep 1
-    before=$(stat -f %m "$2/.lock" 2>/dev/null || stat -c %Y "$2/.lock")
+    before=$(fm_path_mtime "$2/.lock")
     body=$(FM_HOME="$3" FM_ROOT_OVERRIDE="$4" FM_STATE_OVERRIDE="$2" PATH="$6:$PATH" \
       "$5" batch-a-z1=projects/proj batch-b-z2=projects/proj 2>&1); rc=$?
-    after=$(stat -f %m "$2/.lock" 2>/dev/null || stat -c %Y "$2/.lock")
+    after=$(fm_path_mtime "$2/.lock")
     printf "RC=%s BEFORE=%s AFTER=%s HOLDER=%s ME=%s\n" "$rc" "$before" "$after" "$(cat "$2/.lock")" "$me"
     printf "%s\n" "$body"
-  ' _ "$ROOT/bin/fm-lock-lib.sh" "$home/state" "$home" "$dir/root" "$ROOT/bin/fm-spawn.sh" "$dir/fakebin" 2>&1)
+  ' _ "$ROOT/bin/fm-lock-lib.sh" "$home/state" "$home" "$dir/root" "$ROOT/bin/fm-spawn.sh" "$dir/fakebin" "$ROOT/bin/fm-wake-lib.sh" 2>&1)
 
   assert_contains "$out" "batch: FAILED to spawn batch-a-z1" "the first pair of a batch was not dispatched under a held helm"
   assert_contains "$out" "batch: FAILED to spawn batch-b-z2" "the second pair was not dispatched - the batch loop stopped early"
@@ -471,7 +476,9 @@ test_batch_claims_once_and_never_half_spawns() {
     "a batch run by the session that holds the helm must not be refused"
   before=$(printf '%s' "$out" | sed -n 's/.*BEFORE=\([0-9]*\).*/\1/p' | head -1)
   after=$(printf '%s' "$out" | sed -n 's/.*AFTER=\([0-9]*\).*/\1/p' | head -1)
-  [ -n "$before" ] && [ -n "$after" ] || fail "could not read the lock timestamps back: $out"
+  if [ -z "$before" ] || [ -z "$after" ]; then
+    fail "could not read the lock timestamps back: $out"
+  fi
   [ "$before" = "$after" ] \
     || fail "the helm was re-taken during the batch (mtime $before -> $after); it must be claimed once for the whole invocation"
 
