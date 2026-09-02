@@ -15,11 +15,19 @@ set -u
 SPAWN="$ROOT/bin/fm-spawn.sh"
 TMP_ROOT=$(fm_test_tmproot fm-spawn-batch)
 
-# Clear ambient firstmate overrides so the behavior test owns its environment.
+# Clear ambient firstmate overrides so the behavior test owns its environment -
+# EXCEPT the state dir, which is pointed at a temp dir instead of cleared.
+# Clearing both FM_HOME and FM_STATE_OVERRIDE makes STATE fall back to
+# $FM_ROOT/state, and FM_ROOT is the checkout the script lives in: run from the
+# captain's primary checkout that resolves to his REAL ~/firstmate/state, so this
+# suite reached into the live fleet's own state dir. That is unsafe whatever the
+# scripts do with it - tests/lib.sh now trips on it too - and it is the exact
+# hazard the helm brief names: a test that quietly took the captain's real lock
+# would take his fleet down.
 run_spawn() {
   FM_ROOT_OVERRIDE='' \
     FM_HOME='' \
-    FM_STATE_OVERRIDE='' \
+    FM_STATE_OVERRIDE="$TMP_ROOT/ambient-state" \
     FM_DATA_OVERRIDE='' \
     FM_PROJECTS_OVERRIDE='' \
     FM_CONFIG_OVERRIDE='' \

@@ -334,6 +334,104 @@ test_an_absent_real_binary_is_reported_not_execed() {
   pass "hermeticity: an absent real tmux is reported, not exec'd as an empty command"
 }
 
+
+# --- the live fleet is out of bounds too ------------------------------------
+#
+# The net started as "keep the suites off the captain's live multiplexers". It
+# now also has to keep them out of his live HOME, because the same class of
+# accident happened there: tests/fm-spawn-batch.test.sh cleared FM_HOME AND
+# FM_STATE_OVERRIDE, so $STATE fell back to $FM_ROOT/state - the checkout the
+# script lives in - which, run from the captain's primary checkout, is his real
+# ~/firstmate/state. The helm claim then wrote his live session lock whenever it
+# was free or stale. Taking the fleet's helm is not clutter someone tidies up.
+#
+# Two layers, because neither alone is enough. No default this file could export
+# survives a per-invocation `FM_STATE_OVERRIDE=''`, so prevention has to be a
+# rule about what may be WRITTEN; and a static rule cannot see an env built at
+# runtime, so there is a tripwire underneath it.
+
+# STATIC: clearing FM_STATE_OVERRIDE is allowed only when the same command names
+# a non-empty FM_HOME, because STATE then falls back to $FM_HOME/state and the
+# suite still owns it. Clearing both is the shape that reaches a real home.
+test_no_suite_can_resolve_state_to_a_real_home() {
+  local f offenders joined
+  offenders=""
+  for f in "$ROOT"/tests/*.sh; do
+    # Logical lines: a trailing backslash continues the command, and the
+    # dangerous pair is routinely spread across several physical lines.
+    joined=$(awk '
+      { cur = $0 }
+      buf != "" { cur = buf " " cur; buf = "" }
+      cur ~ /\\$/ { sub(/\\$/, "", cur); buf = cur; next }
+      { print cur }
+      END { if (buf != "") print buf }
+    ' "$f" | grep -vE '^[[:space:]]*#' | grep -E "FM_STATE_OVERRIDE=(''|\"\")" || true)
+    [ -n "$joined" ] || continue
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      # A non-empty FM_HOME on the same command makes it safe.
+      printf '%s' "$line" | grep -qE "FM_HOME=([^ '\"]|\"[^\"]|'[^'])" && continue
+      offenders="$offenders$(basename "$f"): $line"$'\n'
+    done <<< "$joined"
+  done
+  [ -z "$offenders" ] || fail "a suite clears FM_STATE_OVERRIDE without naming a home, so \$STATE falls back to a real one:"$'\n'"$offenders"
+  pass "hermeticity: no suite clears FM_STATE_OVERRIDE without naming its own home"
+}
+
+# RUNTIME: the tripwire in tests/lib.sh, proven to fire. A fake "real home" is
+# made by pointing $HOME at a temp dir - deliberately the seam, because a
+# variable named for this check would be an opt-out, and there is none.
+# shellcheck disable=SC2016  # the payloads are literal snippets for in_fresh's
+# inner shell; $$ and $HOME must expand THERE, not here.
+test_the_live_fleet_tripwire_fires() {
+  local fake lock out rc
+  fake="$(fm_test_tmproot fm-herm-fleet)/fakehome"
+  mkdir -p "$fake/firstmate/state"
+  lock="$fake/firstmate/state/.lock"
+
+  # Control: a suite that leaves it alone passes.
+  printf '4242\n' > "$lock"
+  rc=0; out=$(in_fresh HOME="$fake" -- 'true') || rc=$?
+  expect_code 0 "$rc" "an untouched real lock must not fail a suite: $out"
+  assert_not_contains "$out" "TOOK the captain" "an untouched real lock must not report a breach"
+
+  # Breach: the suite writes its own pid into the real lock.
+  printf '4242\n' > "$lock"
+  rc=0; out=$(in_fresh HOME="$fake" -- 'printf "%s\n" "$$" > "$HOME/firstmate/state/.lock"') || rc=$?
+  expect_code 1 "$rc" "a suite that took the real session lock must fail"
+  assert_contains "$out" "TOOK the captain" "the breach must name what happened"
+  assert_contains "$out" "point FM_STATE_OVERRIDE at a temp dir" "the breach must say how to fix it"
+
+  # Breach: the suite creates a real lock where there was none.
+  rm -f "$lock"
+  rc=0; out=$(in_fresh HOME="$fake" -- 'printf "%s\n" "$$" > "$HOME/firstmate/state/.lock"') || rc=$?
+  expect_code 1 "$rc" "a suite that created the real session lock must fail"
+  assert_contains "$out" "created or removed" "the breach must name what happened"
+  rm -f "$lock"
+  pass "hermeticity: the live-fleet tripwire fires on a taken or created real session lock, and stays quiet otherwise"
+}
+
+# The ambient pin is the same hazard arriving by inheritance rather than by hand,
+# and it reaches every suite that simply says nothing. A guard nothing exercises
+# is a guard that rots, so this proves sourcing tests/lib.sh actually neutralises
+# it - with a decoy standing in for the captain's home.
+# shellcheck disable=SC2016  # the payload is a literal snippet for in_fresh's
+# inner shell; these variables must expand THERE, not here.
+test_the_ambient_firstmate_pin_is_neutralised() {
+  local out
+  out=$(in_fresh FM_HOME=/decoy/captain-firstmate FM_STATE_OVERRIDE=/decoy/state \
+        FM_DATA_OVERRIDE=/decoy/data FM_ROOT_OVERRIDE=/decoy/root \
+        -- 'printf "HOME=[%s] STATE=[%s] DATA=[%s] ROOT=[%s]\n" \
+              "$FM_HOME" "${FM_STATE_OVERRIDE-unset}" "${FM_DATA_OVERRIDE-unset}" "${FM_ROOT_OVERRIDE-unset}"')
+  assert_not_contains "$out" "/decoy/captain-firstmate" \
+    "sourcing lib.sh must not leave a suite pointed at the home its session was launched with"
+  assert_contains "$out" "STATE=[unset]" "an inherited FM_STATE_OVERRIDE must not survive"
+  assert_contains "$out" "DATA=[unset]" "an inherited FM_DATA_OVERRIDE must not survive"
+  assert_contains "$out" "ROOT=[unset]" "an inherited FM_ROOT_OVERRIDE must not survive"
+  assert_contains "$out" "fm-test-sandbox" "a suite that names no home must get its own sandbox"
+  pass "hermeticity: the session's ambient firstmate pin is neutralised; a suite that names no home gets a sandbox"
+}
+
 test_every_suite_is_under_the_net_or_declares_that_it_is_not
 test_a_helper_that_never_reaches_lib_is_not_proof
 test_the_temp_root_survives_a_subshell_and_is_cleaned_on_exit
@@ -346,3 +444,6 @@ test_a_kill_outside_the_declared_session_is_refused
 test_a_kill_with_no_declared_session_is_refused
 test_the_two_argv_readings_agree
 test_the_guard_passes_scoped_and_harmless_verbs_through
+test_no_suite_can_resolve_state_to_a_real_home
+test_the_live_fleet_tripwire_fires
+test_the_ambient_firstmate_pin_is_neutralised

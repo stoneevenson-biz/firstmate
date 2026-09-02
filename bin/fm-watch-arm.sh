@@ -134,6 +134,15 @@ if [ "$mode" = status ]; then
 fi
 
 if [ "$mode" = restart ]; then
+  # THE HELM, on this path only. Plain arming is singleton-safe and no-ops when a
+  # healthy watcher already holds the lock, so every session may (and should) do
+  # it - gating that would be a boot-path refusal. --restart is different: it
+  # KILLS this home's live watcher and starts a replacement, which is driving the
+  # home, not observing it. Spec: docs/specs/2026-08-27-n-concurrent-firstmates.md,
+  # section 4; roster: docs/scripts.md.
+  # shellcheck source=bin/fm-lock-lib.sh
+  . "$SCRIPT_DIR/fm-lock-lib.sh"
+  fm_lock_require_helm "$STATE" "fm-watch-arm --restart" || exit 1
   # Home-scoped stop: only the watcher pid recorded in THIS home's lock.
   lock_pid=$(cat "$WATCH_LOCK/pid" 2>/dev/null || true)
   if fm_pid_alive "$lock_pid"; then

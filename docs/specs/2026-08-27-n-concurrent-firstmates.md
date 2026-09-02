@@ -224,6 +224,70 @@ and which lock it would take.
 With D2, several sessions on one home is the **normal** case, not a failure case. Anything that
 reads as an error would fire constantly and train the captain to ignore it.
 
+### Built (2026-09-01) — what section 4 became
+
+`bin/fm-lock-lib.sh` carries the seam, `fm_lock_require_helm <state-dir> <label>`, and nine
+drive verbs call it as `|| exit 1` before they mutate anything: `fm-spawn.sh`, `fm-send.sh`,
+`fm-teardown.sh`, `fm-merge-local.sh`, `fm-merge-pr.sh`, `fm-pr-check.sh`, `fm-promote.sh`,
+`fm-update.sh`, and `fm-watch-arm.sh --restart` (that path only — it kills a live watcher; plain arming is
+singleton-safe and every session does it). It is deliberately **not** in `bin/fm-guard.sh`,
+which always exits 0 by design and could not stop a caller if it wanted to. The full caller
+matrix — including what does not gate and why — is written down once, in `docs/scripts.md`
+("The helm: which verbs gate on the session lock").
+
+**The seam claims; it does not merely ask.** An advisory check that answers "go ahead" for a
+free or stale helm without taking it is not a lock: the moment a holder dies, two observers
+both read *free* and both drive. So the seam runs the same compare-and-swap `fm-lock.sh` does
+— `fm_lock_cas`, one implementation, three callers — and a verb that proceeds has taken the
+helm before it touches anything.
+
+Five decisions the design left open, settled in the build:
+
+- **One claim per invocation.** A batch spawn re-execs `fm-spawn.sh` once per `id=repo`
+  pair, so the parent claims and the loop runs under that claim; a verb whose recorded
+  holder is already this session's harness returns on a pure read, with no mutex and no
+  write. A refusal therefore lands before any pair is dispatched - a batch spawns all of
+  its pairs or none.
+- **Atomicity.** The critical section is held under `fm_lock_try_acquire`
+  (`bin/fm-wake-lib.sh`) on `$STATE/.lock.acquire` — this repo's existing atomic mutex,
+  already proven single-winner under 40-way concurrency by `tests/fm-watcher-lock.test.sh`,
+  rather than a second CAS implementation to get wrong.
+- **`--take`.** Permitted only when the holder is provably dead, and the only escape hatch:
+  no force-evict flag. Evicting a live session means ending that session, which is the
+  captain's action.
+- **harness-not-found, which splits.** A session whose harness cannot be identified has no
+  session-stable pid to record, so it cannot hold the helm. With **nobody steering** it is
+  allowed through, out loud, unclaimed — refusing there would be a lock-out by another route,
+  with no remedy, since `--take` needs an identity too. Behind a **live holder** it is
+  refused: waving it through was a bypass, since any caller could defeat the helm by
+  detaching from its agent.
+- **Which names count as a harness.** The pattern is applied to a bare basename *and* to a
+  whole argv string, so `pi` carries word boundaries instead of `^pi$` — anchored that way it
+  matched nothing on a composite, which made a live `pi` session read as dead, let observers
+  past the seam, and let `--take` evict a live holder. One predicate now answers both "am I a
+  harness" and "is the holder alive".
+- **`fm-bootstrap.sh install <tools...>`.** Does not gate. It runs at boot like the rest of
+  bootstrap, so a refusal there would be the boot-time refusal this section rules out; and
+  what it mutates is the machine's tool inventory, not this home's fleet state.
+
+**What "no bypass" does not claim.** `FM_HOME` and `FM_STATE_OVERRIDE` scope the whole home,
+the check included, so redirecting them redirects the verb to another home — the mechanism
+secondmates and the suites both rely on. `fm-update.sh` is the one verb whose git target comes
+from `FM_ROOT` rather than from `$STATE`'s home, so it requires the helm of `$FM_ROOT/state`
+as well whenever that home exists and differs.
+
+Gates: **`gate-c1-helm-writer-only`** (`bash tests/fm-helm-c1.test.sh`) and
+**`gate-c2-helm-take-and-isolation`** (`bash tests/fm-helm-c2.test.sh`). Both assert
+behaviourally rather than textually — a blocked writer is checked against a whole-tree
+fingerprint, so "no state written, no fetch, no fast-forward" is proven rather than inferred
+from a message — with positive controls showing the same calls do mutate once the helm is
+free. Exclusivity is proven by a race, not a sequence: sixteen concurrent sessions with
+sixteen distinct harness identities, exactly one winner. Every drive verb runs under a harness
+identity the test chooses rather than the ancestry's, so the refusals are asserted on CI's
+agent-free runner too. The "no boot path emits a refusal" property is asserted directly,
+including for the bare `fm-lock.sh` acquire that recovery step 1 actually names, since that
+half is the one this design was twice built backwards.
+
 ---
 
 ## 5. Q4 — Cross-repo installation path

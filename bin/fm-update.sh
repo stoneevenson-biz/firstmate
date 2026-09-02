@@ -38,6 +38,27 @@ SECONDMATES_MD="$FM_HOME/data/secondmates.md"
 . "$SCRIPT_DIR/fm-ff-lib.sh"
 
 "$SCRIPT_DIR/fm-guard.sh" || true
+# THE HELM. A second session on this home reads, reasons and drafts freely; it
+# may not DRIVE. This is the writer-only seam - refused at the verb, at the
+# moment it is asked for, never at boot. Deliberately not bin/fm-guard.sh, which
+# always exits 0 by design. Escape hatch: bin/fm-lock.sh --take, permitted only
+# when the holder is provably dead.
+# Spec: docs/specs/2026-08-27-n-concurrent-firstmates.md, section 4.
+# shellcheck source=bin/fm-lock-lib.sh
+. "$SCRIPT_DIR/fm-lock-lib.sh"
+fm_lock_require_helm "$STATE" fm-update || exit 1
+# fm-update is the one gated verb whose mutation target is NOT derived from
+# $STATE's home: it fast-forwards FM_ROOT, which FM_ROOT_OVERRIDE (or a bare
+# FM_STATE_OVERRIDE) can aim somewhere else entirely. Checking only $STATE would
+# let an empty alternate state dir slip a self-update of the REAL repo past a
+# session that is steering it. So require the helm of the home that owns the repo
+# too - but only when that home exists, and never by creating it: an FM_ROOT with
+# no state/ is not a firstmate home, so nobody can be steering it, and minting a
+# state dir inside an arbitrary checkout would dirty it.
+FM_ROOT_STATE="$FM_ROOT/state"
+if [ "$FM_ROOT_STATE" != "$STATE" ] && [ -d "$FM_ROOT_STATE" ]; then
+  fm_lock_require_helm "$FM_ROOT_STATE" "fm-update (repo at $FM_ROOT)" || exit 1
+fi
 
 usage() { echo "usage: fm-update.sh [--help]" >&2; }
 

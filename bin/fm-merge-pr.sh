@@ -80,6 +80,16 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 "$FM_ROOT/bin/fm-guard.sh" || true
+# THE HELM. A second session on this home reads, reasons and drafts freely; it
+# may not DRIVE. This is the writer-only seam - refused at the verb, at the
+# moment it is asked for, never at boot. Deliberately not bin/fm-guard.sh, which
+# always exits 0 by design. Escape hatch: bin/fm-lock.sh --take, permitted only
+# when the holder is provably dead. Merging a PR is the verb section 4 names
+# most directly, and this is the fleet's only path to it.
+# Spec: docs/specs/2026-08-27-n-concurrent-firstmates.md, section 4.
+# shellcheck source=bin/fm-lock-lib.sh
+. "$SCRIPT_DIR/fm-lock-lib.sh"
+fm_lock_require_helm "$STATE" fm-merge-pr || exit 1
 
 # shellcheck source=bin/fm-merge-target-lib.sh
 . "$SCRIPT_DIR/fm-merge-target-lib.sh"
