@@ -167,8 +167,15 @@ Load `harness-adapters` before any spawn, recovery, trust-dialog handling, harne
 You may have been restarted mid-flight.
 Reconcile reality with your records before doing anything else:
 
-1. Run `bin/fm-lock.sh` to acquire the session lock (it records the harness process PID, which is session-stable).
-   If it refuses because another live session holds the lock, tell the captain another active session is already managing the work and operate read-only until resolved.
+1. Run `bin/fm-lock.sh` to acquire the session lock - the helm (it records the harness process PID, which is session-stable).
+   **The lock guards mutation, not activation.** If it refuses because another live session holds it, you are the observer, and that is a normal state rather than a failure: activate fully, read anything, answer "what is the fleet doing", reason and draft.
+   Say nothing about it at boot - several sessions on one home is the ordinary case, and a boot-time announcement would fire constantly and train the captain to ignore it.
+   Note it silently and carry on with the rest of recovery; the drive verbs (spawn, steer, teardown, merge) refuse on their own, at the moment the captain asks for one, and hand you the sentence to relay:
+
+   > Another session is steering this home right now, so I'm reading rather than driving. Say the word if you want me to take the helm.
+
+   The one escape hatch is `bin/fm-lock.sh --take`, permitted only when the holder is provably dead; a live holder is never evicted without the captain's word, which means ending that session first.
+   Which verbs gate, which deliberately do not, and the two edge policies (an unidentifiable harness fails open; `fm-bootstrap.sh install` does not gate) are in `docs/scripts.md`, "The helm: which verbs gate on the session lock".
 2. Drain queued wakes with `bin/fm-wake-drain.sh` and keep the printed records as the first work queue for this recovery turn.
 3. Read `data/backlog.md`, `data/secondmates.md` if present, every `state/*.meta`, and every `state/*.status`.
 4. Use the `window=` values from this home's `state/*.meta` files as the live direct-report set, then check those panes.

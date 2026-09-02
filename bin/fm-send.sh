@@ -40,6 +40,15 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-tmux-lib.sh"
 
 "$SCRIPT_DIR/fm-guard.sh" || true
+# THE HELM. A second session on this home reads, reasons and drafts freely; it
+# may not DRIVE. This is the writer-only seam - refused at the verb, at the
+# moment it is asked for, never at boot. Deliberately not bin/fm-guard.sh, which
+# always exits 0 by design. Escape hatch: bin/fm-lock.sh --take, permitted only
+# when the holder is provably dead.
+# Spec: docs/specs/2026-08-27-n-concurrent-firstmates.md, section 4.
+# shellcheck source=bin/fm-lock-lib.sh
+. "$SCRIPT_DIR/fm-lock-lib.sh"
+fm_lock_require_helm "$STATE" fm-send || exit 1
 
 fm_herdr_resolve "$1" "$STATE" || exit 1
 T=$FM_HERDR_TARGET

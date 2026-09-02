@@ -224,6 +224,40 @@ and which lock it would take.
 With D2, several sessions on one home is the **normal** case, not a failure case. Anything that
 reads as an error would fire constantly and train the captain to ignore it.
 
+### Built (2026-09-01) — what section 4 became
+
+`bin/fm-lock-lib.sh` carries the seam, `fm_lock_require_helm <state-dir> <label>`, and seven
+drive verbs call it as `|| exit 1` before they mutate anything: `fm-spawn.sh`, `fm-send.sh`,
+`fm-teardown.sh`, `fm-merge-local.sh`, `fm-pr-check.sh`, `fm-promote.sh`, `fm-update.sh`. It is
+deliberately **not** in `bin/fm-guard.sh`, which always exits 0 by design and could not stop a
+caller if it wanted to. The full caller matrix — including what does not gate and why — is
+written down once, in `docs/scripts.md` ("The helm: which verbs gate on the session lock").
+
+Four decisions the design left open, settled in the build:
+
+- **Atomicity.** The compare-and-swap is serialised by `fm_lock_try_acquire`
+  (`bin/fm-wake-lib.sh`) held on `$STATE/.lock.acquire` across the whole critical section —
+  this repo's existing atomic mutex, already proven single-winner under 40-way concurrency by
+  `tests/fm-watcher-lock.test.sh`, rather than a second CAS implementation to get wrong.
+- **`--take`.** Permitted only when the holder is provably dead, and it is the only escape
+  hatch: no force-evict flag, no env bypass. Evicting a live session means ending that session,
+  which is the captain's action.
+- **harness-not-found.** `fm_lock_harness_pid` can fail to identify a harness at all. The seam
+  then fails **open, out loud** on stderr. Failing closed would be a lock-out by another route:
+  such a session could never prove it is the holder, so it could never drive, and `--take`
+  would not help because the fault is not with the holder.
+- **`fm-bootstrap.sh install <tools...>`.** Does not gate. It runs at boot like the rest of
+  bootstrap, so a refusal there would be the boot-time refusal this section rules out; and what
+  it mutates is the machine's tool inventory, not this home's fleet state.
+
+Gates: **`gate-c1-helm-writer-only`** (`bash tests/fm-helm-c1.test.sh`) and
+**`gate-c2-helm-take-and-isolation`** (`bash tests/fm-helm-c2.test.sh`). Both assert
+behaviourally rather than textually — a blocked writer is checked against a whole-tree
+fingerprint, so "no state written, no fetch, no fast-forward" is proven rather than inferred
+from a message — with positive controls showing the same calls do mutate once the helm is free,
+and with the "no boot path emits a refusal" property asserted directly, since that is the half
+this design was twice built backwards.
+
 ---
 
 ## 5. Q4 — Cross-repo installation path

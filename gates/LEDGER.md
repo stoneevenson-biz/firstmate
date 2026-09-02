@@ -76,3 +76,5 @@
 | gate-h11-doctrine-renders-the-constants | frozen | Doctrine: the rules are RENDERED from the constants that enforce them, never restated beside them |
 | gate-h12-name-plans-then-applies-atomically | frozen | `name` plans by default and applies both slots or neither, rolling the tab back when the agent rename is refused |
 | gate-h13-workspace-lookup-fails-closed | frozen | Workspace lookup fails closed: an unreadable listing refuses instead of reading as an empty fleet |
+| gate-c1-helm-writer-only | green | The helm is a writer-only seam: drive verbs refuse under a live foreign holder, boot paths never do |
+| gate-c2-helm-take-and-isolation | green | --take evicts only a provably dead holder, the acquire is atomic, and a secondmate home keeps its own helm |
