@@ -27,6 +27,14 @@
 # single composer row is captured, so no escape-laden pane bulk is produced. This
 # is harness-generic: any harness that dims placeholder/ghost text benefits.
 #
+# Composer padding (incident send-false-negative): claude pads its EMPTY composer
+# with U+00A0 NO-BREAK SPACE. `[[:space:]]` is locale-dependent, so under LC_ALL=C
+# the padding survived the trim and an empty composer read as pending input - which
+# made fm-send report "Enter swallowed" for steers that had landed, in some
+# sessions and not others. The reader now folds non-ASCII blanks onto ASCII space
+# before trimming, so the classification is the same in every locale. See
+# docs/specs/2026-09-02-composer-blank-padding.md.
+#
 # Per-harness override: FM_COMPOSER_IDLE_RE matches an empty composer after
 # dim-ghost and structural border stripping. FM_BUSY_REGEX overrides the busy
 # footer set (mirrors fm-watch.sh / the daemon).
@@ -37,6 +45,63 @@
 # Busy footers per harness (mirror fm-watch.sh). claude/codex: "esc to
 # interrupt"; opencode: "esc interrupt"; pi: "Working...".
 FM_TMUX_BUSY_REGEX_DEFAULT='esc (to )?interrupt|Working\.\.\.'
+
+# Non-ASCII blanks a harness pads its composer with. THE DEFECT THIS EXISTS FOR
+# (incident send-false-negative, observed 2026-08-28): a live Claude Code pane
+# renders its EMPTY composer as U+276F followed by U+00A0 NO-BREAK SPACE -
+# captured verbatim from `tmux capture-pane -e` against claude v2.1.258 on
+# 2026-09-02 as the five bytes \342\235\257\302\240.
+#
+# `[[:space:]]` in the trim below is LOCALE-DEPENDENT, which is the part that
+# bites. Under a UTF-8 locale bash matches U+00A0 and the row trims down to a
+# bare prompt glyph, so the composer reads `empty` and everything works. Under
+# LC_ALL=C or LC_ALL=POSIX - and under bash 3.2 with no locale set at all - it
+# matches ASCII only, the padding SURVIVES, the row `❯<NBSP>` fails the
+# bare-prompt-glyph case, matches no busy footer, and classifies as `pending`.
+#
+# So fm-send reported "Enter swallowed; text left in composer" for a steer that
+# had landed, in some sessions and not others, with nothing in the pane to
+# explain the difference. Verified end to end against a live claude pane: with
+# LC_ALL=C the submit core verdicts `pending` while the agent is visibly working
+# on the steer it just accepted. The same misread makes every idle claude pane
+# read as holding pending input, which is incident afk-invx-i5 returning through
+# a different glyph.
+#
+# This file states in its own header that it is byte-wise and locale-independent.
+# The trim quietly was not, so the padding is folded onto ASCII space here, ahead
+# of it, and the claim becomes true.
+#
+# Folding is a NARROWING, not a loosening: it can only turn invisible padding
+# into the blank it already is. The one way it could report a lost steer as
+# delivered is a steer made ENTIRELY of these characters, which is not a steer.
+# Real text on the row still classifies as pending, which is the direction that
+# must never regress.
+#
+# Written as printf octal escapes so this file stays plain ASCII - an invisible
+# NBSP sitting in source is unreviewable - and needs no \u escape, which bash 3.2
+# does not have.
+FM_TMUX_BLANK_CHARS=(
+  "$(printf '\302\240')"      # U+00A0  NO-BREAK SPACE (claude's composer padding)
+  "$(printf '\342\200\202')"  # U+2002  EN SPACE
+  "$(printf '\342\200\203')"  # U+2003  EM SPACE
+  "$(printf '\342\200\207')"  # U+2007  FIGURE SPACE
+  "$(printf '\342\200\211')"  # U+2009  THIN SPACE
+  "$(printf '\342\200\213')"  # U+200B  ZERO WIDTH SPACE
+  "$(printf '\342\200\257')"  # U+202F  NARROW NO-BREAK SPACE
+  "$(printf '\343\200\200')"  # U+3000  IDEOGRAPHIC SPACE
+  "$(printf '\357\273\277')"  # U+FEFF  ZERO WIDTH NO-BREAK SPACE
+)
+
+# fm_tmux_fold_blanks: replace every non-ASCII blank above with an ASCII space,
+# so the locale-dependent trim that follows can see it in every locale. Reads one string as
+# $1 and prints the folded string; pure, no tmux, no locale dependence.
+fm_tmux_fold_blanks() {  # <string>
+  local s=${1-} b
+  for b in "${FM_TMUX_BLANK_CHARS[@]}"; do
+    s=${s//"$b"/ }
+  done
+  printf '%s' "$s"
+}
 
 # fm_tmux_strip_ghost: remove dim/faint (ANSI SGR 2) styled runs from one captured
 # composer line, then drop any remaining escape sequences, leaving only the plain,
@@ -112,8 +177,11 @@ fm_tmux_strip_ghost() {
 #
 # The cursor line is captured WITH ANSI styling (capture-pane -e) and bounded to
 # the single composer row (-S/-E), then run through fm_tmux_strip_ghost so dim/faint
-# ghost text drops out before classification. The styled capture is internal only,
-# never surfaced. The detector then strips the harness's box-drawing composer
+# ghost text drops out before classification, then through fm_tmux_fold_blanks so
+# the harness's non-ASCII composer padding (U+00A0 and friends) becomes the blank
+# it already is rather than surviving the locale-dependent trim as typed text.
+# The styled capture is internal only, never surfaced.
+# The detector then strips the harness's box-drawing composer
 # borders ("│ … │", heavy "┃", or a plain ASCII "|") using literal-string
 # substitution (bash 3.2 safe, locale-independent — no \u escapes, no multibyte
 # character classes), and asks whether anything real is left.
@@ -123,6 +191,11 @@ fm_tmux_composer_state() {  # <target> -> empty|pending|unknown
   case "$cy" in ''|*[!0-9]*) printf 'unknown'; return 0 ;; esac
   raw=$(tmux capture-pane -e -p -t "$target" -S "$cy" -E "$cy" 2>/dev/null) || { printf 'unknown'; return 0; }
   line=$(printf '%s\n' "$raw" | fm_tmux_strip_ghost)
+  # Fold the harness's non-ASCII composer padding onto ASCII space BEFORE the
+  # trim below, whose [[:space:]] is locale-dependent and sees ASCII only under
+  # LC_ALL=C. Without this a live claude pane's empty composer (`❯` + U+00A0)
+  # reads as pending input in exactly the sessions that run in the C locale.
+  line=$(fm_tmux_fold_blanks "$line")
   # Strip the composer box borders (literal glyphs — no character classes).
   stripped=${line//│/}      # U+2502 light vertical (claude)
   stripped=${stripped//┃/}  # U+2503 heavy vertical

@@ -1209,6 +1209,40 @@
       "created": "2026-09-01T00:00:00Z",
       "last_verified": "2026-09-02T10:02:50.475Z",
       "mutation_verified": null
+    },
+    {
+      "id": "gate-t4-landed-steer-not-reported-swallowed",
+      "title": "A steer that landed is reported as delivered, not as a swallowed Enter",
+      "observable": "On the composer row a LIVE claude pane actually emits - U+276F followed by U+00A0 NO-BREAK SPACE, transcribed byte for byte from `tmux capture-pane -e` against claude v2.1.258 - an EMPTY composer classifies as `empty`, the submit core verdicts `empty` when the Enter lands, and bin/fm-send.sh exits 0 with no \"Enter swallowed\" on stderr, having typed the steer exactly once. Every one of those is asserted under EVERY locale in fm_composer_locales() - C and POSIX, which are guaranteed to exist and are the two under which `[[:space:]]` matches ASCII only and so leaves the padding behind, plus a UTF-8 locale when the machine has one - because the defect was that the classification differed between them and a suite that inherited the runner's locale passed by luck. The same fixture proves fm_pane_input_pending does not read an idle claude pane as holding pending input in any locale, which is the afk-invx-i5 half of the same misread. fm_tmux_fold_blanks is shown to be narrow rather than a blanket pass: it folds each non-ASCII blank to a space and leaves real text on either side of it intact",
+      "origin_mode": "diagnosis",
+      "spec_ref": "docs/specs/2026-09-02-composer-blank-padding.md",
+      "blocked_by": [],
+      "test_ref": "bash tests/fm-send-t4-landed.test.sh",
+      "baseline_ref": null,
+      "first_observed_red": "2026-09-02T20:05:34.313Z",
+      "status": "green",
+      "vacuous": false,
+      "regression": false,
+      "created": "2026-09-02T00:00:00Z",
+      "last_verified": "2026-09-02T20:13:04.377Z",
+      "mutation_verified": null
+    },
+    {
+      "id": "gate-t4-swallowed-enter-still-refused",
+      "title": "A genuinely swallowed Enter is still refused: the false negative was not traded for a false positive",
+      "observable": "With the SAME U+00A0-padded live-claude composer row as its twin gate, under the SAME locale matrix, differing only in that the steer is still sitting in it, a harness that eats Enter is still reported as a failure: fm_tmux_composer_state classifies the row `pending`, fm_tmux_submit_core verdicts `pending` after actually retrying Enter the configured number of times rather than reaching a verdict without observing, and bin/fm-send.sh exits 1 naming the swallowed Enter, having typed the steer exactly once (never retyped, which would duplicate it). The boundary of the fold is pinned in both directions and in every locale: a row of nothing but non-ASCII padding is `empty`, and one real character among that padding is `pending`. Mutation-checked: replacing the detector's body with `printf empty` - the lazy fix that would satisfy the twin gate - makes this gate fail",
+      "origin_mode": "diagnosis",
+      "spec_ref": "docs/specs/2026-09-02-composer-blank-padding.md",
+      "blocked_by": [],
+      "test_ref": "bash tests/fm-send-t4-swallowed.test.sh",
+      "baseline_ref": null,
+      "first_observed_red": "2026-09-02T20:05:34.313Z",
+      "status": "green",
+      "vacuous": false,
+      "regression": false,
+      "created": "2026-09-02T00:00:00Z",
+      "last_verified": "2026-09-02T20:13:04.377Z",
+      "mutation_verified": null
     }
   ]
 }
