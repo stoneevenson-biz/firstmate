@@ -115,7 +115,7 @@ test_a_workspace_label_match_is_exact_not_a_word_boundary() {
 # A name is an ADDRESS. It must describe the work, and survive being typed.
 test_name_normalises_to_the_convention() {
   : > "$CALLS"
-  FM_HOME="$HOME_DIR" bash "$SCRIPT" --name w9:p2 afs "Resource Registry" >/dev/null 2>&1
+  FM_HOME="$HOME_DIR" bash "$SCRIPT" --name w9:p2 afs "Resource Registry" --apply >/dev/null 2>&1
   grep -q 'agent rename w9:p2 afs-resource-registry' "$CALLS" \
     || { echo "calls: $(cat "$CALLS")"; fail "name not normalised to <project>-<work>"; }
   pass "naming: 'Resource Registry' -> afs-resource-registry"
@@ -127,7 +127,7 @@ test_name_normalises_to_the_convention() {
 test_separator_is_a_hyphen_never_a_slash() {
   : > "$CALLS"
   local out
-  out=$(FM_HOME="$HOME_DIR" bash "$SCRIPT" --name w9:p9 afs "resource registry" 2>&1)
+  out=$(FM_HOME="$HOME_DIR" bash "$SCRIPT" --name w9:p9 afs "resource registry" --apply 2>&1)
   assert_contains "$out" "afs-resource-registry" "the applied name is not project-first with a hyphen"
   assert_no_grep "afs/resource-registry" "$CALLS" "a slash-separated name was sent to herdr"
   # And prove the fake would have refused one, so the case above is not vacuous.
@@ -139,7 +139,7 @@ test_separator_is_a_hyphen_never_a_slash() {
 
 test_name_strips_unsafe_characters() {
   : > "$CALLS"
-  FM_HOME="$HOME_DIR" bash "$SCRIPT" --name w9:p3 afs 'fix: booking (v2)!' >/dev/null 2>&1
+  FM_HOME="$HOME_DIR" bash "$SCRIPT" --name w9:p3 afs 'fix: booking (v2)!' --apply >/dev/null 2>&1
   grep -qE 'agent rename w9:p3 afs-[a-z0-9-]+$' "$CALLS" \
     || { echo "calls: $(cat "$CALLS")"; fail "unsafe characters survived into the name"; }
   pass "naming: punctuation stripped, kebab-case enforced"
@@ -148,7 +148,7 @@ test_name_strips_unsafe_characters() {
 # An unreadably long name defeats the whole point — it must be refused.
 test_overlong_name_is_refused() {
   if FM_HOME="$HOME_DIR" bash "$SCRIPT" --name w9:p4 afs \
-       "an extremely long description of the work that will never fit in a tab bar" >/dev/null 2>&1; then
+       "an extremely long description of the work that will never fit in a tab bar" --apply >/dev/null 2>&1; then
     fail "an overlong name was accepted"
   else
     pass "naming: an unreadably long name is refused"

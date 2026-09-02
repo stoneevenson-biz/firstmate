@@ -723,10 +723,23 @@ preference - herdr rejects an agent name that is not `^[a-z][a-z0-9_-]{0,31}$`, 
 slashed name renames nothing and leaves the pane unaddressable. No task suffix: the id
 lives in `state/<id>.meta`, which is where an id belongs. `fm-spawn.sh --name <work>`
 supplies the work half; absent it, the id's random suffix is dropped and the rest is used.
-`bin/fm-herdr.sh` is both the library and the reconcile CLI: run it with no arguments for a
-plan that changes nothing, `--apply` to create the missing workspaces, and
-`--name <pane> <project> <work>` to name a live pane. It is deliberately not called `herdr`,
+`bin/fm-herdr.sh` is both the library and the CLI, and **every one of its verbs plans by
+default**: run it with no arguments for a plan of the missing workspaces and `--apply` to
+create them, `--name <pane> <project> <work>` for what it *would* name a pane and
+`--name ... --apply` to actually name it. Naming touches two objects - the tab label the
+captain reads and the address herdr steers by - so it does both or neither: a refused agent
+rename rolls the tab label back, because a pane whose visible name reaches nothing is the
+mystery-agent state this convention exists to remove. It is deliberately not called `herdr`,
 which would shadow the real binary and make every call site depend on `PATH` order.
+
+**Ask the script, not this paragraph.** `bin/fm-herdr.sh doctrine` prints the naming and
+addressing rules *rendered from the constants that enforce them* - the name regex herdr
+itself applies, the width budget, the tier vocabulary, the order the two rename slots go in
+- and it proves the naming rule by calling the validator rather than describing it. It needs
+no herdr server. Prose about these rules can drift; that output cannot, so when the two
+disagree the output is right and the prose is a bug. The workspace lookups behind it fail
+**closed**: a `workspace list` that could not be read is never treated as an empty fleet,
+because creating on that answer duplicates a project's workspace and splits its panes.
 
 **Supervision has followed the crew onto herdr** (gates w1-w7; spec
 `docs/specs/2026-08-31-supervision-on-herdr.md`). Both halves the cutover left behind are
