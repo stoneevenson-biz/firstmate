@@ -17,11 +17,15 @@
 #     which is what keeps it addressed with herdr verbs later;
 #   * the task id stays in the meta and out of the name.
 set -u
-export FM_INTAKE_OVERRIDE=1   # wardroom: this suite tests spawn machinery, not intake
 export FM_SKIP_SHELL_READY=1  # readiness is gated by h5 against a live pane
 
 # shellcheck source=tests/herdr-helpers.sh
 . "$(dirname "${BASH_SOURCE[0]}")/herdr-helpers.sh"
+
+# AFTER the source, deliberately: tests/lib.sh clears the captain bypasses at
+# source time so no suite inherits one from a crewmate launch, and a plain
+# export set before that line would be wiped with it.
+export FM_INTAKE_OVERRIDE=1   # wardroom: this suite tests spawn machinery, not intake
 
 TMP_ROOT=$(fm_test_tmproot fm-mux-h3)
 fm_git_identity fmtest fmtest@example.invalid

@@ -14,7 +14,6 @@
 # the fm-bootstrap problem line, the brief assertion ordering, and the fm-spawn
 # abort - all hermetic over temp git repos and fakebins.
 set -u
-export FM_INTAKE_OVERRIDE=1  # wardroom: this suite tests spawn machinery, not intake
 export FM_SKIP_SHELL_READY=1  # readiness gate: this suite tests spawn machinery over a fake tmux, not launch delivery (see fm-spawn-shell-ready.test.sh)
 
 # shellcheck source=tests/lib.sh
@@ -23,6 +22,11 @@ export FM_SKIP_SHELL_READY=1  # readiness gate: this suite tests spawn machinery
 # well as tmux - otherwise it reaches the captain's live server.
 # shellcheck source=tests/herdr-helpers.sh
 . "$(dirname "${BASH_SOURCE[0]}")/herdr-helpers.sh"
+
+# AFTER the source, deliberately: tests/lib.sh clears the captain bypasses at
+# source time so no suite inherits one from a crewmate launch, and a plain
+# export set before that line would be wiped with it.
+export FM_INTAKE_OVERRIDE=1   # wardroom: this suite tests spawn machinery, not intake
 
 # shellcheck source=bin/fm-tangle-lib.sh
 . "$ROOT/bin/fm-tangle-lib.sh"

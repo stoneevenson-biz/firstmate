@@ -195,6 +195,17 @@ mkdir -p "$FM_TEST_SANDBOX_HOME"
 export FM_HOME="$FM_TEST_SANDBOX_HOME"
 unset FM_STATE_OVERRIDE FM_DATA_OVERRIDE FM_PROJECTS_OVERRIDE FM_CONFIG_OVERRIDE FM_ROOT_OVERRIDE
 
+# The captain's bypasses arrive by the SAME inheritance, and they are worse:
+# each one DISARMS a gate. A crewmate spawned under FM_INTAKE_OVERRIDE=1 hands
+# that variable to every suite it runs, so fm_intake_require_proceed waves
+# through the revise the Wardroom suites exist to prove it refuses - measured on
+# 2026-09-02, where tests/fm-wardroom-i1 and i2 failed in a crewmate session and
+# passed everywhere else. It failed loudly this time; a bypass that disarms an
+# assertion the other way would not. A suite that wants a bypass sets it per
+# invocation, or after this file is sourced - either still wins. A plain export
+# ABOVE the source line does not, and two suites had one; they now set it below.
+unset FM_INTAKE_OVERRIDE FM_VERIFY_OVERRIDE FM_PREFLIGHT_OVERRIDE
+
 # --- keeping tests off the captain's live multiplexers ----------------------
 #
 # herdr is the only surface firstmate spawns onto, so any suite that drives

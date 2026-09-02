@@ -80,3 +80,7 @@
 | gate-c2-helm-take-and-isolation | green | Exclusivity under a real race, --take only against a dead holder, no redirect bypass, and a secondmate's own helm |
 | gate-t4-landed-steer-not-reported-swallowed | green | A steer that landed is reported as delivered, not as a swallowed Enter |
 | gate-t4-swallowed-enter-still-refused | green | A genuinely swallowed Enter is still refused: the false negative was not traded for a false positive |
+| gate-t4-lens-patch-scoped-to-branch | frozen | The lens patch carries the branch's own commits and not commits that already landed |
+| gate-t4-lens-patch-file-boundary-split | frozen | A payload over its bound drops whole named files and is still a valid patch |
+| gate-t4-lens-patch-refuses-corrupt | frozen | A payload that is not a valid patch refuses the lens instead of being passed through |
+| gate-t4-lens-patch-keeps-own-tests | frozen | The branch's own tests survive a bound that forces omission |

@@ -115,6 +115,7 @@ FM_RELAY_CMD=            # reject relay; default bin/fm-send.sh, deliberately wo
 FM_VERIFY_MAX_ATTEMPTS=3 # verify attempts before the task escalates to the captain
 FM_VERIFY_FETCH_TIMEOUT=30   # seconds allowed for the one origin fetch that resolves the authorisation base for the gate stage; a slow or failed fetch degrades loudly rather than blocking
 FM_VERIFY_OVERRIDE=      # set to 1 for the captain's loud, logged bypass of the merge and PR-poll gates
+FM_LENS_PATCH_MAX_BYTES=200000   # lens-payload bound, spent on whole FILES; a diff over it drops named files, never bytes, and a payload that fails git apply --check refuses the lens
 # sub-supervisor (bin/fm-supervise-daemon.sh); presence-gated via /afk
 FM_SUPERVISOR_TARGET=firstmate:0   # supervisor tmux target (override; auto-discovers from $TMUX_PANE)
 FM_INJECT_SKIP=heartbeat           # |-prefixes force-self-handled bypassing classification; empty disables

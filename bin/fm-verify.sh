@@ -6,9 +6,11 @@
 # ship task reports done:
 #   1. adjudicates the worktree's gate ledger STRUCTURALLY, before either model
 #      runs (fm_gates_classify in fm-gates-lib.sh) - see "gate adjudication"
-#   2. snapshots the crewmate's diff        -> data/<id>/lens-diff.patch
+#   2. builds a VALID patch of the branch's own commits (fm-patch-lib.sh)
+#                                            -> data/<id>/lens-diff.patch
 #   3. runs the foreign lens on it          -> data/<id>/lens-review.md
-#      (chain: FM_LENS_CMD > Fugu > codex > none - degrades loudly, never silently)
+#      (chain: FM_LENS_CMD > Fugu > codex > none - degrades loudly, never
+#      silently); a payload that fails `git apply --check` REFUSES the lens
 #   4. spawns an independent fresh-context verifier (default-REJECT) in the
 #      crewmate's worktree                  -> data/<id>/verify-report.md
 #   5. appends the decision to state/<id>.verdict (fm-verdict-lib grammar);
@@ -33,6 +35,9 @@
 #                       stdout must end with "VERDICT: approve|reject|escalate - reason"
 #                       (default: claude -p --permission-mode bypassPermissions)
 #        FM_LENS_CMD    lens command; diff on stdin, review on stdout
+#        FM_LENS_PATCH_MAX_BYTES
+#                       payload bound (default 200000), spent on whole FILES;
+#                       a diff over it drops named files, never bytes
 #        FM_RELAY_CMD   reject relay; default bin/fm-send.sh (word-split)
 #        FM_VERIFY_FETCH_TIMEOUT
 #                       seconds allowed for the one origin fetch that resolves
@@ -55,6 +60,8 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-lens-lib.sh"
 # shellcheck source=bin/fm-gates-lib.sh
 . "$SCRIPT_DIR/fm-gates-lib.sh"
+# shellcheck source=bin/fm-patch-lib.sh
+. "$SCRIPT_DIR/fm-patch-lib.sh"
 
 "$SCRIPT_DIR/fm-guard.sh" || true
 
@@ -134,17 +141,11 @@ verify_escalate() {  # <reason>
 #                   every project with no gates/ dir at all - which is most of
 #                   them - and buys no safety whatsoever, since nothing is
 #                   authorised by the size of a patch file.
-default_branch() {
-  local ref branch
-  ref=$(git -C "$WORKTREE" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)
-  if [ -n "$ref" ]; then echo "${ref#origin/}"; return 0; fi
-  for branch in main master; do
-    if git -C "$WORKTREE" show-ref --verify --quiet "refs/heads/$branch"; then
-      echo "$branch"; return 0
-    fi
-  done
-  return 1
-}
+# One implementation, in bin/fm-patch-lib.sh, which both bases ask. A private
+# copy here would be a second owner of "which branch is the default?", and the
+# two bases silently disagreeing about that is a defect that would read as a
+# scoping bug anywhere but the line that caused it.
+default_branch() { fm_patch_default_branch "$WORKTREE"; }
 
 # THE AUTHORISATION BASE IS RESOLVED ONCE, IN THE MAIN BODY, INTO THESE VARIABLES.
 # An earlier draft memoized inside a base_ref() that both stages called as
@@ -264,24 +265,32 @@ fi
 # HEAD`, the top commit alone, for every project including the majority that
 # have no gates/ dir at all. Worse review, identical safety.
 #
-# So: origin/<default> when it resolved, else the merge base with the local
-# default, else HEAD only - and the degradation is said OUT LOUD on stdout, not
-# left inside the patch file where no operator reads it.
+# The rule now has ONE implementation, fm_patch_diff_base in bin/fm-patch-lib.sh,
+# which this does not restate: among the default-branch-shaped refs, the base is
+# the one furthest FORWARD, seeded by the authorisation base so it can only ever
+# tighten the range and never widen it. That is what the old fallback got wrong.
+# It reached for the authorisation base first and refs/heads/<default> only as a
+# consolation, so a cached refs/remotes/origin/<default> that a failed fetch had
+# left stale WON outright - and on 2026-09-02 that handed the lens for task
+# fmcmd-guard seven commits when the branch owned three, four of them already
+# landed on main. Furthest-forward is withdrawn for the AUTHORISATION base on
+# security grounds and stays withdrawn; it is correct here for exactly the
+# reason the paragraph above gives, that a patch authorises nothing.
 resolve_diff_base() {
-  local default mb
-  if [ -n "$FM_AUTH_BASE_COMMIT" ]; then
-    FM_DIFF_BASE_REF=$FM_AUTH_BASE_REF
-    FM_DIFF_BASE_COMMIT=$FM_AUTH_BASE_COMMIT
-    return 0
+  local default
+  default=$(default_branch) || default=""
+  if fm_patch_diff_base "$WORKTREE" "$default" \
+      "$FM_AUTH_BASE_COMMIT" "$FM_AUTH_BASE_REF" >/dev/null; then
+    FM_DIFF_BASE_COMMIT=$FM_PATCH_BASE
+    FM_DIFF_BASE_REF=$FM_PATCH_BASE_REF
   fi
-  default=$(default_branch) || return 0
-  git -C "$WORKTREE" show-ref --verify --quiet "refs/heads/$default" || return 0
-  mb=$(git -C "$WORKTREE" merge-base HEAD "refs/heads/$default" 2>/dev/null) || return 0
-  [ -n "$mb" ] || return 0
-  FM_DIFF_BASE_REF="refs/heads/$default"
-  FM_DIFF_BASE_COMMIT=$mb
 }
 resolve_diff_base
+
+if [ -n "$FM_AUTH_BASE_COMMIT" ] && [ -n "$FM_DIFF_BASE_COMMIT" ] \
+   && [ "$FM_DIFF_BASE_COMMIT" != "$FM_AUTH_BASE_COMMIT" ]; then
+  echo "diff: the lens patch is scoped to $FM_DIFF_BASE_REF ($FM_DIFF_BASE_COMMIT), which is further forward than the authorisation base $FM_AUTH_BASE_REF - the commits between them already landed on the default branch and are not this branch's to answer for"
+fi
 
 if [ -z "$FM_AUTH_BASE_COMMIT" ]; then
   if [ -n "$FM_DIFF_BASE_COMMIT" ]; then
@@ -757,23 +766,63 @@ GATEROWS
   fi
 fi
 
-# --- 2. diff payload ---------------------------------------------------------
+# --- 2. diff payload: a patch, or no lens at all ------------------------------
+#
+# NEVER HAND OUT A PATCH THAT IS NOT A PATCH. The rule and its reasoning have one
+# implementation, bin/fm-patch-lib.sh, which this does not restate. What matters
+# here is what replaced what: this used to be `git diff ... | head -c 200000`,
+# and a byte bound applied to a patch cuts it mid-hunk. The artifact that
+# exposed it (data/fmcmd-guard/lens-diff.patch, 2026-09-02) was exactly 200,000
+# bytes, ended mid-statement, and `git apply --check` called it corrupt at line
+# 3403. The lens read what it could and said so; a less careful reviewer would
+# have approved a change it had never seen. A silent half-review is worse than a
+# missing one, because it still looks like a review from the outside.
 DIFF_FILE="$DATA/$ID/lens-diff.patch"
-{
-  if [ -n "$FM_DIFF_BASE_COMMIT" ]; then
-    git -C "$WORKTREE" log --oneline "$FM_DIFF_BASE_COMMIT..HEAD"
-    git -C "$WORKTREE" diff "$FM_DIFF_BASE_COMMIT..HEAD"
-  else
-    echo "(no base branch resolvable; showing HEAD commit only)"
-    git -C "$WORKTREE" show HEAD
+PATCH_BASE=$FM_DIFF_BASE_COMMIT
+PATCH_BASE_REF=$FM_DIFF_BASE_REF
+if [ -z "$PATCH_BASE" ]; then
+  # No base branch at all. The old degrade showed `git show HEAD`; the same
+  # coverage is had from HEAD^..HEAD, which the builder can prove is a patch.
+  PATCH_BASE=$(git -C "$WORKTREE" rev-parse --verify --quiet 'HEAD^' 2>/dev/null || true)
+  PATCH_BASE_REF="HEAD^ (no base branch is resolvable; the lens sees the top commit ONLY)"
+fi
+
+PATCH_OK=no
+if [ -n "$PATCH_BASE" ]; then
+  if fm_patch_build "$WORKTREE" "$PATCH_BASE" "$DIFF_FILE" \
+      "${FM_LENS_PATCH_MAX_BYTES:-200000}" "task $ID" "$PATCH_BASE_REF"; then
+    PATCH_OK=yes
   fi
-} | head -c 200000 > "$DIFF_FILE"
+else
+  : > "$DIFF_FILE"
+  FM_PATCH_WHY="HEAD is a root commit and no base branch is resolvable, so there is no range to take a patch from"
+fi
+
+if [ "$PATCH_OK" = yes ]; then
+  echo "patch: $FM_PATCH_INCLUDED of $FM_PATCH_TOTAL changed files handed to the lens, and the artifact passes git apply --check"
+  if [ -n "$FM_PATCH_OMITTED" ]; then
+    echo "patch: omitted, and named as omitted inside the payload:"
+    printf '%s' "$FM_PATCH_OMITTED" | sed 's/^/  /'
+  fi
+fi
 
 # --- 3. foreign lens: shared chain (fm-lens-lib.sh) ----------------------------
 LENS_REVIEW="$DATA/$ID/lens-review.md"
 LENS_PROMPT="You are a hostile senior reviewer. Roast this diff before it ships: correctness bugs, untested claims, security holes, scope drift. Be specific (file:line). End with the findings that most deserve a reject, or 'no blocking findings'."
 
-LENS=$(fm_lens_run "$DIFF_FILE" "$LENS_REVIEW" "$LENS_PROMPT" fugu "$WORKTREE" "task $ID")
+if [ "$PATCH_OK" = yes ]; then
+  LENS=$(fm_lens_run "$DIFF_FILE" "$LENS_REVIEW" "$LENS_PROMPT" fugu "$WORKTREE" "task $ID")
+else
+  # Fail closed, and loudly - the same shape fm_lens_run uses when no lens is
+  # reachable. A review formed from rubbish is not a cheaper review; it is a
+  # gate that reports green having read nothing. The independent verifier is
+  # untouched by this and still runs.
+  LENS=none
+  printf 'no foreign lens ran for task %s: the review patch was not a valid patch (%s), so the lens was REFUSED rather than shown a corrupt artifact. Weigh this stage as absent, not as clean.\n' \
+    "$ID" "$FM_PATCH_WHY" > "$LENS_REVIEW"
+  echo "warning: foreign lens REFUSED for task $ID - $FM_PATCH_WHY" >&2
+  echo "patch: REFUSED - $FM_PATCH_WHY"
+fi
 fm_verdict_append "$STATE" "$ID" lens "$LENS $(head -c 120 "$LENS_REVIEW" | tr '\n' ' ')"
 
 # --- 4. independent verifier (fail closed) -------------------------------------
