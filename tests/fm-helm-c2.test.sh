@@ -284,6 +284,13 @@ test_an_alternate_state_dir_cannot_slip_fm_update_through() {
   decoy="$dir/decoy"
   fm_git_identity
   fm_git_init_commit "$dir/root"
+  # Pin the branch name. git's init.defaultBranch is `master` on a bare CI runner
+  # and `main` on a machine that configured it, and fm-ff-lib resolves the default
+  # from origin/HEAD and then checks the checked-out branch against it - so an
+  # unpinned fixture fast-forwards on one platform and is skipped as "wrong
+  # branch" on the other, which is what made this control pass locally and fail on
+  # ubuntu.
+  git -C "$dir/root" branch -q -M main
   fm_git_add_origin "$dir/root" "$dir/root-origin"
   git -C "$dir/root" push -q origin HEAD:main 2>/dev/null || git -C "$dir/root" push -q origin HEAD
   git -C "$dir/root" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main 2>/dev/null || true
