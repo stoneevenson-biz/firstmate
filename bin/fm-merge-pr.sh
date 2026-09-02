@@ -25,10 +25,13 @@
 #     --remote <name>       merge into the repository this remote points at
 #     --project <dir>       repo to resolve remotes from (default: meta project=)
 #     --dry-run             print the exact merge command and exit, running none
-# Anything after `--` is passed through to `gh-axi pr merge` (e.g. --squash,
-# --delete-branch) - except a repo flag, which is REFUSED: gh-axi keeps the LAST
-# -R/--repo it sees, so a passthrough one would silently override the pin while
-# stderr still announced the resolved target.
+# Anything after `--` is passed through to `gh-axi pr merge`, but as an
+# ALLOWLIST: --merge/--squash/--rebase/--auto/--delete-branch, and
+# --method/--body/--body-file/--subject with a value. Everything else is
+# REFUSED by name. gh keeps the LAST repo flag it sees, so a passthrough
+# `--repo x`, `-R x` or `-Rowner/repo` would silently override the pin while
+# stderr still announced the resolved target - and blocking spellings one at a
+# time lost that race twice.
 #
 # Merge authority is unchanged: AGENTS.md still requires the captain's word (or
 # an authorized `yolo` posture). This script decides WHERE a merge lands, never
@@ -65,22 +68,49 @@ while [ $# -gt 0 ]; do
     --project=*) PROJ=${1#--project=}; PROJ_SET=1; shift ;;
     --dry-run) DRYRUN=1; shift ;;
     --)
-      # Passthrough is for merge OPTIONS (--squash, --delete-branch), never for
-      # the target. gh-axi scans every -R/--repo occurrence and keeps the LAST
-      # one, so a passthrough repo flag would silently win over the pin this
-      # script exists to apply - the merge would land somewhere nobody named
-      # while stderr still announced the resolved target. Refuse it here rather
-      # than try to win an ordering fight with a CLI whose flag semantics this
-      # script does not control.
+      # PASSTHROUGH IS AN ALLOWLIST, not a list of things to block.
+      #
+      # It began as a blocklist of repo flags, and that was defeated twice: gh
+      # keeps the LAST repo flag it sees, so a passthrough one wins over the pin
+      # while stderr still announces the resolved target. First `--repo x` and
+      # `-R x`, which the blocklist then named; then `-Rowner/repo`, the ATTACHED
+      # short form, which it did not. Same defect, one spelling further along -
+      # and the next spelling would have been the next reject.
+      #
+      # So the question is no longer "which flags are dangerous" (unknowable:
+      # `--repo`, `-R`, `-Rx`, and a host flag would redirect the whole API) but
+      # "which flags does `gh-axi pr merge` actually take". That list is short,
+      # documented by the binary, and anything outside it is refused by name.
+      # A new merge flag costs one line here; the alternative cost is a merge in
+      # a repository nobody named.
       shift
+      expect_value=0
       while [ $# -gt 0 ]; do
+        if [ "$expect_value" = 1 ]; then
+          expect_value=0; EXTRA+=("$1"); shift; continue
+        fi
         case "$1" in
-          -R|--repo|--repo=*|-R=*)
-            echo "REFUSED: '$1' after -- would override the pinned merge target (gh-axi takes the LAST --repo)." >&2
+          # Named first so the repo case keeps its own diagnosis. `-R*` covers
+          # `-R`, `-R=x` and the attached `-Rowner/repo` alike.
+          -R*|--repo|--repo=*)
+            echo "REFUSED: '$1' after -- would override the pinned merge target (gh takes the LAST repo flag)." >&2
             echo "         Name the repository with this script's own --repo/--remote, before the --." >&2
             exit 1 ;;
+          --merge|--squash|--rebase|--auto|--delete-branch)
+            EXTRA+=("$1"); shift ;;
+          --method=*|--body=*|--body-file=*|--subject=*)
+            EXTRA+=("$1"); shift ;;
+          --method|--body|--body-file|--subject)
+            [ $# -ge 2 ] || { echo "REFUSED: '$1' after -- needs a value." >&2; exit 1; }
+            expect_value=1; EXTRA+=("$1"); shift ;;
+          *)
+            echo "REFUSED: '$1' is not a 'gh-axi pr merge' option this script passes through." >&2
+            echo "         Allowed: --merge --squash --rebase --auto --delete-branch" >&2
+            echo "                  --method --body --body-file --subject (each with a value)" >&2
+            echo "         Passthrough is an allowlist on purpose: a flag nobody vetted can" >&2
+            echo "         redirect the merge, which is the whole thing this script prevents." >&2
+            exit 1 ;;
         esac
-        EXTRA+=("$1"); shift
       done ;;
     -*) usage ;;
     *)

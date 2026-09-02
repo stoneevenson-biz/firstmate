@@ -35,8 +35,13 @@
 #   5. `--repo` is honoured verbatim; a malformed one refuses.
 #   6. a target that is not origin merges (it was named) but says so loudly,
 #      naming the remote it belongs to.
-#   6b. a repo flag smuggled in after `--` REFUSES: gh-axi keeps the LAST
-#      -R/--repo, so passthrough would otherwise override the pin silently.
+#   6b. passthrough is an ALLOWLIST: every repo-flag spelling gh accepts -
+#      `--repo x`, `--repo=x`, `-R x`, `-R=x` and the ATTACHED `-Rowner/repo` -
+#      refuses, and so does any other unvetted flag (a host flag, an unknown
+#      one), because gh keeps the LAST repo flag and blocking spellings one at
+#      a time lost that race twice.
+#   6c. control: the stub really does honour `-Rowner/repo`, so 6b's refusals
+#      are claims about the guard rather than about a stub that cannot see it.
 #   7. `--dry-run` prints the exact command and runs nothing.
 #   8. the real call path: project and PR read from state/<id>.meta.
 #
@@ -78,10 +83,14 @@ repo=""
 args=("$@")
 i=0
 while [ "$i" -lt "${#args[@]}" ]; do
+  # Every spelling gh accepts, LAST one winning - including the ATTACHED short
+  # form `-Rowner/repo`, which is how the guard was defeated the third time. A
+  # stub blind to a spelling cannot prove the guard catches it.
   case "${args[i]}" in
     --repo|-R) repo="${args[$((i + 1))]:-}" ;;
     --repo=*)  repo="${args[i]#--repo=}" ;;
     -R=*)      repo="${args[i]#-R=}" ;;
+    -R?*)      repo="${args[i]#-R}" ;;
   esac
   i=$((i + 1))
 done
@@ -182,13 +191,14 @@ pass "non-origin target: merges because it was named, and says so loudly"
 # would silently win over the pin while stderr still announced the resolved
 # target - the same defect this whole path exists to close, wearing the script's
 # own advertised feature as a disguise.
-for smuggle in "--repo other/repo" "--repo=other/repo" "-R other/repo" "-R=other/repo"; do
+for smuggle in "--repo other/repo" "--repo=other/repo" "-R other/repo" "-R=other/repo" \
+               "-Rother/repo" "--squash -Rother/repo" "--hostname evil.example" "--json url"; do
   reset_record
   # shellcheck disable=SC2086  # deliberate word-splitting: each case is an argv
   out=$("$MERGE" t1j 5 --project "$SOLO" -- $smuggle 2>&1); code=$?
-  expect_code 1 "$code" "a repo flag after -- must refuse: $smuggle"
+  expect_code 1 "$code" "a smuggled flag after -- must refuse: $smuggle"
   assert_contains "$out" "REFUSED" "the refusal is loud: $smuggle"
-  [ ! -s "$REC" ] || fail "a smuggled repo flag must never reach the merge tool: $(record)"
+  [ ! -s "$REC" ] || fail "a smuggled flag must never reach the merge tool: $(record)"
 done
 
 reset_record
@@ -196,7 +206,16 @@ out=$("$MERGE" t1k 5 --project "$SOLO" -- --squash --delete-branch 2>&1); code=$
 expect_code 0 "$code" "ordinary passthrough options still work: $out"
 assert_contains "$(record)" "--repo $ORIGIN_SLUG" "the pin survives passthrough options"
 assert_contains "$(record)" "--squash --delete-branch" "passthrough options reach the tool"
-pass "passthrough: merge options pass through, a repo flag is refused before anything runs"
+pass "passthrough: an allowlist - merge options pass through, every other flag (repo in any spelling, a host flag, an unknown flag) is refused before anything runs"
+
+# 6c. CONTROL: the stub honours `-Rowner/repo` and lets the LAST repo flag win,
+#     so case 6b's refusals are claims about the guard, not about a blind stub.
+reset_record
+gh-axi pr merge 5 --repo "$ORIGIN_SLUG" -Rother/repo
+assert_contains "$(record)" "merged-into=other/repo" \
+  "control: an attached -Rowner/repo really does beat an earlier --repo"
+reset_record
+pass "control: the stub honours the attached -R form and the LAST repo flag wins"
 
 # --- 7. --dry-run runs nothing ---------------------------------------------
 reset_record

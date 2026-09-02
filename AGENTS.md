@@ -516,7 +516,7 @@ What you need at the call site:
 - `--dry-run` prints the exact pinned command without merging, if you want to see the target before the captain's word arrives.
 - A PR reference is a bare number or exactly `https://github.com/<owner>/<repo>/pull/<n>`. Anything else refuses, and is not repaired: a foreign host, a second `/pull/<n>` in the query or anchor, or a trailing `/files`. Paste the plain PR link, not the page you were reading.
 - A PR URL must name the same repository as the resolved target. Pairing a URL for one repo with `--repo`/`--remote` for another refuses, naming both: only the number would survive the URL, and PR 23 in one repo is not PR 23 in the other.
-- Merge options pass through after `--` (`-- --squash --delete-branch`), but a repo flag there is refused: `gh-axi` keeps the LAST `-R`/`--repo`, so passthrough would otherwise override the pin silently. Name the repository with the script's own `--repo`/`--remote`.
+- Passthrough after `--` is an allowlist: `--merge`/`--squash`/`--rebase`/`--auto`/`--delete-branch`, and `--method`/`--body`/`--body-file`/`--subject` with a value. Anything else is refused by name, repo flags in every spelling included - `gh` keeps the LAST one, so a smuggled flag would override the pin silently. Name the repository with the script's own `--repo`/`--remote`.
 
 This changes where a merge lands, never whether it may happen: prime directive #2 still applies, and `local-only` tasks still merge through `bin/fm-merge-local.sh`.
 
