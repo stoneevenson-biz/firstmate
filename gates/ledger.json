@@ -1090,6 +1090,40 @@
       "regression": false,
       "created": "2026-09-01T00:00:00Z",
       "last_verified": "2026-09-02T06:10:33.006Z"
+    },
+    {
+      "id": "gate-t4-routed-brief-reports-to-destination",
+      "title": "A routed item's brief reports into the destination home, not the origin",
+      "observable": "after bin/fm-backlog-handoff.sh routes an item, the destination brief's OWN reporting channel - extracted from the brief and exercised - reaches the destination home and never the origin: the status command appends to the destination's state/<key>.status, and a routed SCOUT's absolute report path resolves to the destination's data/<key>/report.md, the exact path bin/fm-teardown.sh reads in the owning home. Proven for an item routed with its brief (the data/<key>/ dir travels and the command names the destination home, its state dir and its own fm-status.sh), for an item in the state the pre-fix code actually produced - line already in the destination backlog, dir still in the origin - where the re-run fully migrates it, leaves no copy in the origin and names the dir it moved, for a destination with no fm-status.sh of its own (the pins move, the script path stays on a file that exists), and for a scout whose report would otherwise be written into a home the handoff has just emptied",
+      "origin_mode": "build",
+      "spec_ref": "docs/specs/2026-09-01-routed-brief-home.md",
+      "blocked_by": [],
+      "test_ref": "bash tests/fm-handoff-t4-routed-brief.test.sh",
+      "baseline_ref": null,
+      "first_observed_red": "2026-09-02T05:06:33.909Z",
+      "mutation_verified": "2026-09-02T06:16:55.396Z",
+      "status": "frozen",
+      "vacuous": false,
+      "regression": false,
+      "created": "2026-09-01T00:00:00Z",
+      "last_verified": "2026-09-02T06:08:58.032Z"
+    },
+    {
+      "id": "gate-t4-handoff-safety-preserved",
+      "title": "Routing the channel did not weaken any handoff refusal",
+      "observable": "with a brief dir present in every arm, bin/fm-backlog-handoff.sh still aborts atomically on an unmatched key (neither backlog touched and the brief still whole in the origin), refuses an ## In flight item without its brief travelling, refuses a destination lacking or mismatching the .fm-secondmate-home marker without writing into it, stays idempotent (no duplicated line, an already-retargeted brief left byte-identical), and leaves a destination's own data/<key>/ dir unclobbered - naming the origin's stale copy in its output rather than removing it",
+      "origin_mode": "build",
+      "spec_ref": "docs/specs/2026-09-01-routed-brief-home.md",
+      "blocked_by": [],
+      "test_ref": "bash tests/fm-handoff-t4-safety.test.sh",
+      "baseline_ref": null,
+      "first_observed_red": "2026-09-02T05:06:33.909Z",
+      "mutation_verified": "2026-09-02T06:17:05.173Z",
+      "status": "frozen",
+      "vacuous": false,
+      "regression": false,
+      "created": "2026-09-01T00:00:00Z",
+      "last_verified": "2026-09-02T06:08:58.032Z"
     }
   ]
 }

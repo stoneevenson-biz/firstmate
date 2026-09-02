@@ -71,3 +71,5 @@
 | gate-t2-merge-env-redirect | frozen | GH_REPO and GH_HOST are pinned at the exec, so an environment variable cannot redirect a merge without appearing in the argv |
 | gate-t2-merge-origin-proof | frozen | The resolved target must be proved equal to this clone's origin, or affirmed by a flag that names no repository |
 | gate-t2-merge-argv-egress | frozen | The finished merge argv is re-read before exec and must pin the resolved target exactly once |
+| gate-t4-routed-brief-reports-to-destination | frozen | A routed item's brief reports into the destination home, not the origin |
+| gate-t4-handoff-safety-preserved | frozen | Routing the channel did not weaken any handoff refusal |
