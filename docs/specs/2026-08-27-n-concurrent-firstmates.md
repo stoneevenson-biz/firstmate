@@ -226,10 +226,10 @@ reads as an error would fire constantly and train the captain to ignore it.
 
 ### Built (2026-09-01) — what section 4 became
 
-`bin/fm-lock-lib.sh` carries the seam, `fm_lock_require_helm <state-dir> <label>`, and eight
+`bin/fm-lock-lib.sh` carries the seam, `fm_lock_require_helm <state-dir> <label>`, and nine
 drive verbs call it as `|| exit 1` before they mutate anything: `fm-spawn.sh`, `fm-send.sh`,
-`fm-teardown.sh`, `fm-merge-local.sh`, `fm-pr-check.sh`, `fm-promote.sh`, `fm-update.sh`, and
-`fm-watch-arm.sh --restart` (that path only — it kills a live watcher; plain arming is
+`fm-teardown.sh`, `fm-merge-local.sh`, `fm-merge-pr.sh`, `fm-pr-check.sh`, `fm-promote.sh`,
+`fm-update.sh`, and `fm-watch-arm.sh --restart` (that path only — it kills a live watcher; plain arming is
 singleton-safe and every session does it). It is deliberately **not** in `bin/fm-guard.sh`,
 which always exits 0 by design and could not stop a caller if it wanted to. The full caller
 matrix — including what does not gate and why — is written down once, in `docs/scripts.md`
@@ -243,6 +243,11 @@ helm before it touches anything.
 
 Five decisions the design left open, settled in the build:
 
+- **One claim per invocation.** A batch spawn re-execs `fm-spawn.sh` once per `id=repo`
+  pair, so the parent claims and the loop runs under that claim; a verb whose recorded
+  holder is already this session's harness returns on a pure read, with no mutex and no
+  write. A refusal therefore lands before any pair is dispatched - a batch spawns all of
+  its pairs or none.
 - **Atomicity.** The critical section is held under `fm_lock_try_acquire`
   (`bin/fm-wake-lib.sh`) on `$STATE/.lock.acquire` — this repo's existing atomic mutex,
   already proven single-winner under 40-way concurrency by `tests/fm-watcher-lock.test.sh`,

@@ -55,6 +55,16 @@ See the [no-mistakes quick start](https://kunchenguid.github.io/no-mistakes/star
   Where a rule is *about* a location, prove it under two different ones - a single root cannot distinguish "the rule fires wherever the checkout lives" from "the rule fires here".
 - In Markdown, put each full sentence on its own line.
 
+**A test must never let `$STATE` resolve to a real home.** Firstmate's scripts resolve
+`STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"`, with `FM_HOME` falling back to
+`FM_ROOT_OVERRIDE` and then to the checkout the script lives in - so a suite that clears
+BOTH lands on `$FM_ROOT/state`, which is the captain's live `~/firstmate/state` whenever the
+suite is run from his primary checkout. A suite that got there wrote his real session lock.
+Clear `FM_STATE_OVERRIDE` only when the same command names a non-empty `FM_HOME` you own;
+otherwise point it at a temp dir. `tests/fm-test-hermeticity.test.sh` enforces that
+statically, and `tests/lib.sh` carries a tripwire underneath it that fails any suite whose
+own process tree ends up named in the real session lock.
+
 ## The gate ledger
 
 `gates/` is the machine-verified definition of done.
@@ -144,7 +154,9 @@ tests/fm-merge-t2-vectors.test.sh         # one case per way the merge target ca
 tests/fm-herdr-lib.test.sh                # bin/fm-herdr.sh library verbs: reachability and its escalation, workspace resolution, pane naming, meta-routed target resolution, and drain accounting
 tests/fm-herdr-cli.test.sh                # bin/fm-herdr.sh reconcile CLI: one workspace per project planned then applied, and --name applied to a live pane
 tests/fm-herdr-h*.test.sh                 # the herdr cutover gates: herdr as the only surface, explicit workspace scoping, named-tab spawn, meta-routed steer/peek, live acknowledged delivery, the open drain, teardown closing the pane, startup reporting an undispatchable fleet, busy-agent acknowledgment, doctrine rendered from the enforcing constants, --name planning then applying both slots or neither, and workspace lookups that fail closed
-tests/fm-test-hermeticity.test.sh         # the suites stay off the captain's live herdr and tmux: every suite is under the net or declares a HERMETICITY-WAIVER, both refusers on PATH, independent opt-outs, and a live-tmux opt-in whose kills are scoped to the suite's own throwaway session
+tests/fm-test-hermeticity.test.sh         # the suites stay off the captain's live fleet: every suite is under the net or declares a HERMETICITY-WAIVER, both multiplexer refusers on PATH, independent opt-outs, a live-tmux opt-in whose kills are scoped to the suite's own throwaway session, no suite clearing FM_STATE_OVERRIDE without naming its own home, and the live-fleet tripwire proven to fire
+tests/fm-helm-c1.test.sh                  # the helm as a writer-only seam: every drive verb refuses under a live foreign holder (codex and pi) and writes nothing, a batch claims once and never half-spawns, no boot path emits a refusal, and the harness-not-found policy in both directions
+tests/fm-helm-c2.test.sh                  # the helm's exclusivity under a real 16-way race, --take only against a provably dead holder, the acquire mutex, --restart gating, no redirect bypass, and a secondmate's own helm
 [ "$(readlink CLAUDE.md)" = "AGENTS.md" ]
 [ "$(readlink .claude/skills)" = "../.agents/skills" ]
 FM_HEARTBEAT=2 FM_POLL=1 bin/fm-watch-arm.sh  # watcher re-arm smoke test (prints arm status, then "heartbeat")

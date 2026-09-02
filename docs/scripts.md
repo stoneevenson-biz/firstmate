@@ -79,6 +79,16 @@ free or stale helm HAS TAKEN it, atomically, before the verb touches anything.
 `gate-c2-helm-take-and-isolation` proves that with sixteen concurrent sessions and
 sixteen distinct harness identities racing one free helm: exactly one passes.
 
+**One claim per invocation.** A batch spawn is a single writer action containing
+several spawns - `bin/fm-spawn.sh` re-execs itself once per `id=repo` pair - so the helm
+is claimed once, by the parent, and the loop runs under that claim. A verb whose recorded
+holder is already this session's harness returns on a pure read: no mutex, no write.
+Nobody else can be steering in that case, because becoming the holder means winning the
+CAS against a live us, which `fm_lock_cas` refuses. A refusal therefore lands before any
+pair is dispatched, so a batch either spawns all of its pairs or none of them - half a
+batch is worse than none, because some panes and worktrees exist and nothing records
+which.
+
 **Atomicity.** The whole critical section - read the holder, judge it, write ours - is
 held under `fm_lock_try_acquire` (`bin/fm-wake-lib.sh`) on `state/.lock.acquire`. That
 is this repo's existing atomic mutex: an atomic `ln -s` create, with dead-owner
@@ -86,7 +96,7 @@ reclamation itself serialised through a second lock, already proven single-winne
 40-way concurrency by `tests/fm-watcher-lock.test.sh`. A second CAS implementation would
 be a second thing to get wrong.
 
-### The gated eight
+### The gated nine
 
 Each calls `fm_lock_require_helm "$STATE" <label> || exit 1` before it mutates anything.
 `gate-c1-helm-writer-only` pins this roster exactly, so adding or removing one is a
@@ -98,6 +108,7 @@ reviewed change, not a drift.
 | `fm-send.sh` | steer - puts a line into a live crewmate's composer |
 | `fm-teardown.sh` | teardown - returns the worktree or retires a secondmate home |
 | `fm-merge-local.sh` | merge - fast-forwards a project's local default branch |
+| `fm-merge-pr.sh` | merge - the fleet's only path to merging a PR-based ship task's pull request |
 | `fm-pr-check.sh` | the merge path - records `pr=` and arms the merge poll |
 | `fm-promote.sh` | re-contracts a live task by rewriting its meta |
 | `fm-update.sh` | fast-forwards this home's instructions and every secondmate's |

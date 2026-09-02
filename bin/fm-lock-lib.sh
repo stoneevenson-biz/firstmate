@@ -186,6 +186,19 @@ fm_lock_cas() {
 fm_lock_require_helm() {
   local state=$1 label=$2 me rc
   me=$(fm_lock_harness_pid) || me=
+
+  # ONE CLAIM PER INVOCATION. A batch spawn is a single writer action containing
+  # several spawns: bin/fm-spawn.sh re-execs itself once per id=repo pair, so
+  # without this the helm would be re-taken - mutex, write and all - once per
+  # pair. If the recorded holder is ALREADY this session's harness then nobody
+  # else can be steering, because becoming the holder means winning the CAS
+  # against a live us, which fm_lock_cas refuses. So this is a pure read: no
+  # mutex, no write, and the claim the parent made is the one the whole batch
+  # runs under.
+  if [ -n "$me" ] && [ "$(fm_lock_holder "$state" 2>/dev/null || true)" = "$me" ]; then
+    return 0
+  fi
+
   fm_lock_cas "$state" "$me"; rc=$?
 
   if [ "$rc" -eq 2 ]; then

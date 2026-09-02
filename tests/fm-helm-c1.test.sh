@@ -131,6 +131,7 @@ VERB_ROWS='fm-spawn^SPAWN
 fm-send^SEND
 fm-teardown^TEARDOWN
 fm-merge-local^MERGE
+fm-merge-pr^MERGEPR
 fm-pr-check^PRCHECK
 fm-promote^PROMOTE
 fm-update^UPDATE'
@@ -141,6 +142,7 @@ verb_args() {  # <key> <home> -> the argv for that verb
     SEND)     printf '%s\n' "$ROOT/bin/fm-send.sh" fm-t1 hello ;;
     TEARDOWN) printf '%s\n' "$ROOT/bin/fm-teardown.sh" t1 ;;
     MERGE)    printf '%s\n' "$ROOT/bin/fm-merge-local.sh" t1 ;;
+    MERGEPR)  printf '%s\n' "$ROOT/bin/fm-merge-pr.sh" t1 ;;
     PRCHECK)  printf '%s\n' "$ROOT/bin/fm-pr-check.sh" t1 https://example.invalid/pr/1 ;;
     PROMOTE)  printf '%s\n' "$ROOT/bin/fm-promote.sh" t1 ;;
     UPDATE)   printf '%s\n' "$ROOT/bin/fm-update.sh" ;;
@@ -338,12 +340,13 @@ test_seam_roster_is_writer_only() {
   local callers f
   # shellcheck disable=SC2016  # a literal grep pattern; $STATE must NOT expand
   callers=$(grep -l 'fm_lock_require_helm "$STATE"' "$ROOT"/bin/*.sh | while IFS= read -r f; do basename "$f"; done | LC_ALL=C sort | tr '\n' ' ')
-  [ "$callers" = "fm-merge-local.sh fm-pr-check.sh fm-promote.sh fm-send.sh fm-spawn.sh fm-teardown.sh fm-update.sh fm-watch-arm.sh " ] \
+  [ "$callers" = "fm-merge-local.sh fm-merge-pr.sh fm-pr-check.sh fm-promote.sh fm-send.sh fm-spawn.sh fm-teardown.sh fm-update.sh fm-watch-arm.sh " ] \
     || fail "the helm seam's caller roster changed unreviewed: [$callers]"
 
   for f in fm-bootstrap.sh fm-boot-context.sh fm-captain-bootstrap.sh fm-guard.sh \
            fm-wake-drain.sh fm-watch.sh fm-peek.sh fm-status.sh \
-           fm-review-diff.sh fm-fleet-sync.sh fm-harness.sh fm-project-mode.sh; do
+           fm-review-diff.sh fm-fleet-sync.sh fm-harness.sh fm-project-mode.sh \
+           fm-sense-lib.sh fm-merge-target-lib.sh; do
     assert_no_grep 'fm_lock_require_helm' "$ROOT/bin/$f" \
       "$f is a boot or read path and must never gate on the helm"
   done
@@ -430,8 +433,67 @@ test_real_lock_untouched() {
 }
 
 
+# A BATCH IS ONE WRITER ACTION CONTAINING SEVERAL SPAWNS. fm-spawn re-execs itself
+# once per id=repo pair, so the helm has to be claimed ONCE for the whole
+# invocation with the loop running under that claim - not re-taken per pair - and
+# a refusal has to land before any pair is dispatched. Half a batch is worse than
+# none: some panes and worktrees exist and the rest do not, with nothing recording
+# which. Both halves are asserted here because both are one-line regressions.
+# shellcheck disable=SC2016  # the payload is a literal script for the inner
+# bash -c; its $1..$6 are that shell's positionals, not ours.
+test_batch_claims_once_and_never_half_spawns() {
+  local dir home pid out rc before after
+  dir="$TMP_ROOT/batch"
+  mkdir -p "$dir"
+  home=$(make_home "$dir")
+
+  # HELD BY US: every pair is dispatched, and the helm is not re-taken. The whole
+  # thing runs inside ONE wrapper so the identity that writes the lock is the
+  # identity the batch then runs under; the lock's mtime is read either side of a
+  # full second, so a per-pair rewrite could not hide inside the same timestamp.
+  out=$(fm_helm_under_harness "$WRAP/batch" claude bash -c '
+    . "$1"
+    me=$(fm_lock_harness_pid) || exit 90
+    mkdir -p "$2"
+    printf "%s\n" "$me" > "$2/.lock"
+    sleep 1
+    before=$(stat -f %m "$2/.lock" 2>/dev/null || stat -c %Y "$2/.lock")
+    body=$(FM_HOME="$3" FM_ROOT_OVERRIDE="$4" FM_STATE_OVERRIDE="$2" PATH="$6:$PATH" \
+      "$5" batch-a-z1=projects/proj batch-b-z2=projects/proj 2>&1); rc=$?
+    after=$(stat -f %m "$2/.lock" 2>/dev/null || stat -c %Y "$2/.lock")
+    printf "RC=%s BEFORE=%s AFTER=%s HOLDER=%s ME=%s\n" "$rc" "$before" "$after" "$(cat "$2/.lock")" "$me"
+    printf "%s\n" "$body"
+  ' _ "$ROOT/bin/fm-lock-lib.sh" "$home/state" "$home" "$dir/root" "$ROOT/bin/fm-spawn.sh" "$dir/fakebin" 2>&1)
+
+  assert_contains "$out" "batch: FAILED to spawn batch-a-z1" "the first pair of a batch was not dispatched under a held helm"
+  assert_contains "$out" "batch: FAILED to spawn batch-b-z2" "the second pair was not dispatched - the batch loop stopped early"
+  assert_not_contains "$out" "another live session holds this home's helm" \
+    "a batch run by the session that holds the helm must not be refused"
+  before=$(printf '%s' "$out" | sed -n 's/.*BEFORE=\([0-9]*\).*/\1/p' | head -1)
+  after=$(printf '%s' "$out" | sed -n 's/.*AFTER=\([0-9]*\).*/\1/p' | head -1)
+  [ -n "$before" ] && [ -n "$after" ] || fail "could not read the lock timestamps back: $out"
+  [ "$before" = "$after" ] \
+    || fail "the helm was re-taken during the batch (mtime $before -> $after); it must be claimed once for the whole invocation"
+
+  # FOREIGN LIVE HOLDER: refused, and NOT ONE PAIR dispatched.
+  pid=$(fm_helm_live_harness "$dir/fixture" codex)
+  fm_helm_hold "$home/state" "$pid"
+  before=$(fm_helm_snapshot "$dir")
+  run_verb "$dir" "$home" "$ROOT/bin/fm-spawn.sh" batch-a-z1=projects/proj batch-b-z2=projects/proj
+  rc=$RUN_CODE
+  [ "$rc" -ne 0 ] || fail "a batch was allowed through while another live session held the helm"
+  assert_contains "$RUN_OUT" "another live session holds this home's helm" "the batch refusal is not the helm's"
+  assert_not_contains "$RUN_OUT" "batch: FAILED to spawn batch-a-z1" \
+    "a refused batch dispatched its first pair anyway - half a batch is worse than none"
+  assert_not_contains "$RUN_OUT" "batch: FAILED to spawn batch-b-z2" "a refused batch dispatched its second pair anyway"
+  after=$(fm_helm_snapshot "$dir")
+  [ "$before" = "$after" ] || fail "a refused batch mutated the tree"
+  pass "a batch claims the helm once for the whole invocation, dispatches every pair under it, and a refusal spawns none of them"
+}
+
 test_drive_verbs_refuse_and_mutate_nothing
 test_a_live_pi_holder_is_not_read_as_dead
+test_batch_claims_once_and_never_half_spawns
 test_positive_controls_and_the_claim
 test_no_boot_path_refuses
 test_seam_roster_is_writer_only

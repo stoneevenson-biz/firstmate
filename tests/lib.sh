@@ -65,8 +65,90 @@ pass() {
 # installed here at SOURCE time, which is the parent's shell.
 FM_TEST_CLEANUP_REGISTRY="${TMPDIR:-/tmp}/fm-test-cleanup.$$"
 
+# --- the live fleet is out of bounds ---------------------------------------
+#
+# A suite must never resolve a firstmate script's $STATE to a REAL home. The
+# resolution chain is STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}" with FM_HOME
+# falling back to FM_ROOT_OVERRIDE and then to the checkout the script lives in -
+# so a suite that clears BOTH FM_HOME and FM_STATE_OVERRIDE lands on
+# $FM_ROOT/state, which, when the suite is run from the captain's primary
+# checkout, IS his live ~/firstmate/state. That is not hypothetical: it is how
+# tests/fm-spawn-batch.test.sh came to run the helm claim against the captain's
+# real session lock, which would have overwritten it whenever it was free or
+# stale. The helm brief names that outcome exactly - "a test that quietly took
+# the captain's real lock would take his fleet down".
+#
+# No environment variable can prevent it, because a per-invocation
+# `FM_STATE_OVERRIDE=''` beats any default this file could export. So the net is
+# two layers, and neither is a per-suite fix:
+#   * this tripwire, which every suite gets by sourcing this file and none can
+#     opt out of, and which fails the suite that took the real helm;
+#   * a static rule in tests/fm-test-hermeticity.test.sh, so the mistake cannot
+#     be written in the first place.
+#
+# The rule is precise so it cannot cry wolf. A REAL firstmate session legitimately
+# rewrites its own lock while a suite runs, and that must not fail anything, so a
+# change is only a breach when the new holder belongs to THIS process's own
+# ancestry (the suite took it), or when the file appears, vanishes, or names
+# something that is not a live harness at all.
+# Derived from $HOME rather than taking an override of its own: a variable named
+# for this check would be an opt-out, and there is deliberately none. (A suite
+# that legitimately needs a fake "real home" - the hermeticity gate that proves
+# this tripwire actually fires - points $HOME at a temp dir instead.)
+FM_TEST_REAL_LOCK="${HOME:-/nonexistent}/firstmate/state/.lock"
+
+fm_test_real_lock_state() {
+  if [ -e "$FM_TEST_REAL_LOCK" ]; then
+    cat "$FM_TEST_REAL_LOCK" 2>/dev/null || echo UNREADABLE
+  else
+    echo ABSENT
+  fi
+}
+
+FM_TEST_REAL_LOCK_BEFORE=$(fm_test_real_lock_state)
+
+# Every pid from this process up to init: the set a suite could have written.
+fm_test_own_pids() {
+  local pid=$$ n=0
+  while [ -n "$pid" ] && [ "$pid" -gt 1 ] && [ "$n" -lt 12 ]; do
+    printf '%s\n' "$pid"
+    pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+    n=$((n + 1))
+  done
+}
+
+fm_test_assert_live_fleet_untouched() {
+  local now
+  now=$(fm_test_real_lock_state)
+  [ "$now" = "$FM_TEST_REAL_LOCK_BEFORE" ] && return 0
+  if [ "$now" = ABSENT ] || [ "$FM_TEST_REAL_LOCK_BEFORE" = ABSENT ]; then
+    printf 'not ok - this suite created or removed the captain'"'"'s real session lock at %s\n' \
+      "$FM_TEST_REAL_LOCK" >&2
+    exit 1
+  fi
+  if fm_test_own_pids | grep -qxF "$now"; then
+    printf 'not ok - this suite TOOK the captain'"'"'s real session lock at %s (now names pid %s, from this test process tree)\n' \
+      "$FM_TEST_REAL_LOCK" "$now" >&2
+    printf '     a suite must never resolve STATE to a real home; point FM_STATE_OVERRIDE at a temp dir\n' >&2
+    exit 1
+  fi
+  # Someone else holds it. That is only legitimate if they are a live harness.
+  if kill -0 "$now" 2>/dev/null && \
+     ps -o comm= -o args= -p "$now" 2>/dev/null | grep -qE 'claude|codex|opencode|(^|[^[:alnum:]_-])pi([^[:alnum:]_-]|$)'; then
+    printf 'note: the captain'"'"'s real session lock changed to live harness pid %s during this run (a real session re-acquired it); not a breach\n' \
+      "$now" >&2
+    return 0
+  fi
+  printf 'not ok - the captain'"'"'s real session lock at %s changed to %s, which is not a live harness\n' \
+    "$FM_TEST_REAL_LOCK" "$now" >&2
+  exit 1
+}
+
 fm_test_cleanup() {
   local d
+  # Checked FIRST, and it is the one thing here allowed to decide the exit code:
+  # this is not cleanup succeeding or failing, it is a containment breach.
+  fm_test_assert_live_fleet_untouched
   if [ -f "$FM_TEST_CLEANUP_REGISTRY" ]; then
     while read -r d; do
       [ -n "$d" ] && rm -rf "$d"

@@ -1179,7 +1179,7 @@
     {
       "id": "gate-c1-helm-writer-only",
       "title": "The helm is a writer-only seam that CLAIMS: drive verbs refuse under a live foreign holder, boot paths never do",
-      "observable": "With another live harness holding this home's lock - proven live through fm-lock.sh status first, and covering a holder whose comm is literally `pi` as well as `codex` - each of the eight drive verbs (fm-spawn, fm-send, fm-teardown, fm-merge-local, fm-pr-check, fm-promote, fm-update, fm-watch-arm --restart) exits non-zero carrying the captain-facing sentence the spec specifies and the --take pointer, and a whole-tree fingerprint over the home and an FM_ROOT stand-in whose origin is one commit ahead is byte-identical afterwards - no state written, no fetch, no fast-forward. Every verb runs under a harness identity the test chooses rather than the ancestry's, so the refusals hold on CI's agent-free runner too, and that identity is asserted distinct from the holder's. With the helm free the same fm-promote rewrites the meta and the same fm-update fast-forwards, and a verb that proceeded has CLAIMED the helm. No boot path emits any refusal string under the same live holder - the boot-context emitter (which still renders the full fleet view), the BARE fm-lock.sh acquire that AGENTS.md recovery step 1 names (which reports the observer state plainly and exits 0 without overwriting the holder), fm-lock.sh status, fm-guard.sh, fm-wake-drain.sh, fm-watch-arm.sh --status, fm-bootstrap.sh and fm-bootstrap.sh install (which still runs the installer). The seam's caller roster is exactly those eight scripts and no boot or read path contains the call. fm_lock_require_helm claims a free and a stale helm, passes the holder silently, refuses a live foreign holder, refuses an unidentifiable harness behind a live holder without overwriting it, and passes an unidentifiable harness on an unsteered home out loud without claiming",
+      "observable": "With another live harness holding this home's lock - proven live through fm-lock.sh status first, and covering a holder whose comm is literally `pi` as well as `codex` - each of the nine drive verbs (fm-spawn, fm-send, fm-teardown, fm-merge-local, fm-merge-pr, fm-pr-check, fm-promote, fm-update, fm-watch-arm --restart) exits non-zero carrying the captain-facing sentence the spec specifies and the --take pointer, and a whole-tree fingerprint over the home and an FM_ROOT stand-in whose origin is one commit ahead is byte-identical afterwards - no state written, no fetch, no fast-forward. Every verb runs under a harness identity the test chooses rather than the ancestry's, so the refusals hold on CI's agent-free runner too, and that identity is asserted distinct from the holder's. With the helm free the same fm-promote rewrites the meta and the same fm-update fast-forwards, and a verb that proceeded has CLAIMED the helm. No boot path emits any refusal string under the same live holder - the boot-context emitter (which still renders the full fleet view), the BARE fm-lock.sh acquire that AGENTS.md recovery step 1 names (which reports the observer state plainly and exits 0 without overwriting the holder), fm-lock.sh status, fm-guard.sh, fm-wake-drain.sh, fm-watch-arm.sh --status, fm-bootstrap.sh and fm-bootstrap.sh install (which still runs the installer). The seam's caller roster is exactly those nine scripts and no boot or read path contains the call. fm_lock_require_helm claims a free and a stale helm, passes the holder silently, refuses a live foreign holder, refuses an unidentifiable harness behind a live holder without overwriting it, and passes an unidentifiable harness on an unsteered home out loud without claiming. A BATCH is one writer action containing several spawns: run by the session that holds the helm it dispatches every id=repo pair and the lock's mtime is unchanged across the whole invocation (claimed once, not re-taken per pair), and run against a live foreign holder it refuses with NOT ONE pair dispatched and the tree fingerprint unchanged",
       "origin_mode": "build",
       "spec_ref": "docs/specs/2026-08-27-n-concurrent-firstmates.md",
       "blocked_by": [],
@@ -1190,7 +1190,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-09-01T00:00:00Z",
-      "last_verified": "2026-09-02T07:45:03.148Z",
+      "last_verified": "2026-09-02T09:01:15.618Z",
       "mutation_verified": null
     },
     {
@@ -1207,7 +1207,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-09-01T00:00:00Z",
-      "last_verified": "2026-09-02T07:45:03.148Z",
+      "last_verified": "2026-09-02T09:01:15.618Z",
       "mutation_verified": null
     }
   ]
