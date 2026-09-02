@@ -65,6 +65,12 @@ otherwise point it at a temp dir. `tests/fm-test-hermeticity.test.sh` enforces t
 statically, and `tests/lib.sh` carries a tripwire underneath it that fails any suite whose
 own process tree ends up named in the real session lock.
 
+The same hazard also arrives by inheritance: `bin/fm-spawn.sh` pins `FM_HOME` into every
+crewmate's launch, so a crewmate session's environment names the captain's home and a suite
+that sets nothing at all inherits it. `tests/lib.sh` therefore neutralises the ambient
+firstmate variables at source time and gives every suite its own sandbox home by default -
+a suite that names a home still wins, because a per-invocation assignment beats an export.
+
 ## The gate ledger
 
 `gates/` is the machine-verified definition of done.

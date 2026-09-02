@@ -411,6 +411,27 @@ test_the_live_fleet_tripwire_fires() {
   pass "hermeticity: the live-fleet tripwire fires on a taken or created real session lock, and stays quiet otherwise"
 }
 
+# The ambient pin is the same hazard arriving by inheritance rather than by hand,
+# and it reaches every suite that simply says nothing. A guard nothing exercises
+# is a guard that rots, so this proves sourcing tests/lib.sh actually neutralises
+# it - with a decoy standing in for the captain's home.
+# shellcheck disable=SC2016  # the payload is a literal snippet for in_fresh's
+# inner shell; these variables must expand THERE, not here.
+test_the_ambient_firstmate_pin_is_neutralised() {
+  local out
+  out=$(in_fresh FM_HOME=/decoy/captain-firstmate FM_STATE_OVERRIDE=/decoy/state \
+        FM_DATA_OVERRIDE=/decoy/data FM_ROOT_OVERRIDE=/decoy/root \
+        -- 'printf "HOME=[%s] STATE=[%s] DATA=[%s] ROOT=[%s]\n" \
+              "$FM_HOME" "${FM_STATE_OVERRIDE-unset}" "${FM_DATA_OVERRIDE-unset}" "${FM_ROOT_OVERRIDE-unset}"')
+  assert_not_contains "$out" "/decoy/captain-firstmate" \
+    "sourcing lib.sh must not leave a suite pointed at the home its session was launched with"
+  assert_contains "$out" "STATE=[unset]" "an inherited FM_STATE_OVERRIDE must not survive"
+  assert_contains "$out" "DATA=[unset]" "an inherited FM_DATA_OVERRIDE must not survive"
+  assert_contains "$out" "ROOT=[unset]" "an inherited FM_ROOT_OVERRIDE must not survive"
+  assert_contains "$out" "fm-test-sandbox" "a suite that names no home must get its own sandbox"
+  pass "hermeticity: the session's ambient firstmate pin is neutralised; a suite that names no home gets a sandbox"
+}
+
 test_every_suite_is_under_the_net_or_declares_that_it_is_not
 test_a_helper_that_never_reaches_lib_is_not_proof
 test_the_temp_root_survives_a_subshell_and_is_cleaned_on_exit
@@ -425,3 +446,4 @@ test_the_two_argv_readings_agree
 test_the_guard_passes_scoped_and_harmless_verbs_through
 test_no_suite_can_resolve_state_to_a_real_home
 test_the_live_fleet_tripwire_fires
+test_the_ambient_firstmate_pin_is_neutralised

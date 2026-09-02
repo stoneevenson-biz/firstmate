@@ -169,6 +169,32 @@ fm_test_tmproot() {
 
 trap fm_test_cleanup EXIT
 
+# --- the ambient firstmate environment is not the suite's -------------------
+#
+# THE DEFECT THIS EXISTS FOR. bin/fm-spawn.sh pins FM_HOME - and empty
+# operational overrides - into every crewmate's launch, so a CREWMATE SESSION'S
+# ENVIRONMENT NAMES THE CAPTAIN'S HOME:
+#
+#     FM_HOME=/Users/<captain>/firstmate
+#
+# A suite that sets none of them therefore resolves
+# STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}" to his live ~/firstmate/state and
+# runs the scripts under test against it. Measured: tests/fm-merge-t1-target.test.sh
+# reached his real session lock that way, and was refused only because a real
+# firstmate happened to be holding it. Free or stale, it would have been taken.
+# That is the same hazard as clearing the variables by hand, arriving by
+# inheritance instead - and inheritance reaches every suite that simply says
+# nothing, which is most of them.
+#
+# So the ambient pin is neutralised here rather than per file, for the same
+# reason HERDR_SESSION is a few sections down: "remember to unset it" is a hope,
+# not a property. Every suite gets its OWN empty home by default; a suite that
+# names a home still wins, because a per-invocation assignment beats an export.
+FM_TEST_SANDBOX_HOME="$(fm_test_tmproot fm-test-sandbox)/home"
+mkdir -p "$FM_TEST_SANDBOX_HOME"
+export FM_HOME="$FM_TEST_SANDBOX_HOME"
+unset FM_STATE_OVERRIDE FM_DATA_OVERRIDE FM_PROJECTS_OVERRIDE FM_CONFIG_OVERRIDE FM_ROOT_OVERRIDE
+
 # --- keeping tests off the captain's live multiplexers ----------------------
 #
 # herdr is the only surface firstmate spawns onto, so any suite that drives
