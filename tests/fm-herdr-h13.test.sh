@@ -61,6 +61,42 @@ test_the_reader_separates_cannot_ask_from_no_match() {
   pass "lookup: 'no workspaces' and 'could not ask' are different answers"
 }
 
+# THE SHAPE A SUBSTRING TEST LETS THROUGH, and the one that actually reached
+# `workspace create` in review: the call SUCCEEDS, the payload carries the magic
+# `"workspaces":` text, and it is still not a listing. Each of these yields no
+# records, and "no records" is the single answer that licenses a create.
+test_a_payload_that_is_not_a_listing_is_refused_though_it_exits_zero() {
+  local rc payload
+  for payload in \
+    '{"result":{"workspaces":BROKEN}}' \
+    '{"id":"cli:workspace:list","result":{"type":"workspace_list","workspaces":[{"workspace_id":"w1","label":"af' \
+    '{"id":"cli:workspace:list","result":{"type":"workspace_list","workspaces":[{"label":"archify"}]}}' \
+    '{"id":"cli:workspace:list","result":{"type":"workspace_list","workspaces":['
+  do
+    rc=0
+    HERDR_WS_RAW="$payload" fm_herdr_workspace_id archify >/dev/null 2>&1 || rc=$?
+    [ "$rc" = 2 ] || fail "a zero-exit payload that is not a listing answered '$rc', not 'cannot tell': $payload"
+    reset
+    rc=0
+    HERDR_WS_RAW="$payload" fm_herdr_workspace_for archify /p/archify >/dev/null 2>&1 || rc=$?
+    [ "$rc" != 0 ] || fail "a zero-exit payload that is not a listing resolved a workspace: $payload"
+    assert_no_grep "workspace create" "$CALLS" \
+      "a malformed listing reached workspace create - the duplicate this reader exists to stop: $payload"
+  done
+  pass "lookup: a zero-exit payload that is not a listing is refused, never read as an empty fleet"
+}
+
+# The structural rule stated as its own case: every record must carry a complete
+# id. A listing whose LAST record was cut off mid-key still opens, still closes
+# its outer object, and would otherwise under-report the fleet by one workspace.
+test_a_truncated_record_invalidates_the_listing() {
+  local rc=0
+  HERDR_WS_RAW='{"result":{"type":"workspace_list","workspaces":[{"label":"config","workspace_id":"wJ"},{"label":"archify","workspace_]}}' \
+    fm_herdr_workspace_id config >/dev/null 2>&1 || rc=$?
+  [ "$rc" = 2 ] || fail "a listing with one truncated record answered '$rc' instead of refusing"
+  pass "lookup: one truncated record invalidates the listing rather than shrinking the fleet"
+}
+
 # An EMPTY but well-formed listing is a real answer and must still be usable, or
 # "fail closed" would just mean "never resolve anything".
 test_an_empty_but_well_formed_listing_is_read_as_empty() {
@@ -141,6 +177,8 @@ test_reconcile_refuses_an_unreadable_fleet() {
 }
 
 test_the_reader_separates_cannot_ask_from_no_match
+test_a_payload_that_is_not_a_listing_is_refused_though_it_exits_zero
+test_a_truncated_record_invalidates_the_listing
 test_an_empty_but_well_formed_listing_is_read_as_empty
 test_an_unreadable_listing_never_creates_a_workspace
 test_a_genuinely_absent_workspace_is_still_created

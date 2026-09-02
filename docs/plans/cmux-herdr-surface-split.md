@@ -314,6 +314,13 @@ running it bare does: bare reconcile printed a plan, bare `--name` renamed a liv
 now plans unless `--apply` is passed, and `--apply` is recognised as a flag wherever it
 appears rather than swallowed into the work words.
 
+`--apply` is one flag for the whole CLI, taken off the argument list before anything
+dispatches on what is left. Reading it per verb, with a dispatch that inspected only `$1`,
+meant `--apply --name <pane> <project> <work>` matched no verb at all: it fell through to
+the workspace reconcile, which read the same flag and **created workspaces** - an operator
+asking to rename one pane got a different mutating verb, silently, with exit 0. One flag,
+one owner, and position cannot change which verb runs.
+
 Naming mutates **two** objects - the free-form tab label the captain reads, and the
 constrained agent address herdr steers by - so it is all or nothing. The order is not a
 coin toss: a rollback can only restore a value it can read back, and herdr 0.8.2's
@@ -337,11 +344,24 @@ the two, which is worse than the missing workspace the create was there to fix.
 There is now one reader, `fm_herdr_workspace_records`, and one place its failure is judged.
 "There are no workspaces" and "I could not ask" are opposite answers and get different
 return codes: `0` read, `1` no match, `2` could not read. Only the first two may be acted
-on. The `workspaces` array key is what proves a listing was actually read, since an empty
-fleet is a legitimate answer that no exit code can distinguish from a truncated one. The
-same reader kills the last blob-grep: a workspace id is read out of a record and compared
-whole, so another field that happens to quote the id cannot answer for a workspace that does
-not exist. **h13** pins all three answers, both refusal paths, and the fact that a genuinely
+on.
+
+**And the reading is structural, not a substring test.** A first cut asked only whether the
+payload contained `"workspaces":`, which is not structure: `{"result":{"workspaces":BROKEN}}`
+and a listing truncated mid-record both carry that text, both exit 0, and both yield no
+records - which reads as an empty fleet, the one answer that licenses a create. The same
+duplicate-workspace defect, arriving through the door the fix left open. So the opener must
+be there, a `]` must close it, the payload must end where a JSON object ends, and **every
+record in the array must carry a complete `"workspace_id":"..."`** - a listing whose last
+record was cut off mid-key refuses rather than under-reporting the fleet by one workspace.
+An empty but well-formed array is still a readable answer, because fail-closed has to be a
+discrimination and not a block.
+
+Slicing the array at its first `]` means a label containing `]` truncates its own record;
+the per-record check then refuses, which is the right direction for a shape this parser
+cannot read. Taking only the array also kills the last blob-grep: a workspace id is read out
+of a record and compared whole, so a field outside the array that happens to quote the id -
+a `focused_workspace_id`, say - cannot answer for a workspace that does not exist. **h13** pins all three answers, both refusal paths, and the fact that a genuinely
 absent workspace is still created - fail-closed must be a discrimination, not a block.
 
 Adjacent and deliberately unchanged: `fm_herdr_tab_exists` still reads a failed `tab list`

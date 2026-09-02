@@ -726,7 +726,8 @@ supplies the work half; absent it, the id's random suffix is dropped and the res
 `bin/fm-herdr.sh` is both the library and the CLI, and **every one of its verbs plans by
 default**: run it with no arguments for a plan of the missing workspaces and `--apply` to
 create them, `--name <pane> <project> <work>` for what it *would* name a pane and
-`--name ... --apply` to actually name it. Naming touches two objects - the tab label the
+`--name ... --apply` to actually name it. `--apply` is one flag for the whole CLI and its
+position never decides which verb runs. Naming touches two objects - the tab label the
 captain reads and the address herdr steers by - so it does both or neither: a refused agent
 rename rolls the tab label back, because a pane whose visible name reaches nothing is the
 mystery-agent state this convention exists to remove. It is deliberately not called `herdr`,

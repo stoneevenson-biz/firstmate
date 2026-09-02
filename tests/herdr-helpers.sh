@@ -47,6 +47,8 @@
 #   HERDR_TAB_LABEL   the label `tab get` reports (default herdr's numeric `1`)
 #   HERDR_RENAME_REFUSE  1 -> `agent rename` refuses a VALID name, the way a
 #                     duplicate address does; the only route to a half-named pane
+#                     (HERDR_NO_AGENT=1 instead makes `agent rename` answer
+#                     agent_not_found, which is "not classified yet", not refused)
 #   CALLS             file every invocation's argv is appended to
 #
 # EVERY error envelope goes to STDERR, as the real binary's does, and no branch
@@ -356,6 +358,15 @@ case "$1 $2" in
     printf '{"id":"cli:agent:prompt","result":{"agent":{"agent_status":"done"},"type":"agent_info"}}\n' ;;
   "agent rename")
     name=$4
+    # HERDR_NO_AGENT=1 is herdr BEFORE it has classified an agent in the pane -
+    # the beat after launch, and the state a dead or exited pane stays in. The
+    # real binary answers agent_not_found here, and the seam must read that as
+    # "not yet", not as a refusal; a fake that renamed anyway would hide the
+    # difference between the two.
+    if [ "${HERDR_NO_AGENT:-0}" = 1 ]; then
+      printf '{"error":{"code":"agent_not_found","message":"agent target not found"},"id":"cli:agent:rename"}\n' >&2
+      exit 1
+    fi
     # HERDR_RENAME_REFUSE=1 refuses a name that is perfectly VALID - the shape
     # of a duplicate address, a permission error, or a server problem. It is the
     # only way to reach the half-named state: an invalid name never gets this

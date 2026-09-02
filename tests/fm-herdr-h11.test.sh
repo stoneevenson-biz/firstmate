@@ -116,6 +116,22 @@ test_doctrine_renders_the_tier_vocabulary() {
   pass "doctrine: renders the tier vocabulary and the pane-id shape from the constants"
 }
 
+# A VOCABULARY OF WORDS IS NOT A CONSTANT. Looping the rendering over the same
+# variable the test loops over proves only that the two agree with each other, so
+# a tier could name an object this script never touches and h11 would stay green.
+# Every tier must be a herdr object the script actually ADDRESSES - `herdr <tier>
+# <verb>` appears in it. (A subset, not an equality: `agent` is a herdr noun this
+# script addresses constantly and is deliberately NOT a tier, because an agent
+# lives in a pane rather than containing one.)
+test_every_tier_is_an_object_this_script_addresses() {
+  local tier
+  for tier in $fm_herdr_tiers; do
+    grep -q "herdr $tier " "$LIB" \
+      || fail "'$tier' is rendered as a tier but this script never addresses \`herdr $tier\`"
+  done
+  pass "doctrine: every tier named is a herdr object the script actually addresses"
+}
+
 # --- the verb itself --------------------------------------------------------
 
 # An agent asking what the rules are is the one question that must always have
@@ -145,5 +161,6 @@ test_doctrine_contains_the_exact_regex_name_validates_with
 test_the_regex_literal_appears_once_in_code
 test_doctrine_renders_the_resolved_width_cap
 test_doctrine_renders_the_tier_vocabulary
+test_every_tier_is_an_object_this_script_addresses
 test_doctrine_needs_no_server_and_touches_nothing
 test_the_cli_exposes_doctrine_as_a_verb

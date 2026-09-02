@@ -1135,12 +1135,12 @@
       "test_ref": "bash tests/fm-herdr-h11.test.sh",
       "baseline_ref": null,
       "first_observed_red": "2026-09-02T05:16:23.227Z",
-      "mutation_verified": null,
-      "status": "red",
+      "mutation_verified": "2026-09-02T07:06:53.099Z",
+      "status": "frozen",
       "vacuous": false,
       "regression": false,
       "created": "2026-09-01T00:00:00Z",
-      "last_verified": null
+      "last_verified": "2026-09-02T07:00:37.322Z"
     },
     {
       "id": "gate-h12-name-plans-then-applies-atomically",
@@ -1152,12 +1152,12 @@
       "test_ref": "bash tests/fm-herdr-h12.test.sh",
       "baseline_ref": null,
       "first_observed_red": "2026-09-02T05:16:23.227Z",
-      "mutation_verified": null,
-      "status": "red",
+      "mutation_verified": "2026-09-02T07:06:53.340Z",
+      "status": "frozen",
       "vacuous": false,
       "regression": false,
       "created": "2026-09-01T00:00:00Z",
-      "last_verified": null
+      "last_verified": "2026-09-02T07:00:37.322Z"
     },
     {
       "id": "gate-h13-workspace-lookup-fails-closed",
@@ -1169,12 +1169,12 @@
       "test_ref": "bash tests/fm-herdr-h13.test.sh",
       "baseline_ref": null,
       "first_observed_red": "2026-09-02T05:16:23.227Z",
-      "mutation_verified": null,
-      "status": "red",
+      "mutation_verified": "2026-09-02T07:06:54.976Z",
+      "status": "frozen",
       "vacuous": false,
       "regression": false,
       "created": "2026-09-01T00:00:00Z",
-      "last_verified": null
+      "last_verified": "2026-09-02T07:00:37.322Z"
     }
   ]
 }

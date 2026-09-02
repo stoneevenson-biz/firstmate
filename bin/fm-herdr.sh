@@ -297,14 +297,47 @@ fm_herdr_name_valid() {  # <name>
 # exit code alone can do, since a CLI that prints an error envelope and exits 0
 # is a shape herdr has shipped before.
 fm_herdr_workspace_records() {
-  local out rc=0 ok=1
+  local out rc=0 ok=1 arr recs
   out=$(herdr workspace list 2>/dev/null) || rc=$?
   [ "$rc" = 0 ] || ok=0
-  case "$out" in *'"workspaces":'*) : ;; *) ok=0 ;; esac
+
+  # THE ENVELOPE, AND THE ARRAY IT MUST ACTUALLY CLOSE.
+  #
+  # A substring test for `"workspaces":` is not structure, and the difference is
+  # not academic: `{"result":{"workspaces":BROKEN}}` and a listing truncated
+  # mid-record both carry that substring, both exit 0, and both then yield no
+  # records - which reads as an EMPTY FLEET, the one answer that licenses a
+  # create. That is the same duplicate-workspace defect this reader exists to
+  # remove, arriving through the door the reader left open.
+  #
+  # So: the opener must be there, a `]` must close it, and the payload must end
+  # where a JSON object ends. A stream cut off part way satisfies none of those.
+  case "$out" in
+    *'"workspaces":['*']'*'}') : ;;
+    *) ok=0 ;;
+  esac
+
+  # The array itself, and only it - which also keeps a field OUTSIDE the array
+  # (a `focused_workspace_id`, say) from answering for a workspace record.
+  # Slicing at the first `]` means a label containing `]` truncates its own
+  # record; the per-record check below then REFUSES, rather than silently
+  # under-reporting the fleet. Fail closed is the right direction for a shape
+  # this parser cannot read.
+  arr=${out#*'"workspaces":['}
+  arr=${arr%%']'*}
+
+  # EVERY record carries a complete id, or this is not a listing. This is the
+  # check a substring test cannot make: `[{"label":"afs","workspace_` has the
+  # opener, has a record, and yields no id at all.
+  recs=$(printf '%s\n' "$arr" | tr '{' '\n' | grep '[^[:space:],]') || recs=""
+  if [ -n "$recs" ] && printf '%s\n' "$recs" | grep -qv '"workspace_id":"[^"]\{1,\}"'; then
+    ok=0
+  fi
+
   # ONE place decides, so there is one thing to read - and one thing a mutation
   # test has to remove to prove the fail-closed direction is load-bearing.
   [ "$ok" = 1 ] || return 2
-  printf '%s' "$out" | tr '{' '\n'
+  [ -z "$recs" ] || printf '%s\n' "$recs"
 }
 
 # The id of the workspace LABELLED <label>. One owner of that question.
@@ -958,9 +991,9 @@ fm_herdr_tier_rule() {  # <tier>
 # One proof row: the name, and what the validator actually said about it.
 fm_herdr_doctrine_proof() {  # <name> [display]
   local name=$1 shown=${2:-$1} verdict=refused
-  # An `if`, not `valid && verdict=accepted`: under the CLI's `set -e` a
-  # standalone && list that fails ENDS THE PROCESS, so a refused proof row - the
-  # rows this section exists to show - would kill the render half way through.
+  # An `if`, not `valid && verdict=accepted`: the refused rows are the point of
+  # this section, and a construct whose exit status is the VERDICT is one
+  # `set -o errexit` change away from ending the render half way through.
   if fm_herdr_name_valid "$name"; then verdict=accepted; fi
   printf '  %-34s %s\n' "$shown" "$verdict"
 }
@@ -1035,6 +1068,21 @@ fm_herdr_cli() {
     fm_herdr_up || die "no herdr server is running — run \`herdr\` to start or attach it, then retry"
   }
 
+  # --apply IS THE MUTATION FLAG FOR THE WHOLE CLI, so it comes off the argument
+  # list before anything dispatches on what is left.
+  #
+  # THE DEFECT THIS REMOVES. Each verb used to read the flag for itself, and the
+  # dispatch looked only at $1 - so `--apply --name <pane> <project> <work>`
+  # matched no verb, fell through to the workspace reconcile, and the reconcile
+  # then read the same flag and CREATED WORKSPACES. An operator asking to rename
+  # one pane got a different mutating verb, silently, with exit 0. One flag, one
+  # owner, and position cannot change which verb runs.
+  local APPLY=0 cli_args=() a
+  for a in "$@"; do
+    if [ "$a" = "--apply" ]; then APPLY=1; else cli_args+=("$a"); fi
+  done
+  set -- ${cli_args[@]+"${cli_args[@]}"}
+
   # doctrine: print the rules, from the constants that enforce them. It reads
   # nothing and touches nothing, so it deliberately does NOT require a server -
   # an agent asking what the rules are is the one question that must always have
@@ -1056,11 +1104,6 @@ fm_herdr_cli() {
   # another. --apply is the whole difference.
   if [ "${1:-}" = "--name" ]; then
     shift
-    local NAME_APPLY=0 name_args=() a
-    for a in "$@"; do
-      if [ "$a" = "--apply" ]; then NAME_APPLY=1; else name_args+=("$a"); fi
-    done
-    set -- ${name_args[@]+"${name_args[@]}"}
     require_server
     [ $# -ge 3 ] || die "usage: --name <pane> <project-short> <what-the-work-is> [--apply]"
     local pane=$1 proj=$2 name untruncated label_rc
@@ -1076,7 +1119,7 @@ fm_herdr_cli() {
       || die "'$untruncated' is ${#untruncated} chars; keep it to $fm_herdr_name_max, e.g. afs-resource-registry"
     fm_herdr_name_valid "$name" \
       || die "'$name' is not a name herdr will accept as an address (want $fm_herdr_name_re, at most $fm_herdr_name_max chars - a slash is rejected)"
-    if [ "$NAME_APPLY" != 1 ]; then
+    if [ "$APPLY" != 1 ]; then
       printf 'would name %s -> %s (the %s, then the %s)\n' \
         "$pane" "$name" "${fm_herdr_name_order%% *}" "${fm_herdr_name_order##* }"
       printf 'plan only: nothing was renamed. Run with --apply to apply it.\n'
@@ -1095,9 +1138,9 @@ fm_herdr_cli() {
     exit 0
   fi
 
-  # Default: reconcile one workspace per project against data/projects.md.
-  local APPLY=0
-  [ "${1:-}" = "--apply" ] && APPLY=1
+  # Default: reconcile one workspace per project against data/projects.md. Its
+  # --apply is the same flag every other verb here reads, taken off the argument
+  # list at the top rather than re-parsed per verb.
   [ -f "$REGISTRY" ] || die "no project registry at $REGISTRY"
   require_server
 

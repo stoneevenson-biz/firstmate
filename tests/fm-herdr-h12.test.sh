@@ -33,7 +33,7 @@ SCRIPT="$ROOT/bin/fm-herdr.sh"
 if [ "${LEDGER_MUTATE:-}" = 1 ]; then
   SCRIPT="$TMP_ROOT/mutated-fm-herdr.sh"
   # shellcheck disable=SC2016  # literal sed patterns: they must not expand here
-  sed -e 's/local NAME_APPLY=0 name_args=()/local NAME_APPLY=1 name_args=()/' \
+  sed -e 's/local APPLY=0 cli_args=()/local APPLY=1 cli_args=()/' \
       -e 's/if fm_herdr_rename_slot "\$first" "\$pane" "\$tab" "\$prior"/if true/' \
       "$ROOT/bin/fm-herdr.sh" > "$SCRIPT"
 fi
@@ -83,6 +83,35 @@ test_apply_is_a_flag_not_a_word_of_the_work() {
   pass "name: --apply is a flag wherever it appears, never a word of the work"
 }
 
+# THE FLAG MUST NOT DECIDE WHICH VERB RUNS. Dispatch used to read only $1, so
+# `--apply --name ...` matched no verb, fell through to the workspace reconcile,
+# and the reconcile read the same flag and CREATED WORKSPACES: an operator asking
+# to rename one pane got a different mutating verb, silently, with exit 0. This
+# is that exact command line.
+test_apply_before_the_verb_still_names_and_creates_nothing() {
+  local out rc=0
+  : > "$CALLS"
+  out=$(FM_HOME="$HOME_DIR" bash "$SCRIPT" --apply --name w9:p2 afs "resource registry" 2>&1) || rc=$?
+  [ "$rc" = 0 ] || fail "--apply before the verb failed (exit $rc): $out"
+  assert_grep "agent rename w9:p2 afs-resource-registry" "$CALLS" \
+    "--apply before the verb did not reach --name; the flag chose the verb"
+  assert_no_grep "workspace create" "$CALLS" \
+    "--apply before the verb ran the workspace reconcile instead of the rename"
+  assert_not_contains "$out" "would name" "--apply before the verb was treated as a plan"
+  pass "name: --apply BEFORE the verb still names, and creates no workspace"
+}
+
+# And the flag still selects nothing on its own: bare --apply is the reconcile,
+# exactly as before, so making it position-independent did not make it a verb.
+test_bare_apply_is_still_the_reconcile() {
+  local out
+  : > "$CALLS"
+  out=$(FM_HOME="$HOME_DIR" bash "$SCRIPT" --apply 2>&1)
+  assert_contains "$out" "PROJECT" "bare --apply no longer runs the workspace reconcile"
+  assert_no_grep "agent rename" "$CALLS" "bare --apply renamed something"
+  pass "name: bare --apply is still the workspace reconcile, not a rename"
+}
+
 # --- the order, and the reason for it ---------------------------------------
 
 test_the_readable_slot_is_renamed_first() {
@@ -112,6 +141,24 @@ test_a_refused_agent_rename_rolls_the_tab_back() {
   grep -q "^tab rename .* $HERDR_TAB_LABEL\$" "$CALLS" \
     || fail "the tab was not rolled back to its previous label: $(cat "$CALLS")"
   pass "name: a refused agent rename rolls the tab back - no half-named pane"
+}
+
+# THE ONE HALF-NAME THAT IS DELIBERATE, pinned here so it stays deliberate.
+# herdr classifies an agent a beat after launch, so `agent_not_found` means "not
+# yet", not "refused" - the spawn path depends on that, and a spawn must not die
+# waiting for a classification. Nothing is rolled back, because there is no agent
+# to be misaddressed: the tab carries the name and the pane holds no address yet.
+# It says so rather than reporting a clean success.
+test_an_unclassified_agent_keeps_the_name_and_is_reported() {
+  local out rc=0
+  : > "$CALLS"
+  out=$(HERDR_NO_AGENT=1 FM_HOME="$HOME_DIR" \
+          bash "$SCRIPT" --name w9:p2 afs "resource registry" --apply 2>&1) || rc=$?
+  [ "$rc" = 0 ] || fail "an agent herdr has not classified yet was treated as a failure: $out"
+  assert_contains "$out" "no agent detected" "the tab-only outcome was reported as a clean rename"
+  [ "$(grep -c '^tab rename' "$CALLS")" = 1 ] \
+    || fail "the tab was rolled back for an agent that simply is not classified yet: $(cat "$CALLS")"
+  pass "name: an unclassified agent keeps the tab name and is reported, not rolled back"
 }
 
 # The rollback is not silent. If it could not happen, the operator has to be
@@ -144,7 +191,10 @@ test_an_unusable_name_is_refused_in_both_modes() {
 test_name_without_apply_renames_nothing
 test_apply_names_both_slots
 test_apply_is_a_flag_not_a_word_of_the_work
+test_apply_before_the_verb_still_names_and_creates_nothing
+test_bare_apply_is_still_the_reconcile
 test_the_readable_slot_is_renamed_first
 test_a_refused_agent_rename_rolls_the_tab_back
+test_an_unclassified_agent_keeps_the_name_and_is_reported
 test_a_rollback_that_cannot_happen_is_reported
 test_an_unusable_name_is_refused_in_both_modes
