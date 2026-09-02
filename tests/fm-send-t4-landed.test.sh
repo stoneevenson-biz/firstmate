@@ -79,9 +79,7 @@ test_submit_core_verdict_is_empty_when_enter_lands() {
     [ -n "$loc" ] || continue
     dir="$TMP_ROOT/core-$loc"; mkdir -p "$dir"
     fb=$(fm_make_composer_tmux "$dir" lands)
-    verdict=$(env LC_ALL="$loc" PATH="$fb:$PATH" FM_COMPOSER_DIR="$dir" bash -c \
-      '. "$0"/bin/fm-tmux-lib.sh; fm_tmux_submit_core fakepane "$1" 3 0.05 0.05' \
-      "$ROOT" "$FM_COMPOSER_STEER")
+    verdict=$(fm_composer_bash "$loc" "$fb" "$dir" "$FM_COMPOSER_PROBE_SUBMIT")
     [ "$verdict" = empty ] \
       || fail "under LC_ALL=$loc the submit core called a landed steer '$verdict'; expected empty"
   done <<EOF
@@ -123,8 +121,7 @@ test_empty_composer_is_not_read_as_pending_input() {
   while read -r loc; do
     [ -n "$loc" ] || continue
     rc=0
-    env LC_ALL="$loc" PATH="$fb:$PATH" FM_COMPOSER_DIR="$dir" bash -c \
-      '. "$0"/bin/fm-tmux-lib.sh; fm_pane_input_pending fakepane' "$ROOT" || rc=$?
+    fm_composer_bash "$loc" "$fb" "$dir" "$FM_COMPOSER_PROBE_PENDING" || rc=$?
     [ "$rc" != 0 ] \
       || fail "under LC_ALL=$loc an idle claude pane read as holding pending input (afk-invx-i5 class)"
   done <<EOF

@@ -111,24 +111,58 @@ fm_composer_locales() {
   return 0
 }
 
-# fm_composer_state_in <locale> <fakebin> <dir> - classify the fake pane's cursor
-# row with the detector running under <locale>. A fresh bash is used on purpose:
-# the trim's behaviour is fixed when bash parses the locale, so setting LC_ALL in
-# this shell after the fact would prove nothing.
-fm_composer_state_in() {  # <locale> <fakebin> <dir>
+# Every probe below runs in a FRESH bash on purpose: the trim's behaviour is fixed
+# when bash parses the locale, so setting LC_ALL in this shell after the fact
+# would prove nothing.
+#
+# The probe strings are single-quoted because their `$` must be read by the INNER
+# shell, not expanded by this one - which is exactly what they are for. They live
+# here, named, rather than inline at four call sites, so the quoting is explained
+# once instead of repeated.
+
+# shellcheck disable=SC2016  # $FM_LIB is the inner shell's variable, exported by
+# fm_composer_bash below; expanding it here would defeat the purpose.
+FM_COMPOSER_PREAMBLE='. "$FM_LIB"; '
+
+FM_COMPOSER_PROBE_STATE='fm_tmux_composer_state fakepane'
+
+# The two probes below are consumed by the sourcing test files rather than by this
+# library, so they read as unused here - the same reason ROOT carries a disable in
+# tests/lib.sh.
+# shellcheck disable=SC2034
+FM_COMPOSER_PROBE_PENDING='fm_pane_input_pending fakepane'
+
+# shellcheck disable=SC2016,SC2034  # likewise $FM_COMPOSER_STEER: the inner shell
+# reads it from the environment, so the steer keeps one owner rather than a second
+# copy written out here.
+FM_COMPOSER_PROBE_SUBMIT='fm_tmux_submit_core fakepane "$FM_COMPOSER_STEER" 3 0.05 0.05'
+
+# fm_composer_bash <locale> <fakebin> <dir> <probe> - run one probe against the
+# fake pane in a fresh bash started under <locale>, with bin/fm-tmux-lib.sh
+# sourced. Echoes whatever the probe prints; the caller reads $? for its status.
+fm_composer_bash() {  # <locale> <fakebin> <dir> <probe>
   env LC_ALL="$1" PATH="$2:$PATH" FM_COMPOSER_DIR="$3" \
-    bash -c '. "$0"/bin/fm-tmux-lib.sh; fm_tmux_composer_state fakepane' "$ROOT"
+      FM_LIB="$ROOT/bin/fm-tmux-lib.sh" FM_COMPOSER_STEER="$FM_COMPOSER_STEER" \
+      bash -c "$FM_COMPOSER_PREAMBLE$4" bash
 }
 
-# fm_run_send <locale> <fakebin> <dir> <home> <target> <text...> - run bin/fm-send.sh
-# against the fake pane, echoing its stderr; the caller reads $? for the exit
-# code. FM_ROOT_OVERRIDE and FM_HOME point at a throwaway home so fm-guard stays
-# quiet and the helm claim never reaches a real one. FM_SEND_SETTLE=0 removes the
-# post-submit pause, which this suite is not about.
+# fm_composer_state_in <locale> <fakebin> <dir> - classify the fake pane's cursor
+# row with the detector running under <locale>.
+fm_composer_state_in() {  # <locale> <fakebin> <dir>
+  fm_composer_bash "$1" "$2" "$3" "$FM_COMPOSER_PROBE_STATE"
+}
+
+# fm_run_send <locale> <fakebin> <dir> <home> <target> <text...> - run
+# bin/fm-send.sh against the fake pane, echoing its stderr; the caller reads $?
+# for the exit code. FM_ROOT_OVERRIDE and FM_HOME point at a throwaway home so
+# fm-guard stays quiet and the helm claim never reaches a real one.
+# FM_SEND_SETTLE=0 removes the post-submit pause, which this suite is not about.
+# The braces are what make "stderr to the caller, stdout to /dev/null"
+# unambiguous rather than the `2>&1 >/dev/null` idiom that reads backwards.
 fm_run_send() {  # <locale> <fakebin> <dir> <home> <target> <text...>
   local loc=$1 fb=$2 dir=$3 home=$4; shift 4
   mkdir -p "$home/state"
-  env LC_ALL="$loc" PATH="$fb:$PATH" FM_COMPOSER_DIR="$dir" \
-      FM_ROOT_OVERRIDE="$home" FM_HOME="$home" FM_SEND_SETTLE=0 \
-      "$ROOT/bin/fm-send.sh" "$@" 2>&1 >/dev/null
+  { env LC_ALL="$loc" PATH="$fb:$PATH" FM_COMPOSER_DIR="$dir" \
+        FM_ROOT_OVERRIDE="$home" FM_HOME="$home" FM_SEND_SETTLE=0 \
+        "$ROOT/bin/fm-send.sh" "$@" >/dev/null; } 2>&1
 }

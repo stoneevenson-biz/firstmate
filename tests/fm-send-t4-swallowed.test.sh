@@ -53,9 +53,7 @@ test_submit_core_verdict_is_pending_when_enter_is_eaten() {
     [ -n "$loc" ] || continue
     dir="$TMP_ROOT/core-$loc"; mkdir -p "$dir"
     fb=$(fm_make_composer_tmux "$dir" swallowed)
-    verdict=$(env LC_ALL="$loc" PATH="$fb:$PATH" FM_COMPOSER_DIR="$dir" bash -c \
-      '. "$0"/bin/fm-tmux-lib.sh; fm_tmux_submit_core fakepane "$1" 3 0.05 0.05' \
-      "$ROOT" "$FM_COMPOSER_STEER")
+    verdict=$(fm_composer_bash "$loc" "$fb" "$dir" "$FM_COMPOSER_PROBE_SUBMIT")
     [ "$verdict" = pending ] \
       || fail "under LC_ALL=$loc the submit core called a swallowed Enter '$verdict'; expected pending"
     # It must have actually tried: a verdict reached without retrying Enter would
