@@ -1178,8 +1178,8 @@
     },
     {
       "id": "gate-c1-helm-writer-only",
-      "title": "The helm is a writer-only seam: drive verbs refuse under a live foreign holder, boot paths never do",
-      "observable": "With another live harness holding this home's lock, each of the seven drive verbs (fm-spawn, fm-send, fm-teardown, fm-merge-local, fm-pr-check, fm-promote, fm-update) exits non-zero carrying the captain-facing sentence the spec specifies and the --take pointer, and a whole-tree fingerprint over the home and an FM_ROOT stand-in whose origin is one commit ahead is byte-identical afterwards - no state written, no fetch, no fast-forward; with the helm free the same fm-promote rewrites the meta and the same fm-update fast-forwards, so the refusals are not vacuous; no boot path emits any refusal string under the same live holder - the boot-context emitter (which still renders the full fleet view), fm-lock.sh status, fm-guard.sh, fm-wake-drain.sh, fm-bootstrap.sh and fm-bootstrap.sh install (which still runs the installer), each exiting 0; the seam's caller roster is exactly those seven scripts and no boot or read path contains the call; and fm_lock_require_helm passes free, stale and own-holder homes silently, refuses a live foreign holder, and fails OPEN with an explicit stderr note when the harness cannot be identified",
+      "title": "The helm is a writer-only seam that CLAIMS: drive verbs refuse under a live foreign holder, boot paths never do",
+      "observable": "With another live harness holding this home's lock - proven live through fm-lock.sh status first, and covering a holder whose comm is literally `pi` as well as `codex` - each of the eight drive verbs (fm-spawn, fm-send, fm-teardown, fm-merge-local, fm-pr-check, fm-promote, fm-update, fm-watch-arm --restart) exits non-zero carrying the captain-facing sentence the spec specifies and the --take pointer, and a whole-tree fingerprint over the home and an FM_ROOT stand-in whose origin is one commit ahead is byte-identical afterwards - no state written, no fetch, no fast-forward. Every verb runs under a harness identity the test chooses rather than the ancestry's, so the refusals hold on CI's agent-free runner too, and that identity is asserted distinct from the holder's. With the helm free the same fm-promote rewrites the meta and the same fm-update fast-forwards, and a verb that proceeded has CLAIMED the helm. No boot path emits any refusal string under the same live holder - the boot-context emitter (which still renders the full fleet view), the BARE fm-lock.sh acquire that AGENTS.md recovery step 1 names (which reports the observer state plainly and exits 0 without overwriting the holder), fm-lock.sh status, fm-guard.sh, fm-wake-drain.sh, fm-watch-arm.sh --status, fm-bootstrap.sh and fm-bootstrap.sh install (which still runs the installer). The seam's caller roster is exactly those eight scripts and no boot or read path contains the call. fm_lock_require_helm claims a free and a stale helm, passes the holder silently, refuses a live foreign holder, refuses an unidentifiable harness behind a live holder without overwriting it, and passes an unidentifiable harness on an unsteered home out loud without claiming",
       "origin_mode": "build",
       "spec_ref": "docs/specs/2026-08-27-n-concurrent-firstmates.md",
       "blocked_by": [],
@@ -1190,13 +1190,13 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-09-01T00:00:00Z",
-      "last_verified": "2026-09-02T05:44:31.636Z",
+      "last_verified": "2026-09-02T07:45:03.148Z",
       "mutation_verified": null
     },
     {
       "id": "gate-c2-helm-take-and-isolation",
-      "title": "--take evicts only a provably dead holder, the acquire is atomic, and a secondmate home keeps its own helm",
-      "observable": "fm-lock.sh --take refuses a live holder with the captain-facing sentence and leaves the lock byte-identical; against a holder fm-lock.sh status reports stale it takes the helm, names the dead pid, and the lock then reads as held by a live harness; bare acquire refuses a live foreign holder without touching the lock; with a live process holding the serialising mutex state/.lock.acquire, both acquire and --take fail saying they could not serialise and write nothing, and the same acquire succeeds once the mutex is released; and a secondmate home is never refused because the main home is held - fm_lock_require_helm passes silently for it and fm-promote actually rewrites a meta in that home while the main home's lock stays byte-identical and no lock is created in the secondmate home. Every case is scoped by FM_STATE_OVERRIDE and both suites assert the captain's real ~/firstmate/state/.lock is byte-identical before and after",
+      "title": "Exclusivity under a real race, --take only against a dead holder, no redirect bypass, and a secondmate's own helm",
+      "observable": "Sixteen concurrent sessions with sixteen distinct real harness identities race one free helm and exactly one takes it, the other fifteen are refused, and the winner is the recorded holder. fm-lock.sh --take refuses a live holder - including a holder whose comm is literally `pi`, the regression that let --take evict a live session - with the captain-facing sentence and leaves the lock byte-identical; against a holder fm-lock.sh status reports stale it takes the helm and names the dead pid. The bare acquire reports another live steerer as a plain fact and exits 0 without touching the lock. With a live process holding the serialising mutex state/.lock.acquire, both acquire and --take fail saying they could not serialise and write nothing, and the same acquire succeeds once the mutex is released. fm-watch-arm --restart gates on the helm while --status does not. An empty alternate FM_STATE_OVERRIDE cannot slip fm-update past a repo whose own FM_ROOT home is steered. A secondmate home is never refused because the main home is held: fm_lock_require_helm passes silently for it and fm-promote rewrites a meta there while the main home's lock stays byte-identical, and the secondmate takes its OWN helm rather than the main home's holder. Every case is scoped by FM_STATE_OVERRIDE and both suites assert the captain's real ~/firstmate/state/.lock is byte-identical before and after",
       "origin_mode": "build",
       "spec_ref": "docs/specs/2026-08-27-n-concurrent-firstmates.md",
       "blocked_by": [],
@@ -1207,7 +1207,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-09-01T00:00:00Z",
-      "last_verified": "2026-09-02T05:44:31.636Z",
+      "last_verified": "2026-09-02T07:45:03.148Z",
       "mutation_verified": null
     }
   ]

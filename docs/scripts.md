@@ -25,7 +25,7 @@ Each file also starts with a short header comment.
 | `fm-merge-pr.sh`         | Merge a PR-based ship task's pull request into a repository that was NAMED: resolves the target with `fm-merge-target-lib.sh`, proves it equals this clone's `origin` (or takes `--allow-non-origin`), and passes `--repo <owner/name>` to `gh-axi` with `GH_REPO`/`GH_HOST` pinned; passthrough after `--` is an allowlist of long options, a repeated or conflicting target flag refuses, the finished argv is re-read before exec, every refusal names its rail as `REFUSED[<rail>]`, and `--dry-run` prints the pinned command |
 | `fm-merge-target-lib.sh` | The one implementation of "which GitHub repository does this merge land in?": `--repo`, then `--remote`, then a full PR url, then a sole remote, and `AMBIGUOUS` for anything else; also owns the PR-reference parse (one walk, both answers, a named reason per rail), the passthrough allowlist, the argv egress assertion, and `fm_merge_target_git`, which scrubs `GIT_DIR` and friends so `git -C <dir>` really means that directory. Pure, never invokes gh/gh-axi; pattern matching pinned to `LC_ALL=C`. Also a CLI (`bash bin/fm-merge-target-lib.sh <dir> [pr] [owner/name] [remote]`, exit 0 resolved, 1 refused, 2 cannot inspect) |
 | `fm-review-diff.sh`      | Review a crewmate branch against the authoritative base, with optional `--stat` output                              |
-| `fm-watch-arm.sh`        | Verified per-home watcher re-arm; reports `started`, `healthy`, or `FAILED`; `--restart` relaunches only this home's watcher |
+| `fm-watch-arm.sh`        | Verified per-home watcher re-arm; reports `started`, `healthy`, or `FAILED`; `--restart` relaunches only this home's watcher, and gates on the helm because it kills a live one |
 | `fm-watch.sh`            | Singleton-safe one-shot watcher; blocks until supervision work is due, queues it durably, then exits with one reason line. Senses staleness on the surface each `state/<id>.meta` records - `agent_status` from one `herdr api snapshot` per cycle, or the pre-cutover pane-text hash for a draining tmux window |
 | `fm-sense-lib.sh`        | What supervision senses, split out of the watcher loop so it can be sourced and tested: the one-call herdr agent-state read, what `unknown` means, and `fm_sense_awaiting_verdict` - the state that keeps a crewmate waiting on its Quarterdeck verdict from being reported as wedged |
 | `fm-supervise-daemon.sh` | Presence-gated sub-supervisor for walk-away (`/afk`) supervision: wraps `fm-watch.sh`, self-handles routine wakes in bash, and escalates only captain-relevant events as one verified, batched, single-line digest prefixed with a sentinel marker |
@@ -44,7 +44,7 @@ Each file also starts with a short header comment.
 | `fm-teardown.sh`         | Return the worktree or retire/release a secondmate home and close its pane on the surface that created it, warning rather than staying silent when a pane could not be closed and keeping the task record at `state/<id>.orphan-pane` so that leftover pane stays findable (and clearing that record once a run does close the pane); protects ship work, requires scout reports, checks child work, and prints the backlog reminder |
 | `fm-harness.sh`          | Detect the running harness; resolve the effective crewmate harness                                                  |
 | `fm-lock.sh`             | Per-home firstmate session lock - the helm. Acquire, `status`, and `--take`, which evicts a holder only when it is provably dead; the compare-and-swap is serialised by `fm_lock_try_acquire` on `state/.lock.acquire` |
-| `fm-lock-lib.sh`         | The helm check itself: harness-pid resolution, holder liveness, and `fm_lock_require_helm`, the writer-only seam the drive verbs consult. Side-effect free, so `fm-lock.sh status` stays read-only for the boot emitter |
+| `fm-lock-lib.sh`         | The helm itself: one harness predicate, one compare-and-swap (`fm_lock_cas`), and `fm_lock_require_helm`, the writer-only seam that CLAIMS the helm before a drive verb proceeds. Sourcing is side-effect free, so `fm-lock.sh status` stays read-only for the boot emitter |
 
 ## The helm: which verbs gate on the session lock
 
@@ -52,11 +52,12 @@ Spec: `docs/specs/2026-08-27-n-concurrent-firstmates.md`, section 4.
 
 **The lock guards mutation, not activation.** A second firstmate session on the same
 home activates fully - same fleet view, answers "what is the fleet doing", reads any
-project, reasons, drafts. It is an observer, not an error. It is refused only when it
+project, reasons, drafts. It is an observer, not an error. It is stopped only when it
 asks to spawn, steer, tear down or merge, and only at the moment it asks. Several
 sessions on one home is the NORMAL case, so there is no banner, no red text and no
-error string at boot: anything that read as an error there would fire constantly and
-train the captain to ignore it.
+error string at boot - including from the bare `bin/fm-lock.sh` acquire that AGENTS.md
+section 5 makes recovery step 1, which reports the observer state as a plain fact and
+exits 0.
 
 The refusal is one plain captain-facing sentence, carried on stderr by every gated
 verb:
@@ -65,15 +66,31 @@ verb:
 > Say the word if you want me to take the helm.
 
 **The escape hatch is `bin/fm-lock.sh --take`**, permitted only when the holder is
-provably dead. There is deliberately no force-evict flag and no env bypass: evicting a
-live session means ending that session, which is the captain's action and not
-something a script may do on its own.
+provably dead. There is deliberately no force-evict flag: evicting a live session means
+ending that session, which is the captain's action and not something a script may do.
 
-### The gated seven
+### The seam claims; it does not merely ask
 
-Each calls `fm_lock_require_helm "$STATE" <label> || exit 1` before it mutates
-anything. `gate-c1-helm-writer-only` pins this roster exactly, so adding or removing
-one is a reviewed change, not a drift.
+An advisory check that answers "go ahead" for a free or stale helm without taking it is
+not a lock. The moment a holder dies, two observers both read *free* and both drive.
+So `fm_lock_require_helm` runs the same compare-and-swap `fm-lock.sh` does -
+`fm_lock_cas`, one implementation, three callers - and a drive verb that proceeds on a
+free or stale helm HAS TAKEN it, atomically, before the verb touches anything.
+`gate-c2-helm-take-and-isolation` proves that with sixteen concurrent sessions and
+sixteen distinct harness identities racing one free helm: exactly one passes.
+
+**Atomicity.** The whole critical section - read the holder, judge it, write ours - is
+held under `fm_lock_try_acquire` (`bin/fm-wake-lib.sh`) on `state/.lock.acquire`. That
+is this repo's existing atomic mutex: an atomic `ln -s` create, with dead-owner
+reclamation itself serialised through a second lock, already proven single-winner under
+40-way concurrency by `tests/fm-watcher-lock.test.sh`. A second CAS implementation would
+be a second thing to get wrong.
+
+### The gated eight
+
+Each calls `fm_lock_require_helm "$STATE" <label> || exit 1` before it mutates anything.
+`gate-c1-helm-writer-only` pins this roster exactly, so adding or removing one is a
+reviewed change, not a drift.
 
 | verb | what it drives |
 | --- | --- |
@@ -84,6 +101,11 @@ one is a reviewed change, not a drift.
 | `fm-pr-check.sh` | the merge path - records `pr=` and arms the merge poll |
 | `fm-promote.sh` | re-contracts a live task by rewriting its meta |
 | `fm-update.sh` | fast-forwards this home's instructions and every secondmate's |
+| `fm-watch-arm.sh --restart` | kills this home's live watcher and starts a replacement |
+
+`fm-watch-arm.sh` gates on that one path only. Plain arming is singleton-safe and
+no-ops against a healthy watcher, every session is told to do it, and refusing it would
+be a boot-path refusal; `--restart` is different, because it kills a running watcher.
 
 ### What does not gate, and why
 
@@ -94,16 +116,15 @@ one is a reviewed change, not a drift.
   semantics and it does not gate either: besides running at boot like the rest of
   bootstrap, what it mutates is the machine's tool inventory - homebrew, npm - not this
   home's fleet state, and it is idempotent and captain-authorised in the session that
-  asks for it. Blocking it would stop an observer from fixing a missing tool, which
-  helps nobody.
+  asks for it. Blocking it would stop an observer from fixing a missing tool.
 - **`fm-guard.sh` specifically.** It always exits 0 by design - it warns, it never
-  blocks - so it is the wrong place to enforce anything, and a gate that could not
-  stop a caller would be theatre.
+  blocks - so it is the wrong place to enforce anything, and a gate that could not stop
+  a caller would be theatre.
 - **`fm-fleet-sync.sh`.** Called from bootstrap (a boot path) and from
   `fm-teardown.sh` (already gated). Fetch and clean fast-forward only, and idempotent.
 - **Observation.** `fm-peek.sh`, `fm-status.sh`, `fm-review-diff.sh`, `fm-watch.sh`,
-  `fm-watch-arm.sh`, `fm-harness.sh`, `fm-project-mode.sh` read, report, or append the
-  append-only records any session may write.
+  `fm-watch-arm.sh` other than `--restart`, `fm-harness.sh`, `fm-project-mode.sh` read,
+  report, or append the append-only records any session may write.
 - **`fm-verify.sh` and `fm-intake.sh`.** They record decisions in append-only channels,
   which is reasoning and drafting - exactly what an observer may do. They cannot act on
   those decisions: every verb that consumes one (`fm-spawn.sh`, `fm-merge-local.sh`,
@@ -123,18 +144,41 @@ one is a reviewed change, not a drift.
 
 ### Two edge policies
 
-- **harness-not-found.** `fm_lock_harness_pid` can fail to identify a harness at all -
-  an unverified adapter, a wrapper, a shell outside any agent. The seam then **fails
-  open, out loud** on stderr. Failing closed would be a lock-out by another route: such
-  a session could never prove it is the holder, so it could never drive, and `--take`
-  would not help because the fault is not with the holder.
-- **Atomicity.** Acquire is a compare-and-swap - read the holder, judge it, write ours -
-  and two sessions racing must not both conclude they hold the helm. `fm-lock.sh` holds
-  `fm_lock_try_acquire` (`bin/fm-wake-lib.sh`) on `state/.lock.acquire` across the whole
-  critical section. That primitive is this repo's existing atomic mutex - an atomic
-  `ln -s` create, with dead-owner reclamation itself serialised through a second lock -
-  and `tests/fm-watcher-lock.test.sh` already proves it single-winner under 40-way
-  concurrency. A second CAS implementation would be a second thing to get wrong.
+**harness-not-found, and it splits.** `fm_lock_harness_pid` can fail to identify a
+harness at all - an unverified adapter, a wrapper, a shell outside any agent - and such
+a session has no session-stable pid to record, so it cannot be the holder.
+
+- *Nobody is steering* (free or stale helm): allowed through, out loud on stderr,
+  without claiming. Refusing here would be a lock-out by another route - a session that
+  could never drive anything, with no remedy, since `--take` needs an identity too.
+- *Another live harness is steering*: **refused.** This is not a lock-out by another
+  route, it is the seam doing its job. Waving it through was a bypass - any caller
+  could defeat the helm by detaching from its agent - and it also contradicted
+  `fm-lock.sh`, which has always refused to let a session it cannot name hold the helm
+  at all. One rule: you may drive only while you provably hold the helm.
+
+**Which names count as a harness.** `FM_LOCK_HARNESS_RE` is applied to two subjects - a
+bare command basename and a whole argv string - so `pi`, the one name that must match
+as a whole word rather than a substring (`pip`, `pipenv`, `spider` must not), carries
+its own word boundaries instead of `^pi$`. Anchored that way it matched NOTHING once it
+was applied to anything containing a space, which made a live `pi` session read as dead:
+observers passed the seam and `--take` evicted a live holder. One predicate,
+`fm_lock_pid_is_harness`, now answers both "am I a harness" and "is the holder alive",
+so the two cannot disagree again.
+
+### What "no bypass" does and does not claim
+
+There is no override variable for the seam, and no force-evict flag: the only way past
+a live holder is to end that session and run `--take`.
+
+That is not a claim that no environment variable can move the check. `FM_HOME` and
+`FM_STATE_OVERRIDE` scope the whole home - this check included - so pointing a verb at
+another state dir points the verb at another home, which is the mechanism secondmates
+and the test suites both rely on. The one place where those could be aimed APART is
+`fm-update.sh`, whose git target comes from `FM_ROOT` rather than from `$STATE`'s home:
+it therefore requires the helm of `$FM_ROOT/state` as well, whenever that home exists
+and differs. `gate-c2-helm-take-and-isolation` proves an empty alternate state dir
+cannot slip a self-update of a steered repo through.
 
 ### Secondmates
 
@@ -142,4 +186,4 @@ one is a reviewed change, not a drift.
 secondmate home runs these same scripts with its own `FM_HOME`. A secondmate is
 therefore never refused because the main firstmate holds the main home's lock;
 `gate-c2-helm-take-and-isolation` proves it positively, by having a secondmate drive a
-real mutation through while the main home stays held.
+real mutation through - and take its OWN home's helm - while the main home stays held.
