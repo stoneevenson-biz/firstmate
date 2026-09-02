@@ -23,7 +23,7 @@ META="$STATE/$ID.meta"
 
 PROJ=$(grep '^project=' "$META" | cut -d= -f2-)
 MODE=$(grep '^mode=' "$META" | cut -d= -f2- || true)
-[ "$MODE" = local-only ] || { echo "error: task $ID is mode=$MODE, not local-only; merge it the normal way (gh-axi pr merge / captain)" >&2; exit 1; }
+[ "$MODE" = local-only ] || { echo "error: task $ID is mode=$MODE, not local-only; merge it the normal way (bin/fm-merge-pr.sh / captain)" >&2; exit 1; }
 
 # Quarterdeck: merging is gated on an independent verifier approve — the last
 # decision line of state/<id>.verdict must be `approve:` (bin/fm-verify.sh

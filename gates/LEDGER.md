@@ -59,3 +59,15 @@
 | gate-w5-ctx-herdr-busy-guard | green | Busy-guard on herdr: an over-threshold pane that is working does NOT fire |
 | gate-w6-awaiting-verdict-not-stale | green | Awaiting a Quarterdeck verdict is not stale, and a rejected claim still is |
 | gate-w7-afk-escalates-herdr-wedge | green | Away-mode escalates a wedged herdr crewmate instead of dropping it |
+| gate-t1-merge-target-resolution | frozen | The merge target is resolved by one pure rule: named beats inferred, and more than one remote with no explicit choice is a stop |
+| gate-t1-merge-repo-pinned | frozen | A merge lands in the repository that was named: the merge command carries --repo, and an ambiguous target refuses without invoking the tool |
+| gate-t2-merge-foreign-host | frozen | A pull-request reference on a foreign host cannot lend its number to a repository it does not name |
+| gate-t2-merge-pull-in-query | frozen | A second /pull/<n> in a url's query cannot become the pull request that is merged |
+| gate-t2-merge-pull-in-fragment | frozen | A second /pull/<n> in a url's fragment cannot become the pull request that is merged |
+| gate-t2-merge-trailing-path | frozen | Path segments after the pull-request number are refused, never trimmed |
+| gate-t2-merge-passthrough-repo-flag | frozen | A repository flag after `--` cannot override the pin, in ANY spelling - and passthrough is an allowlist rather than a blocklist |
+| gate-t2-merge-duplicate-repo-flag | frozen | A merge target is named once: a repeated target flag, or a --repo and --remote that disagree, refuses instead of letting the last one win |
+| gate-t2-merge-ambiguous-remotes | frozen | A bare pull-request number in a clone with more than one remote refuses, naming every candidate, and announces no target |
+| gate-t2-merge-env-redirect | frozen | GH_REPO and GH_HOST are pinned at the exec, so an environment variable cannot redirect a merge without appearing in the argv |
+| gate-t2-merge-origin-proof | frozen | The resolved target must be proved equal to this clone's origin, or affirmed by a flag that names no repository |
+| gate-t2-merge-argv-egress | frozen | The finished merge argv is re-read before exec and must pin the resolved target exactly once |
