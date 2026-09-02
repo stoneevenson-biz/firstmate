@@ -476,6 +476,21 @@ re-proves the brief's definition of done from the crewmate's worktree. The
 decision lands in `state/<id>.verdict` (append-only: `approve:` / `reject:` /
 `escalate:` / `lens:` evidence lines).
 
+**The lens reads a patch, or it does not run.** The verifier re-runs the gates in
+the worktree; the foreign lens reads only `data/<id>/lens-diff.patch`, so a
+payload that is corrupt or describes a different change does not fail the stage,
+it silently halves it. That is what happened on 2026-09-02: a byte-bounded
+`head -c 200000` cut the artifact mid-hunk, and the base it was taken against was
+a stale cached remote-tracking ref, so the lens for that task was handed seven
+commits where the branch owned three and not one of its own tests. The rule now
+has one implementation, `fm_patch_build` in `bin/fm-patch-lib.sh` - scoped to the
+branch's own base, spending its bound on whole named files rather than bytes, and
+re-read with `git apply --check` so an artifact that is not a patch REFUSES the
+lens instead of being reviewed. A refused lens degrades loudly and is recorded
+`lens: none`, exactly as an unreachable one is; read that as a stage that did not
+run, never as a clean one. Spec:
+`docs/specs/2026-09-02-lens-patch-integrity.md`.
+
 What counts as an acceptable ledger is neither firstmate's judgment nor the
 verifier's: it is `fm_gates_classify` in `bin/fm-gates-lib.sh`, the rule's only
 implementation - `green`, `frozen`, or `red` **and** declared in the project's
