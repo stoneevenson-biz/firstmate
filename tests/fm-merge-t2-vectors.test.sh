@@ -151,7 +151,7 @@ MERGE="$ROOT/bin/fm-merge-pr.sh"
 # own rail, and reaches no merge tool. Under LEDGER_MUTATE it asserts the reverse.
 refuses_with() {
   local rail=$1 label=$2; shift 3
-  local out code one
+  local out code
   reset_record
   out=$("$MERGE" "$@" 2>&1); code=$?
   if [ "$MUTATE" = 1 ]; then
@@ -444,6 +444,13 @@ EOF
   cp "$FAKEHOME/.gitconfig" "$FAKEHOME/git/config"
 
   local out code one
+  # The inner shell's own $1/$2, deliberately unexpanded by the outer one: this
+  # sources the library under test and asks it a single question, so what the
+  # library reads is decided by the environment `env` builds and nothing else.
+  # shellcheck disable=SC2016
+  local READ_URL='. "$1"; fm_merge_target_git "$2" remote get-url origin'
+  # shellcheck disable=SC2016
+  local READ_REMOTES='. "$1"; fm_merge_target_git "$2" remote'
 
   if [ "$MUTATE" != 1 ]; then
     # CONTROLS FIRST. A guard against a substitution that does not happen proves
@@ -475,23 +482,23 @@ EOF
       "phantom" "control: an injected remote the repository does not define really does appear"
     assert_not_contains "$(env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.phantom.url \
         "GIT_CONFIG_VALUE_0=https://github.com/$EVIL_SLUG.git" \
-        bash -c '. "$1"; fm_merge_target_git "$2" remote' _ \
+        bash -c "$READ_REMOTES" _ \
         "$ROOT/bin/fm-merge-target-lib.sh" "$SOLO")" \
       "phantom" "a phantom remote cannot be injected into the set the target is resolved from"
 
     # 1. NEUTRALISED. Every git read in the merge-target path goes through
     #    fm_merge_target_git, and the directory argument is the only thing that
     #    may decide what it answers.
-    assert_contains "$(env "${INJECT[@]}" bash -c '. "$1"; fm_merge_target_git "$2" remote get-url origin' _ \
+    assert_contains "$(env "${INJECT[@]}" bash -c "$READ_URL" _ \
         "$ROOT/bin/fm-merge-target-lib.sh" "$SOLO")" "$ORIGIN_SLUG" \
       "the scrubbed read answers with the repository's own URL, not the substituted one"
-    assert_contains "$(env "${INJECT_HIGH[@]}" bash -c '. "$1"; fm_merge_target_git "$2" remote get-url origin' _ \
+    assert_contains "$(env "${INJECT_HIGH[@]}" bash -c "$READ_URL" _ \
         "$ROOT/bin/fm-merge-target-lib.sh" "$SOLO")" "$ORIGIN_SLUG" \
       "the sweep is by prefix, so a high GIT_CONFIG_KEY_<n> index is covered too"
-    assert_contains "$(env HOME="$FAKEHOME" bash -c '. "$1"; fm_merge_target_git "$2" remote get-url origin' _ \
+    assert_contains "$(env HOME="$FAKEHOME" bash -c "$READ_URL" _ \
         "$ROOT/bin/fm-merge-target-lib.sh" "$SOLO")" "$ORIGIN_SLUG" \
       "the global config file is pinned away, so HOME cannot substitute the URL either"
-    assert_contains "$(env HOME=/nonexistent XDG_CONFIG_HOME="$FAKEHOME" bash -c '. "$1"; fm_merge_target_git "$2" remote get-url origin' _ \
+    assert_contains "$(env HOME=/nonexistent XDG_CONFIG_HOME="$FAKEHOME" bash -c "$READ_URL" _ \
         "$ROOT/bin/fm-merge-target-lib.sh" "$SOLO")" "$ORIGIN_SLUG" \
       "nor can XDG_CONFIG_HOME"
 

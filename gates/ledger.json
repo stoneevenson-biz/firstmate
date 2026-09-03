@@ -1066,13 +1066,13 @@
       "blocked_by": [],
       "test_ref": "bash tests/fm-merge-t2-vectors.test.sh git-config-substitution",
       "baseline_ref": null,
-      "first_observed_red": null,
-      "mutation_verified": null,
-      "status": "unproven",
+      "first_observed_red": "2026-09-03T02:21:18.240Z",
+      "mutation_verified": "2026-09-03T02:21:40.958Z",
+      "status": "frozen",
       "vacuous": false,
       "regression": false,
       "created": "2026-09-02T00:00:00Z",
-      "last_verified": null
+      "last_verified": "2026-09-03T02:21:19.086Z"
     },
     {
       "id": "gate-t2-merge-origin-proof",

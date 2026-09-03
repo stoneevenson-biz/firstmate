@@ -159,7 +159,7 @@ if [ -n "$GIT_CONFIG_ENV" ]; then
     printf '\u25cf  GIT CONFIGURATION IS BEING SUBSTITUTED FROM THE ENVIRONMENT - REFUSING\n'
     printf '\u25cf  REFUSED[env/git-config-injected]\n'
     printf '\u25cf  These variables are set, and they replace what git believes about\n'
-    printf '\u25cf  this repository - including what `remote get-url` answers:\n'
+    printf '\u25cf  this repository - including what "remote get-url" answers:\n'
     printf '%s\n' "$GIT_CONFIG_ENV" | while IFS= read -r v; do
       [ -n "$v" ] && printf '\u25cf      %s\n' "$v"
     done
