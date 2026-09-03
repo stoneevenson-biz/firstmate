@@ -714,6 +714,28 @@ depends on what the crewmate was doing, so read the exit code rather than assumi
 An unconfirmed delivery is assumed sent and never re-sent: re-sending a steer the crewmate
 already holds is the worse of the two available errors.
 
+**Every Enter fm-spawn sends is accounted for.** `herdr pane run` sends the text and
+the Enter in one unacknowledged call - the binary says so itself - and fm-spawn used it for
+the launch, so the Enter went in whether or not the surface was ready to consume it. That is
+not an annoyance, because of what the keystroke can reach: the first dialog a fresh claude
+pane renders is the trust prompt, whose default option is `No, exit`. Both endings observed
+across 2026-08-28..09-02 are the same defect - a brief left unsubmitted in a composer is the
+keystroke landing early, and a crewmate found dead with the dialog resting on `No, exit` is
+it landing late. The surplus keystrokes came from the readiness gate itself, which re-sent
+the SAME marker on every retry and opened on the first sighting of it, so probe 1's echo
+satisfied it while probes 2..N were still unconsumed Enters fm-spawn could no longer account
+for. Readiness proves a shell ran a command; it never proved the input queue was EMPTY, and
+only the second property keeps a keystroke away from a dialog. The rule now has one
+implementation each in `bin/fm-herdr.sh`: `fm_herdr_wait_shell_ready` gives every probe its
+own ordinal marker and opens only on the latest, `fm_herdr_input_drained` is a single
+never-resent sentinel whose echo proves the queue empty at the instant the launch is typed,
+and `fm_herdr_launch_line` is text, then proof the pane took it, then Enter - to the pane via
+`fm_herdr_pane_key`, never through `fm_herdr_send_key`, which prefers the agent verb because
+its own job is clearing a dialog. A live dialog refuses the Enter outright, and
+`fm_herdr_dialog_live` reads `agent_status` as a FIELD, because a dialog in scrollback
+renders exactly like one waiting for an answer now. Spec:
+`docs/specs/2026-09-02-spawn-enter-gate.md`.
+
 **The drain.** Crewmates spawned before the cutover live in tmux windows and their meta has
 no `mux=herdr` line. Those stay readable, steerable and closable until they are torn down:
 a watcher that cannot read a live crewmate is blind, a supervisor that can watch but not

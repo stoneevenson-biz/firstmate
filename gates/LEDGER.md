@@ -84,3 +84,8 @@
 | gate-t4-lens-patch-file-boundary-split | frozen | A payload over its bound drops whole named files and is still a valid patch |
 | gate-t4-lens-patch-refuses-corrupt | frozen | A payload that is not a valid patch refuses the lens instead of being passed through |
 | gate-t4-lens-patch-keeps-own-tests | frozen | The branch's own tests survive a bound that forces omission |
+| gate-t4-launch-enter-waits-for-echo | frozen | The launch Enter is sent only after the pane shows the launch text |
+| gate-t4-readiness-proves-the-queue-drained | frozen | Shell readiness opens only with the pane's input queue empty |
+| gate-t4-launch-enter-never-reaches-the-agent | frozen | The launch Enter goes to the pane's shell and never to an agent |
+| gate-t4-stale-dialog-is-not-live | frozen | A trust dialog in scrollback is not mistaken for a live one |
+| gate-t4-ready-shell-adds-no-extra-probes | frozen | The happy path costs one extra round trip and leaves nothing buffered |

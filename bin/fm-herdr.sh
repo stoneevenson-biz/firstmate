@@ -658,10 +658,20 @@ fm_herdr_is_busy() {  # <pane>
 # bare shells on 2026-08-26.
 fm_herdr_wait_shell_ready() {  # <pane> [timeout-seconds]
   local pane=$1 timeout=${2:-${FM_SHELL_READY_TIMEOUT:-20}}
-  local poll=${FM_SHELL_READY_POLL:-0.2} marker deadline waited
-  marker="fmready$$$(od -An -N3 -tu4 /dev/urandom 2>/dev/null | tr -cd '0-9')"
+  local poll=${FM_SHELL_READY_POLL:-0.2} stem marker deadline waited seq
+  stem=$(fm_herdr_marker fmready)
   deadline=$(( $(date +%s) + timeout ))
+  seq=0
   while [ "$(date +%s)" -lt "$deadline" ]; do
+    seq=$((seq + 1))
+    # ONE PROBE, ONE MARKER. Every resend used to carry the SAME marker, so the
+    # echo that opened the gate was not attributable to any particular probe:
+    # probe 1's output satisfied it while probes 2..N were still unconsumed
+    # keystrokes - Enters this script had typed and could no longer account for.
+    # Sequencing makes the gate open only on the LATEST probe, and a pane's
+    # input is FIFO, so that echo is also proof every earlier probe was
+    # consumed. Same cost on the happy path: probe 1 echoes and the gate opens.
+    marker="${stem}x${seq}"
     fm_herdr_run "$pane" "printf '%s\\n' $marker" >/dev/null 2>&1 || return 1
     waited=0
     while [ "$waited" -lt 10 ]; do
@@ -671,6 +681,133 @@ fm_herdr_wait_shell_ready() {  # <pane> [timeout-seconds]
     done
   done
   return 1
+}
+
+# A marker no other run can collide with. Split out so the readiness probe and
+# the drain sentinel cannot accidentally share a stem.
+fm_herdr_marker() {  # <prefix>
+  printf '%s%s%s\n' "$1" "$$" "$(od -An -N3 -tu4 /dev/urandom 2>/dev/null | tr -cd '0-9')"
+}
+
+# THE LAST KEYSTROKE BEFORE A LAUNCH, and the reason the launch's Enter cannot
+# be answered by anything but the shell it was aimed at.
+#
+# Readiness and drainedness are different properties. Readiness asks whether a
+# shell ran a command; drainedness asks whether the pane's input queue is EMPTY.
+# Only the second one keeps an Enter away from a dialog, because an Enter that
+# is still queued is an Enter this script cannot say who will consume.
+#
+# The proof is one unique sentinel, sent ONCE and never resent - a resend would
+# put back exactly the surplus this exists to rule out. A pane's input is FIFO,
+# so the sentinel's own echo is positive proof that every keystroke sent before
+# it has been consumed.
+fm_herdr_input_drained() {  # <pane> [timeout-seconds]
+  local pane=$1 timeout=${2:-${FM_INPUT_DRAIN_TIMEOUT:-10}}
+  local poll=${FM_SHELL_READY_POLL:-0.2} marker deadline
+  marker=$(fm_herdr_marker fmdrain)
+  fm_herdr_run "$pane" "printf '%s\\n' $marker" >/dev/null 2>&1 || return 1
+  deadline=$(( $(date +%s) + timeout ))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    sleep "$poll"
+    if fm_herdr_read_quiet "$pane" 40 visible | grep -qx "$marker"; then return 0; fi
+  done
+  return 1
+}
+
+# A DIALOG IS LIVE ONLY IF THE AGENT SAYS SO. Pane text cannot answer this
+# question: `recent` is scrollback-backed, so a trust dialog answered ten
+# minutes ago renders exactly like one waiting for an answer now, and `visible`
+# is a viewport a scrolled-back pane can still be showing. Reading the
+# lifecycle FIELD is the only source that tells them apart - and it is read as a
+# field rather than grepped out of the record, because an agent record carries
+# the crewmate's own terminal title beside it, which is untrusted rendered text
+# and routinely contains whatever words a grep would look for.
+fm_herdr_dialog_live() {  # <pane>
+  [ "$(fm_herdr_field "$(herdr agent get "$1" 2>/dev/null)" agent_status)" = blocked ]
+}
+
+# The witness a pane can only be showing because the launch text landed: the
+# TAIL of the command. A terminal echoes what it received in order, so seeing
+# the last characters proves the whole line arrived - a prefix would pass on a
+# line that was cut in half.
+fm_herdr_launch_witness() {  # <command>
+  local cmd=$1 n=${FM_LAUNCH_WITNESS_LEN:-24}
+  if [ "${#cmd}" -le "$n" ]; then printf '%s\n' "$cmd"; else printf '%s\n' "${cmd: -n}"; fi
+}
+
+# A key sent through the PANE verb, never the agent verb.
+#
+# fm_herdr_send_key deliberately tries `agent send-keys` first, because its job
+# is clearing a dialog an agent is holding. That preference is exactly wrong
+# here, so the launch Enter does not go through it.
+#
+# BUT DO NOT READ MORE ISOLATION INTO THIS THAN IT HAS. herdr routes input by
+# what OCCUPIES the pane, not by which verb was typed: once it has classified an
+# agent there, the pane verb reaches the agent too. So the verb choice removes
+# one way to hit a dialog on purpose; the thing that actually keeps the launch
+# Enter away from one is the fm_herdr_dialog_live check in
+# fm_herdr_launch_line, and that check is a FIELD read, which can lag the pane
+# it describes. The residual window - an agent classified but not yet reporting
+# `blocked` - is unreachable from fm-spawn, which creates a fresh tab per task
+# and refuses a duplicate label, so no agent occupies the pane at launch time.
+# It is reachable by any future caller that launches into a reused pane.
+fm_herdr_pane_key() {  # <pane> <key>
+  local out
+  out=$(herdr pane send-keys "$1" "$2" 2>&1) && return 0
+  echo "fm-herdr: could not send key '$2' to pane $1: ${out:-herdr gave no output}" >&2
+  return 1
+}
+
+# NEVER SEND ENTER INTO A SURFACE THAT HAS NOT PROVEN IT IS READY TO CONSUME IT.
+#
+# `herdr pane run` sends the text and the Enter in ONE unacknowledged call - the
+# binary says so itself ("herdr pane run <PANE_ID> <COMMAND> sends text and
+# Enter in one call"). For a probe that is correct: a probe whose keystrokes are
+# lost is a probe that simply does not answer. For the LAUNCH it is not, because
+# an Enter this script cannot account for is an Enter that can be delivered
+# somewhere other than the shell it was aimed at - and the first thing a fresh
+# claude pane renders is the trust dialog, whose default option is `No, exit`.
+# A mistimed Enter there does not merely fail to launch; it answers a safety
+# dialog with its destructive default and kills the agent.
+#
+# So the launch is the manual recovery that has worked every time, in code: put
+# the text in, SEE it, and only then press Enter - to the pane, never to an
+# agent, and never at all while a live dialog is holding the pane.
+#
+#   0 submitted · 1 the text never appeared and NO Enter was sent · 2 send failed
+fm_herdr_launch_line() {  # <pane> <command> [echo-timeout-ms]
+  local pane=$1 cmd=$2 budget=${3:-${FM_LAUNCH_ECHO_TIMEOUT_MS:-8000}} witness out
+  witness=$(fm_herdr_launch_witness "$cmd")
+  if ! out=$(herdr pane send-text "$pane" "$cmd" 2>&1); then
+    echo "fm-herdr: could not put the launch line into $pane: ${out:-herdr gave no output}" >&2
+    return 2
+  fi
+  # The acknowledgment the old path never had. No echo, no Enter - a launch that
+  # was never typed is a pane to inspect, not a keystroke to gamble on.
+  #
+  # `recent-unwrapped` because a launch line is long enough to wrap, and a
+  # witness split across a wrap boundary would never match. The cost is that the
+  # search includes existing output, so this proves "the pane is showing this
+  # text" rather than "the pane showed it just now" - fine here, because
+  # fm-spawn launches once into a pane it created and aborts rather than
+  # retrying, so the tail of this command has never appeared before.
+  if ! out=$(herdr pane wait-output "$pane" --match "$witness" \
+               --source recent-unwrapped --timeout "$budget" 2>&1); then
+    echo "fm-herdr: $pane never showed the launch line; Enter was NOT sent: ${out:-timed out}" >&2
+    return 1
+  fi
+  # Between the text and the Enter, one last look: a pane holding a live dialog
+  # is a pane where an Enter is an ANSWER. Refuse rather than press it.
+  if fm_herdr_dialog_live "$pane"; then
+    echo "fm-herdr: $pane is holding a live dialog; Enter was NOT sent" >&2
+    return 1
+  fi
+  # `Enter`, not `enter`: AGENTS.md section 8 records the tmux-shaped names as
+  # the ones verified against herdr 0.8.2, and a key name this pane rejects
+  # would break every spawn. There is deliberately no retry with another
+  # spelling - a second Enter is exactly the unaccounted keystroke this
+  # function exists to make impossible.
+  fm_herdr_pane_key "$pane" Enter || return 2
 }
 
 # Post-launch verification. If the launch string reached the shell as text
