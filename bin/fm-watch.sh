@@ -23,6 +23,10 @@ mkdir -p "$STATE"
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 # shellcheck source=bin/fm-sense-lib.sh
 . "$SCRIPT_DIR/fm-sense-lib.sh"
+# The marker names minted below are the same names bin/fm-teardown.sh must
+# remove when the task ends, so the rule lives in one place both sides ask.
+# shellcheck source=bin/fm-state-lib.sh
+. "$SCRIPT_DIR/fm-state-lib.sh"
 
 WATCH_LOCK="$STATE/.watch.lock"
 WATCH_PATH="$SCRIPT_DIR/fm-watch.sh"
@@ -51,9 +55,15 @@ trap 'fm_lock_release "$WATCH_LOCK"' EXIT
 # ${BASHPID:-$$} from this same main shell). Read directly, never via a command
 # substitution, so it matches the stored holder pid for the self-eviction check.
 WATCHER_PID=${BASHPID:-$$}
-printf '%s\n' "$FM_HOME" > "$WATCH_LOCK/fm-home" || true
-printf '%s\n' "$WATCH_PATH" > "$WATCH_LOCK/watcher-path" || true
-fm_pid_identity "$WATCHER_PID" > "$WATCH_LOCK/pid-identity" 2>/dev/null || true
+# The identity record is a PRECONDITION of running, not a courtesy. It is the
+# only evidence `fm-watch-arm.sh --restart` has that a live pid is this home's
+# watcher, and it was written best-effort - so a watcher could run behind an
+# empty record and become one this home could neither stop nor replace. Written
+# and read back; a watcher that cannot be identified does not start.
+if ! fm_watch_lock_record_identity "$WATCH_LOCK" "$FM_HOME" "$WATCH_PATH" "$WATCHER_PID"; then
+  echo "watcher: FAILED - could not record this watcher's identity in $WATCH_LOCK; a watcher nobody can identify is a watcher nobody can stop, so it is not starting." >&2
+  exit 1
+fi
 
 # Portable stat. macOS (BSD) stat uses `-f <fmt>`; Linux (GNU) stat uses `-c <fmt>`.
 # Do NOT use the `stat -f <fmt> ... || stat -c <fmt> ...` fallback form: on Linux
@@ -153,7 +163,7 @@ scan_signals() {
   for f in "$STATE"/*.status "$STATE"/*.turn-ended; do
     [ -e "$f" ] || continue
     sig=$(stat_sig "$f") || continue
-    sf="$STATE/.seen-$(basename "$f" | tr '.' '_')"
+    sf=$(fm_state_seen_marker "$STATE" "$f")
     if [ "$sig" != "$(cat "$sf" 2>/dev/null)" ]; then
       printf '%s\t%s\t%s\n' "$sf" "$sig" "$f"
     fi
@@ -260,7 +270,7 @@ EOF
     # A secondmate idling on its own watcher is healthy. Its parent supervises
     # it through status writes and heartbeats, not pane-idle staleness.
     [ "$kind" = secondmate ] && continue
-    key=$(printf '%s' "$w" | tr ':/.' '___')
+    key=$(fm_state_key "$w")
     hf="$STATE/.hash-$key"
     cf="$STATE/.count-$key"
     sf="$STATE/.stale-$key"
