@@ -16,7 +16,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-06-25T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-g2-busy-guard",
@@ -33,7 +33,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-06-25T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-g3-rehydrate",
@@ -50,7 +50,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-06-25T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-g4-e2e",
@@ -70,7 +70,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-06-25T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-g5-inject-cap",
@@ -87,7 +87,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-06-25T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-q1-verdict-grammar",
@@ -104,7 +104,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-07-01T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-q2-merge-refuses-unverified",
@@ -123,7 +123,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-07-01T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-q3-prcheck-refuses-unverified",
@@ -142,7 +142,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-07-01T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-q4-reject-roundtrip",
@@ -161,7 +161,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-07-01T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-q5-attempt-cap",
@@ -180,7 +180,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-07-01T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-q6-lens-degrade",
@@ -199,7 +199,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-07-01T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-q7-fail-closed",
@@ -218,7 +218,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-07-01T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-i1-intake-grammar",
@@ -235,7 +235,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-07-03T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-i2-spawn-refuses-unvetted",
@@ -254,7 +254,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-07-03T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-i3-panel-roundtrip",
@@ -273,7 +273,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-07-03T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-i4-revise-cap-fail-closed",
@@ -292,7 +292,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-07-03T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-i5-intake-lens-degrade",
@@ -311,7 +311,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-07-03T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-l1-drain-instrumented",
@@ -328,7 +328,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-07-03T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-l2-loop-audit-level",
@@ -347,7 +347,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-07-03T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "g-boot-digest",
@@ -359,12 +359,12 @@
       "test_ref": "bash tests/fm-captain-bootstrap-digest.test.sh",
       "baseline_ref": null,
       "first_observed_red": "2026-07-08T21:00:30.169Z",
-      "mutation_verified": "2026-09-02T07:12:14.970Z",
+      "mutation_verified": "2026-09-03T02:36:17.938Z",
       "status": "frozen",
       "vacuous": false,
       "regression": false,
       "created": "2026-07-08T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "m0-ledger-shape",
@@ -376,12 +376,12 @@
       "test_ref": "bash tests/fm-boot-m0.test.sh",
       "baseline_ref": null,
       "first_observed_red": "2026-08-28T05:01:42.000Z",
-      "mutation_verified": "2026-09-02T07:12:20.445Z",
+      "mutation_verified": "2026-09-03T02:36:24.977Z",
       "status": "frozen",
       "vacuous": false,
       "regression": false,
       "created": "2026-08-27T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "m1-hook-registered",
@@ -398,7 +398,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-08-27T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "m2-boot-emitter-is-read-only",
@@ -410,12 +410,12 @@
       "test_ref": "bash tests/fm-boot-m2.test.sh",
       "baseline_ref": null,
       "first_observed_red": "2026-08-28T05:03:07.053Z",
-      "mutation_verified": "2026-09-02T07:12:21.168Z",
+      "mutation_verified": "2026-09-03T02:36:25.791Z",
       "status": "frozen",
       "vacuous": false,
       "regression": false,
       "created": "2026-08-27T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "m4-boot-budget-hostile",
@@ -427,12 +427,12 @@
       "test_ref": "bash tests/fm-boot-m4.test.sh",
       "baseline_ref": null,
       "first_observed_red": "2026-08-28T05:03:07.053Z",
-      "mutation_verified": "2026-09-02T07:12:23.338Z",
+      "mutation_verified": "2026-09-03T02:36:27.439Z",
       "status": "frozen",
       "vacuous": false,
       "regression": false,
       "created": "2026-08-27T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "m5-digest-never-silent",
@@ -444,12 +444,12 @@
       "test_ref": "bash tests/fm-boot-m5.test.sh",
       "baseline_ref": null,
       "first_observed_red": "2026-08-28T05:03:07.053Z",
-      "mutation_verified": "2026-09-02T07:12:58.234Z",
+      "mutation_verified": "2026-09-03T02:37:02.121Z",
       "status": "frozen",
       "vacuous": false,
       "regression": false,
       "created": "2026-08-27T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-ci-declared-red",
@@ -461,12 +461,12 @@
       "test_ref": "bash tests/fm-ci-declared-red.test.sh",
       "baseline_ref": null,
       "first_observed_red": "2026-08-28T05:43:52.000Z",
-      "mutation_verified": "2026-09-02T07:13:02.120Z",
+      "mutation_verified": "2026-09-03T02:37:07.891Z",
       "status": "frozen",
       "vacuous": false,
       "regression": false,
       "created": "2026-08-27T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-status-verb",
@@ -478,12 +478,12 @@
       "test_ref": "bash tests/fm-status-verb.test.sh",
       "baseline_ref": null,
       "first_observed_red": "2026-08-28T15:11:29.000Z",
-      "mutation_verified": "2026-09-02T07:13:11.958Z",
+      "mutation_verified": "2026-09-03T02:37:15.018Z",
       "status": "frozen",
       "vacuous": false,
       "regression": false,
       "created": "2026-08-28T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-h2-mux-workspace-scoping",
@@ -500,7 +500,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-08-28T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-h3-spawn-named-herdr-tab",
@@ -517,7 +517,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-08-28T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-h4-send-peek-routed-by-meta",
@@ -534,7 +534,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-08-28T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-h5-herdr-live-roundtrip",
@@ -551,7 +551,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-08-28T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-h1-herdr-only-surface",
@@ -568,7 +568,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-08-28T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-h6-drain-open-nothing-new-on-tmux",
@@ -585,7 +585,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-08-28T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-h7-drain-live-roundtrip",
@@ -602,7 +602,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-08-28T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-h8-teardown-closes-the-pane",
@@ -619,7 +619,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-08-28T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-h9-startup-reports-unusable-herdr",
@@ -636,7 +636,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-08-28T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-h10-busy-agent-acknowledgment",
@@ -653,7 +653,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-08-28T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-t1-severity-proceeds",
@@ -673,7 +673,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-08-29T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-t1-proceed-rate-nonzero",
@@ -692,7 +692,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-08-29T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-q8-gate-classifier",
@@ -704,12 +704,12 @@
       "test_ref": "bash tests/fm-quarterdeck-q8.test.sh",
       "baseline_ref": null,
       "first_observed_red": "2026-08-29T21:28:42.902Z",
-      "mutation_verified": "2026-09-02T07:13:15.063Z",
+      "mutation_verified": "2026-09-03T02:37:16.359Z",
       "status": "frozen",
       "vacuous": false,
       "regression": false,
       "created": "2026-08-29T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-q9-verify-honours-declared-red",
@@ -721,12 +721,12 @@
       "test_ref": "bash tests/fm-quarterdeck-q9.test.sh",
       "baseline_ref": null,
       "first_observed_red": "2026-08-29T21:28:42.902Z",
-      "mutation_verified": "2026-09-02T07:13:19.096Z",
+      "mutation_verified": "2026-09-03T02:37:19.595Z",
       "status": "frozen",
       "vacuous": false,
       "regression": false,
       "created": "2026-08-29T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-t1-brief-preflight-rules",
@@ -742,7 +742,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-08-31T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z",
+      "last_verified": "2026-09-03T02:27:29.977Z",
       "mutation_verified": null
     },
     {
@@ -759,7 +759,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-08-31T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z",
+      "last_verified": "2026-09-03T02:27:29.977Z",
       "mutation_verified": null
     },
     {
@@ -777,7 +777,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-09-01T03:03:48.384Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-w2-tmux-stale-unregressed",
@@ -794,7 +794,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-09-01T03:03:48.384Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-w3-secondmate-idle-silent",
@@ -813,7 +813,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-09-01T03:03:48.384Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-w4-ctx-herdr-e2e",
@@ -832,7 +832,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-09-01T03:03:48.384Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-w5-ctx-herdr-busy-guard",
@@ -849,7 +849,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-09-01T03:03:48.384Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-w6-awaiting-verdict-not-stale",
@@ -866,7 +866,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-09-01T03:03:48.384Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-w7-afk-escalates-herdr-wedge",
@@ -885,7 +885,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-09-01T03:24:45.262Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-t1-merge-target-resolution",
@@ -897,12 +897,12 @@
       "test_ref": "bash tests/fm-merge-t1-target.test.sh",
       "baseline_ref": null,
       "first_observed_red": "2026-09-01T02:47:37.080Z",
-      "mutation_verified": "2026-09-02T06:18:39.689Z",
+      "mutation_verified": "2026-09-03T02:37:47.656Z",
       "status": "frozen",
       "vacuous": false,
       "regression": false,
       "created": "2026-08-31T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-t1-merge-repo-pinned",
@@ -914,12 +914,12 @@
       "test_ref": "bash tests/fm-merge-t1-pinned.test.sh",
       "baseline_ref": null,
       "first_observed_red": "2026-09-01T02:47:37.080Z",
-      "mutation_verified": "2026-09-02T06:18:47.258Z",
+      "mutation_verified": "2026-09-03T02:37:53.387Z",
       "status": "frozen",
       "vacuous": false,
       "regression": false,
       "created": "2026-08-31T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-t2-merge-foreign-host",
@@ -931,12 +931,12 @@
       "test_ref": "bash tests/fm-merge-t2-vectors.test.sh foreign-host",
       "baseline_ref": null,
       "first_observed_red": "2026-09-02T05:45:45.997Z",
-      "mutation_verified": "2026-09-02T06:18:54.915Z",
+      "mutation_verified": "2026-09-03T02:38:01.584Z",
       "status": "frozen",
       "vacuous": false,
       "regression": false,
       "created": "2026-09-01T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-t2-merge-pull-in-query",
@@ -948,12 +948,12 @@
       "test_ref": "bash tests/fm-merge-t2-vectors.test.sh pull-in-query",
       "baseline_ref": null,
       "first_observed_red": "2026-09-02T05:45:45.997Z",
-      "mutation_verified": "2026-09-02T06:18:57.027Z",
+      "mutation_verified": "2026-09-03T02:38:03.378Z",
       "status": "frozen",
       "vacuous": false,
       "regression": false,
       "created": "2026-09-01T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-t2-merge-pull-in-fragment",
@@ -965,12 +965,12 @@
       "test_ref": "bash tests/fm-merge-t2-vectors.test.sh pull-in-fragment",
       "baseline_ref": null,
       "first_observed_red": "2026-09-02T05:45:45.997Z",
-      "mutation_verified": "2026-09-02T06:18:59.517Z",
+      "mutation_verified": "2026-09-03T02:38:05.504Z",
       "status": "frozen",
       "vacuous": false,
       "regression": false,
       "created": "2026-09-01T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-t2-merge-trailing-path",
@@ -982,12 +982,12 @@
       "test_ref": "bash tests/fm-merge-t2-vectors.test.sh trailing-path",
       "baseline_ref": null,
       "first_observed_red": "2026-09-02T05:45:45.997Z",
-      "mutation_verified": "2026-09-02T06:19:02.508Z",
+      "mutation_verified": "2026-09-03T02:38:07.446Z",
       "status": "frozen",
       "vacuous": false,
       "regression": false,
       "created": "2026-09-01T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-t2-merge-passthrough-repo-flag",
@@ -999,12 +999,12 @@
       "test_ref": "bash tests/fm-merge-t2-vectors.test.sh passthrough-repo-flag",
       "baseline_ref": null,
       "first_observed_red": "2026-09-02T05:45:45.997Z",
-      "mutation_verified": "2026-09-02T06:19:04.856Z",
+      "mutation_verified": "2026-09-03T02:38:08.737Z",
       "status": "frozen",
       "vacuous": false,
       "regression": false,
       "created": "2026-09-01T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-t2-merge-duplicate-repo-flag",
@@ -1016,12 +1016,12 @@
       "test_ref": "bash tests/fm-merge-t2-vectors.test.sh duplicate-repo-flag",
       "baseline_ref": null,
       "first_observed_red": "2026-09-02T05:45:45.997Z",
-      "mutation_verified": "2026-09-02T06:19:11.119Z",
+      "mutation_verified": "2026-09-03T02:38:13.368Z",
       "status": "frozen",
       "vacuous": false,
       "regression": false,
       "created": "2026-09-01T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-t2-merge-ambiguous-remotes",
@@ -1033,12 +1033,12 @@
       "test_ref": "bash tests/fm-merge-t2-vectors.test.sh ambiguous-remotes",
       "baseline_ref": null,
       "first_observed_red": "2026-09-02T05:45:45.997Z",
-      "mutation_verified": "2026-09-02T06:19:14.948Z",
+      "mutation_verified": "2026-09-03T02:38:15.681Z",
       "status": "frozen",
       "vacuous": false,
       "regression": false,
       "created": "2026-09-01T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-t2-merge-env-redirect",
@@ -1050,12 +1050,12 @@
       "test_ref": "bash tests/fm-merge-t2-vectors.test.sh env-redirect",
       "baseline_ref": null,
       "first_observed_red": "2026-09-02T05:45:45.997Z",
-      "mutation_verified": "2026-09-02T06:19:17.444Z",
+      "mutation_verified": "2026-09-03T02:38:17.215Z",
       "status": "frozen",
       "vacuous": false,
       "regression": false,
       "created": "2026-09-01T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-t2-merge-origin-proof",
@@ -1067,12 +1067,12 @@
       "test_ref": "bash tests/fm-merge-t2-vectors.test.sh origin-proof",
       "baseline_ref": null,
       "first_observed_red": "2026-09-02T05:45:45.997Z",
-      "mutation_verified": "2026-09-02T06:19:20.725Z",
+      "mutation_verified": "2026-09-03T02:38:19.459Z",
       "status": "frozen",
       "vacuous": false,
       "regression": false,
       "created": "2026-09-01T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-t2-merge-argv-egress",
@@ -1084,12 +1084,12 @@
       "test_ref": "bash tests/fm-merge-t2-vectors.test.sh argv-egress",
       "baseline_ref": null,
       "first_observed_red": "2026-09-02T05:45:45.997Z",
-      "mutation_verified": "2026-09-02T06:19:25.306Z",
+      "mutation_verified": "2026-09-03T02:38:22.190Z",
       "status": "frozen",
       "vacuous": false,
       "regression": false,
       "created": "2026-09-01T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-t4-routed-brief-reports-to-destination",
@@ -1101,12 +1101,12 @@
       "test_ref": "bash tests/fm-handoff-t4-routed-brief.test.sh",
       "baseline_ref": null,
       "first_observed_red": "2026-09-02T05:06:33.909Z",
-      "mutation_verified": "2026-09-02T06:16:55.396Z",
+      "mutation_verified": "2026-09-03T02:38:23.149Z",
       "status": "frozen",
       "vacuous": false,
       "regression": false,
       "created": "2026-09-01T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-t4-handoff-safety-preserved",
@@ -1118,12 +1118,12 @@
       "test_ref": "bash tests/fm-handoff-t4-safety.test.sh",
       "baseline_ref": null,
       "first_observed_red": "2026-09-02T05:06:33.909Z",
-      "mutation_verified": "2026-09-02T06:17:05.173Z",
+      "mutation_verified": "2026-09-03T02:38:24.614Z",
       "status": "frozen",
       "vacuous": false,
       "regression": false,
       "created": "2026-09-01T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-h11-doctrine-renders-the-constants",
@@ -1135,12 +1135,12 @@
       "test_ref": "bash tests/fm-herdr-h11.test.sh",
       "baseline_ref": null,
       "first_observed_red": "2026-09-02T05:16:23.227Z",
-      "mutation_verified": "2026-09-02T07:06:53.099Z",
+      "mutation_verified": "2026-09-03T02:38:26.243Z",
       "status": "frozen",
       "vacuous": false,
       "regression": false,
       "created": "2026-09-01T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-h12-name-plans-then-applies-atomically",
@@ -1152,12 +1152,12 @@
       "test_ref": "bash tests/fm-herdr-h12.test.sh",
       "baseline_ref": null,
       "first_observed_red": "2026-09-02T05:16:23.227Z",
-      "mutation_verified": "2026-09-02T07:06:53.340Z",
+      "mutation_verified": "2026-09-03T02:38:26.549Z",
       "status": "frozen",
       "vacuous": false,
       "regression": false,
       "created": "2026-09-01T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-h13-workspace-lookup-fails-closed",
@@ -1169,12 +1169,12 @@
       "test_ref": "bash tests/fm-herdr-h13.test.sh",
       "baseline_ref": null,
       "first_observed_red": "2026-09-02T05:16:23.227Z",
-      "mutation_verified": "2026-09-02T07:06:54.976Z",
+      "mutation_verified": "2026-09-03T02:38:28.788Z",
       "status": "frozen",
       "vacuous": false,
       "regression": false,
       "created": "2026-09-01T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z"
+      "last_verified": "2026-09-03T02:27:29.977Z"
     },
     {
       "id": "gate-c1-helm-writer-only",
@@ -1190,7 +1190,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-09-01T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z",
+      "last_verified": "2026-09-03T02:27:29.977Z",
       "mutation_verified": null
     },
     {
@@ -1207,7 +1207,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-09-01T00:00:00Z",
-      "last_verified": "2026-09-02T10:02:50.475Z",
+      "last_verified": "2026-09-03T02:27:29.977Z",
       "mutation_verified": null
     },
     {
@@ -1224,7 +1224,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-09-02T00:00:00Z",
-      "last_verified": "2026-09-02T20:13:04.377Z",
+      "last_verified": "2026-09-03T02:27:29.977Z",
       "mutation_verified": null
     },
     {
@@ -1241,7 +1241,7 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-09-02T00:00:00Z",
-      "last_verified": "2026-09-02T20:13:04.377Z",
+      "last_verified": "2026-09-03T02:27:29.977Z",
       "mutation_verified": null
     },
     {
@@ -1258,8 +1258,8 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-09-02T00:00:00Z",
-      "last_verified": "2026-09-02T20:36:15.201Z",
-      "mutation_verified": "2026-09-02T20:41:54.286Z"
+      "last_verified": "2026-09-03T02:27:29.977Z",
+      "mutation_verified": "2026-09-03T02:38:30.134Z"
     },
     {
       "id": "gate-t4-lens-patch-file-boundary-split",
@@ -1275,8 +1275,8 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-09-02T00:00:00Z",
-      "last_verified": "2026-09-02T20:36:15.201Z",
-      "mutation_verified": "2026-09-02T20:41:57.055Z"
+      "last_verified": "2026-09-03T02:27:29.977Z",
+      "mutation_verified": "2026-09-03T02:38:33.280Z"
     },
     {
       "id": "gate-t4-lens-patch-refuses-corrupt",
@@ -1292,8 +1292,8 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-09-02T00:00:00Z",
-      "last_verified": "2026-09-02T20:36:15.201Z",
-      "mutation_verified": "2026-09-02T20:41:59.875Z"
+      "last_verified": "2026-09-03T02:27:29.977Z",
+      "mutation_verified": "2026-09-03T02:38:36.881Z"
     },
     {
       "id": "gate-t4-lens-patch-keeps-own-tests",
@@ -1309,8 +1309,25 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-09-02T00:00:00Z",
-      "last_verified": "2026-09-02T20:36:15.201Z",
-      "mutation_verified": "2026-09-02T20:42:01.367Z"
+      "last_verified": "2026-09-03T02:27:29.977Z",
+      "mutation_verified": "2026-09-03T02:38:38.996Z"
+    },
+    {
+      "id": "gate-t5-prcheck-ref-not-compiled",
+      "title": "A PR reference that does not parse is refused, never compiled into the watcher's poll script",
+      "observable": "fm-pr-check refuses `https://github.com/example/repo/pull/7\"; touch ./PWNED; :\"` with REFUSED[pr-ref/...], writing no state/<id>.check.sh and appending no pr= to the meta; a reference that parses but carries shell metacharacters in its query arms a poll whose generated script is byte-identical to the components-only rendering and creates no file when run; a valid url still arms a poll that prints 'merged' for a MERGED PR, nothing for an OPEN one, and pins --repo in the gh argv.",
+      "origin_mode": "build",
+      "spec_ref": "docs/specs/2026-09-02-prcheck-ref-injection.md",
+      "blocked_by": [],
+      "test_ref": "bash tests/fm-prcheck-url-injection.test.sh",
+      "baseline_ref": null,
+      "first_observed_red": "2026-09-03T02:20:17.960Z",
+      "status": "frozen",
+      "vacuous": false,
+      "regression": false,
+      "created": "2026-09-02T00:00:00Z",
+      "last_verified": "2026-09-03T02:27:29.977Z",
+      "mutation_verified": "2026-09-03T02:36:03.618Z"
     }
   ]
 }

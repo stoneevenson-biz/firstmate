@@ -84,3 +84,4 @@
 | gate-t4-lens-patch-file-boundary-split | frozen | A payload over its bound drops whole named files and is still a valid patch |
 | gate-t4-lens-patch-refuses-corrupt | frozen | A payload that is not a valid patch refuses the lens instead of being passed through |
 | gate-t4-lens-patch-keeps-own-tests | frozen | The branch's own tests survive a bound that forces omission |
+| gate-t5-prcheck-ref-not-compiled | frozen | A PR reference that does not parse is refused, never compiled into the watcher's poll script |
