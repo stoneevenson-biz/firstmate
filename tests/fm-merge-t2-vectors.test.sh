@@ -421,25 +421,31 @@ case_git_config_substitution() {
   # runs), so refusing on them would refuse ordinary merges. Nothing sets
   # GIT_CONFIG_COUNT by accident; its only purpose is to substitute
   # configuration, so its presence in a merge path IS the finding.
+  # How many GIT_CONFIG_KEY_<n> pairs the high-index payload spans. Not a magic
+  # number: it is "more than anyone would write out by hand", which is the
+  # only thing that distinguishes a prefix sweep from an enumeration.
+  local HIGH_N=64
   local -a INJECT=(
     GIT_CONFIG_COUNT=1
     "GIT_CONFIG_KEY_0=url.https://github.com/$EVIL_SLUG.git.insteadOf"
     "GIT_CONFIG_VALUE_0=git@github.com:$ORIGIN_SLUG.git"
   )
-  # The same payload at an index no list would have reached for. If this one
-  # behaves differently from index 0, the fix enumerated names instead of
-  # sweeping the family.
-  local -a INJECT_HIGH=(
-    GIT_CONFIG_COUNT=8
-    "GIT_CONFIG_KEY_0=user.name" "GIT_CONFIG_VALUE_0=x"
-    "GIT_CONFIG_KEY_1=user.name" "GIT_CONFIG_VALUE_1=x"
-    "GIT_CONFIG_KEY_2=user.name" "GIT_CONFIG_VALUE_2=x"
-    "GIT_CONFIG_KEY_3=user.name" "GIT_CONFIG_VALUE_3=x"
-    "GIT_CONFIG_KEY_4=user.name" "GIT_CONFIG_VALUE_4=x"
-    "GIT_CONFIG_KEY_5=user.name" "GIT_CONFIG_VALUE_5=x"
-    "GIT_CONFIG_KEY_6=user.name" "GIT_CONFIG_VALUE_6=x"
-    "GIT_CONFIG_KEY_7=url.https://github.com/$EVIL_SLUG.git.insteadOf"
-    "GIT_CONFIG_VALUE_7=git@github.com:$ORIGIN_SLUG.git"
+  # THE SAME PAYLOAD, PLACED WHERE AN ENUMERATION CANNOT FOLLOW. An earlier
+  # version of this case used index 7 with COUNT=8 and called it "an index no
+  # fixed list would have reached", which was simply untrue: an implementation
+  # hard-coding GIT_CONFIG_KEY_0..7 passes that unchanged, so the case did not
+  # test the property it named and the gate's non-vacuous claim was unsupported.
+  # git reads indices 0..COUNT-1 and errors on a gap, so the payload's index is
+  # bounded by how many pairs the test is willing to build - and the answer is
+  # "enough that a literal list is not a plausible implementation".
+  local -a INJECT_HIGH=( "GIT_CONFIG_COUNT=$HIGH_N" )
+  local i
+  for ((i = 0; i < HIGH_N - 1; i++)); do
+    INJECT_HIGH+=( "GIT_CONFIG_KEY_$i=user.name" "GIT_CONFIG_VALUE_$i=x" )
+  done
+  INJECT_HIGH+=(
+    "GIT_CONFIG_KEY_$((HIGH_N - 1))=url.https://github.com/$EVIL_SLUG.git.insteadOf"
+    "GIT_CONFIG_VALUE_$((HIGH_N - 1))=git@github.com:$ORIGIN_SLUG.git"
   )
   # The config FILES, chosen by an environment nothing can scrub: git needs a
   # HOME and every environment sets one, so an `insteadOf` in the global config
@@ -470,7 +476,7 @@ EOF
     assert_contains "$(env "${INJECT[@]}" git -C "$SOLO" ls-remote --get-url origin)" "$EVIL_SLUG" \
       "control: ls-remote --get-url is substituted identically"
     assert_contains "$(env "${INJECT_HIGH[@]}" git -C "$SOLO" remote get-url origin)" "$EVIL_SLUG" \
-      "control: the index is unbounded, so no fixed list of names can cover the family"
+      "control: the payload still lands at index $((HIGH_N - 1)) of $HIGH_N"
     assert_contains "$(env HOME="$FAKEHOME" git -C "$SOLO" remote get-url origin)" "$EVIL_SLUG" \
       "control: a global config chosen by HOME substitutes the URL the same way"
     assert_contains "$(env HOME=/nonexistent XDG_CONFIG_HOME="$FAKEHOME" git -C "$SOLO" remote get-url origin)" "$EVIL_SLUG" \
@@ -516,7 +522,7 @@ EOF
       "the scrubbed read answers with the repository's own URL, not the substituted one"
     assert_contains "$(env "${INJECT_HIGH[@]}" bash -c "$READ_URL" _ \
         "$ROOT/bin/fm-merge-target-lib.sh" "$SOLO")" "$ORIGIN_SLUG" \
-      "the sweep is by prefix, so a high GIT_CONFIG_KEY_<n> index is covered too"
+      "the sweep is by prefix, so index $((HIGH_N - 1)) is covered with no list to extend"
     assert_contains "$(env HOME="$FAKEHOME" bash -c "$READ_URL" _ \
         "$ROOT/bin/fm-merge-target-lib.sh" "$SOLO")" "$ORIGIN_SLUG" \
       "the global config file is pinned away, so HOME cannot substitute the URL either"
@@ -536,6 +542,37 @@ EOF
     assert_not_contains "$(env HOME="$FAKEHOME" bash -c '. "$1"; fm_merge_target_git "$2" config --show-origin --get-all url.https://github.com/'"$EVIL_SLUG"'.git.insteadOf' _ \
         "$ROOT/bin/fm-merge-target-lib.sh" "$INCLUDER" 2>/dev/null || true)" "$EVIL_SLUG" \
       "no substituted rewrite rule is visible to the scrubbed read at all"
+
+    # THE SWEEP, ASSERTED DIRECTLY RATHER THAN THROUGH ITS EFFECT. Everything
+    # above proves particular payloads do not land; this proves the PROPERTY, by
+    # reading the environment `fm_merge_target_git` actually hands to git. The
+    # names used here are ones no enumeration would contain at any length - an
+    # absurd index, and a member of the family that is not an index at all - so
+    # a list-based implementation cannot pass this by being longer.
+    local ENVBIN="$TMP/envbin"
+    mkdir -p "$ENVBIN"
+    # Prints ONLY the variables this assertion is about. `env` alone would put the
+    # whole environment into a failure message, and this suite must never be the
+    # thing that prints a credential.
+    {
+      printf '#!/usr/bin/env bash\n'
+      printf 'env | grep -E "^(GIT_|HOME=|XDG_CONFIG_HOME=)" || true\n'
+    } > "$ENVBIN/git"
+    chmod +x "$ENVBIN/git"
+    local handed
+    handed=$(PATH="$ENVBIN:$PATH" \
+      env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_4919=x GIT_CONFIG_VALUE_4919=y \
+          GIT_CONFIG_NONSENSE=z GIT_CONFIG=/dev/null GIT_CONFIG_PARAMETERS="'a.b=c'" \
+          GIT_DIR=/elsewhere/.git \
+      bash -c '. "$1"; fm_merge_target_git "$2" whatever' _ \
+        "$ROOT/bin/fm-merge-target-lib.sh" "$SOLO")
+    for leaked in GIT_CONFIG_KEY_4919 GIT_CONFIG_VALUE_4919 GIT_CONFIG_NONSENSE \
+                  GIT_CONFIG_PARAMETERS GIT_DIR; do
+      assert_not_contains "$handed" "$leaked=" \
+        "$leaked must not reach git: the sweep is by prefix, not by list"
+    done
+    assert_contains "$handed" "GIT_CONFIG_GLOBAL=" "the read pins the global config file"
+    assert_contains "$handed" "HOME=/dev/null/" "the read pins HOME at a path that cannot hold anything"
 
     # 2. THE RESOLUTION IS UNCHANGED. The library neutralises rather than
     #    refuses, so a caller may still ask what a merge WOULD target in a
@@ -574,6 +611,11 @@ EOF
     expect_code 1 "$code" "${one%%=*} in the environment must refuse: $out"
     assert_contains "$out" "REFUSED[env/git-config-injected]" \
       "${one%%=*} must refuse on the git-config rail: $out"
+    # The refusal promises to NAME what it found, so that the caller can clean
+    # the environment. A generic refusal satisfies the rail and not the promise,
+    # so each variable is asserted by name rather than only the combined payload.
+    assert_contains "$out" "${one%%=*}" \
+      "the refusal must name ${one%%=*} itself, not merely refuse: $out"
     assert_no_merge "${one%%=*}"
   done
 
