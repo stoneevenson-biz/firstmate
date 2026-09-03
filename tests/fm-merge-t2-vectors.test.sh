@@ -93,6 +93,16 @@ SOLO="$TMP/solo"
 fm_git_init_commit "$SOLO"
 git -C "$SOLO" remote add origin "git@github.com:$ORIGIN_SLUG.git"
 
+# INCLUDER: SOLO's shape, plus the one thing that reopened the whole vector after
+# the config-file pins went in - a repository whose OWN config carries
+# `include.path = ~/.gitconfig`. Repo config is trusted on this path; HOME is
+# not; `~` is where the two meet, and disabling git's automatic global lookup
+# does nothing about it.
+INCLUDER="$TMP/includer"
+fm_git_init_commit "$INCLUDER"
+git -C "$INCLUDER" remote add origin "git@github.com:$ORIGIN_SLUG.git"
+printf '[include]\n\tpath = ~/.gitconfig\n' >> "$INCLUDER/.git/config"
+
 # NOORIGIN: one remote, NOT named origin. Resolvable, but unprovable.
 NOORIGIN="$TMP/noorigin"
 fm_git_init_commit "$NOORIGIN"
@@ -465,6 +475,18 @@ EOF
       "control: a global config chosen by HOME substitutes the URL the same way"
     assert_contains "$(env HOME=/nonexistent XDG_CONFIG_HOME="$FAKEHOME" git -C "$SOLO" remote get-url origin)" "$EVIL_SLUG" \
       "control: XDG_CONFIG_HOME chooses that same file"
+
+    # THE ESCAPE THE FIRST FIX DID NOT CLOSE, and the reason HOME cannot be dealt
+    # with by disabling the global lookup. Pinning GIT_CONFIG_GLOBAL turns off
+    # git's AUTOMATIC search for a global config; it does nothing about a `~`
+    # inside a path the REPOSITORY's own config names. A clone carrying
+    # `include.path = ~/.gitconfig` - an ordinary, widespread thing for a repo to
+    # carry - expands that `~` through HOME, so an attacker who controls only the
+    # environment gets the same insteadOf back through a config file this path
+    # deliberately still trusts. Verified: it walked straight through the first
+    # version of this fix.
+    assert_contains "$(env HOME="$FAKEHOME" git -C "$INCLUDER" remote get-url origin)" "$EVIL_SLUG" \
+      "control: a repo-local include.path of ~/.gitconfig expands through HOME - this is the red"
     # The trap, asserted so a later reader cannot re-derive the wrong lesson: the
     # OBVIOUS payload is the one that does not work.
     assert_not_contains "$(env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.url \
@@ -501,6 +523,18 @@ EOF
     assert_contains "$(env HOME=/nonexistent XDG_CONFIG_HOME="$FAKEHOME" bash -c "$READ_URL" _ \
         "$ROOT/bin/fm-merge-target-lib.sh" "$SOLO")" "$ORIGIN_SLUG" \
       "nor can XDG_CONFIG_HOME"
+    assert_contains "$(env HOME="$FAKEHOME" bash -c "$READ_URL" _ \
+        "$ROOT/bin/fm-merge-target-lib.sh" "$INCLUDER")" "$ORIGIN_SLUG" \
+      "nor a repo-local include.path whose ~ expands through a hostile HOME"
+
+    # HOME IS PINNED, NOT MERELY WORKED AROUND - and this asserts the mechanism
+    # rather than the symptom. Disabling the automatic global lookup is a
+    # git-2.32-and-later feature; pinning HOME is not, so this is also what makes
+    # the fix hold on a git too old for GIT_CONFIG_GLOBAL. A `~` that still
+    # resolved into a real home would prove the wrong thing was doing the work.
+    assert_not_contains "$(env HOME="$FAKEHOME" bash -c '. "$1"; fm_merge_target_git "$2" config --show-origin --get-all url.https://github.com/'"$EVIL_SLUG"'.git.insteadOf' _ \
+        "$ROOT/bin/fm-merge-target-lib.sh" "$INCLUDER" 2>/dev/null || true)" "$EVIL_SLUG" \
+      "no substituted rewrite rule is visible to the scrubbed read at all"
 
     # 2. THE RESOLUTION IS UNCHANGED. The library neutralises rather than
     #    refuses, so a caller may still ask what a merge WOULD target in a
