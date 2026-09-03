@@ -89,14 +89,135 @@ LC_ALL=C
 # read the attacker's clone, agree with each other perfectly, and pin a merge to
 # a repository the caller never saw.
 #
-# So every git read in this file goes through here, with the git environment
-# scrubbed. The directory argument is the only thing that decides which
-# repository is read.
+# THAT SCRUB ANSWERED THE WRONG HALF OF THE QUESTION, and shipped that way. It
+# says which repository git OPENS. It does not say which configuration git
+# BELIEVES about it - and a remote URL is configuration. `url.<other>.insteadOf`
+# rewrites a URL as git hands it back, so
+#
+#   GIT_CONFIG_COUNT=1 \
+#   GIT_CONFIG_KEY_0='url.https://github.com/attacker/evil.git.insteadOf' \
+#   GIT_CONFIG_VALUE_0='https://github.com/the/honest-one.git' \
+#   git remote get-url origin
+#
+# answers with the ATTACKER's URL, and did so straight through the `env -u` list
+# below, because none of those names is in it. `git ls-remote --get-url` is
+# rewritten identically. Same redirect, same two checks agreeing with each other
+# perfectly, different door.
+#
+# TWO TRAPS, AND THE SHAPE OF THIS FUNCTION IS BOTH OF THEM.
+#
+#   1. A direct `remote.origin.url` override through the same mechanism does NOT
+#      take effect - repository config wins. So a fix built by guessing which
+#      keys are dangerous tests the vector that cannot work, watches it fail,
+#      and ships with `insteadOf` and `pushInsteadOf` still open. No key is
+#      judged here. The whole family goes.
+#   2. `GIT_CONFIG_KEY_<n>` and `GIT_CONFIG_VALUE_<n>` are UNBOUNDED in <n>, and
+#      `env -u` takes no globs. A fixed list of names cannot cover the family by
+#      construction, however carefully it is written - an enumeration is a
+#      promise to have imagined every index, and there is no last index. So the
+#      REAL environment is swept by prefix instead.
+#
+# AND THE CONFIG FILES, NOT ONLY THE CONFIG VARIABLES. `HOME` and
+# `XDG_CONFIG_HOME` choose which file the global config is read from, and an
+# `insteadOf` in that file substitutes the URL exactly as the variables do -
+# verified the same way, a bypass of equal power.
+#
+# THE FILES ARE CLOSED AT THE ENVIRONMENT, NOT AT THE LOOKUP, and the difference
+# is the whole of this paragraph. Disabling git's automatic global lookup with
+# GIT_CONFIG_GLOBAL was tried first and is NOT sufficient: it stops git going
+# looking for a global config, and does nothing about a `~` inside a path the
+# REPOSITORY's own config names. `include.path = ~/.gitconfig` is an ordinary
+# thing for a clone to carry, repository config is trusted here by design, and
+# that `~` expands through HOME - so an attacker holding only the environment got
+# the same insteadOf back through a file this path still trusts, and the
+# resolution and the origin proof agreed on it exactly as before. Verified, after
+# it walked through the first version of this fix.
+#
+# So HOME and XDG_CONFIG_HOME are PINNED at a path that cannot hold anything:
+# `/dev/null` is a character device, so nothing can ever exist beneath it, and
+# `~` resolves to a file git silently skips. That is a stronger promise than any
+# directory we could create and hope stayed empty, and it needs no scratch state,
+# which is what keeps the "pure and side-effect free" claim above true.
+#
+# It also settles the version question rather than documenting a hole in it.
+# GIT_CONFIG_NOSYSTEM is ancient; GIT_CONFIG_SYSTEM and GIT_CONFIG_GLOBAL arrived
+# in git 2.32, and an earlier version of this comment called the three
+# "redundant across versions" while the global file stayed live below 2.32 - a
+# known bypass described as belt and braces. It is not redundancy that closes
+# that gap, it is the HOME pin, which no git version has ever ignored. The
+# GIT_CONFIG_* pins stay because they are free and they say the intent locally,
+# but nothing rests on them.
+#
+# Nothing this path reads - rev-parse, remote, remote get-url - wants global
+# config; a global `insteadOf` a human relies on is deliberately not applied,
+# because the merge target must be the URL the repository RECORDS rather than a
+# rewrite of it. What goes with it is `safe.directory`, which git accepts only
+# from global and system config: a repository that needed it now fails the read,
+# surfacing as NOTAGIT and refusing - a failure, never a wrong merge.
+#
+# HOME is still NEUTRALISED rather than refused on, unlike the GIT_CONFIG family.
+# Every environment has a HOME; refusing on one would refuse every merge.
+#
+# WHAT THIS DOES NOT DEFEND, AND WHY THE LINE IS HERE. Everything above is about
+# environment that changes git's INTERPRETATION of a repository - which one it
+# opens, which configuration it applies. It is not about environment that
+# replaces the BINARY. `git` below is resolved through the inherited PATH, so a
+# fake `git` first on PATH answers every question this path asks and makes the
+# resolution and the origin proof agree on the attacker's repository, exactly as
+# an insteadOf would have. That is real and it is gated as a boundary rather than
+# described.
+#
+# It is not closed because it cannot be, from in here: substituting the
+# executable is arbitrary code execution, and the same environment could replace
+# bash or bin/fm-merge-pr.sh itself. Pinning git to a fixed absolute path either
+# refuses on machines whose git lives in /opt/homebrew, ~/.nix-profile or a
+# version manager, or falls back to PATH and closes nothing - raising the
+# apparent strength of the claim without changing what it rests on. The threat
+# model is written down instead:
+# docs/specs/2026-09-02-merge-target-git-config.md.
+#
+# NEUTRALISE HERE, REFUSE AT THE VERB. This file stays pure and side-effect free,
+# so a caller may ask what a merge WOULD target in a hostile environment and get
+# the honest answer. bin/fm-merge-pr.sh reads fm_merge_target_git_config_env
+# itself and refuses, because reading the right value anyway is not a reason to
+# run a merge in an environment that is substituting git configuration.
+#
+# Spec: docs/specs/2026-09-02-merge-target-git-config.md
+
+# A home directory that cannot exist. `/dev/null` is a character device, so no
+# path beneath it can ever be created - which makes this a stronger guarantee
+# than an empty directory, and one that needs no scratch state to maintain.
+FM_MERGE_TARGET_NO_HOME=/dev/null/fm-merge-target-has-no-home
+
+# fm_merge_target_git_config_env: echo, one per line, the name of every
+# GIT_CONFIG* variable this shell can see - swept BY PREFIX over the real
+# environment, never matched against a list, for trap 2 above. Empty output
+# means nothing is substituting git configuration.
+#
+# Pure: it reads names and prints them. What to DO about them is the caller's,
+# which is what lets the library neutralise while the merge verb refuses.
+fm_merge_target_git_config_env() {
+  local name
+  for name in "${!GIT_CONFIG@}"; do
+    [ -n "$name" ] || continue
+    printf '%s\n' "$name"
+  done
+}
+
 fm_merge_target_git() {
   local dir=${1:-}; shift
-  env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR -u GIT_INDEX_FILE \
-      -u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES \
-      -u GIT_NAMESPACE -u GIT_CEILING_DIRECTORIES -u GIT_DISCOVERY_ACROSS_FILESYSTEM \
+  local name
+  local -a scrub=()
+  for name in GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE \
+              GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES \
+              GIT_NAMESPACE GIT_CEILING_DIRECTORIES GIT_DISCOVERY_ACROSS_FILESYSTEM \
+              "${!GIT_CONFIG@}"; do
+    [ -n "$name" ] || continue
+    scrub+=(-u "$name")
+  done
+  env "${scrub[@]}" \
+      HOME="$FM_MERGE_TARGET_NO_HOME" XDG_CONFIG_HOME="$FM_MERGE_TARGET_NO_HOME" \
+      GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_SYSTEM=/dev/null GIT_CONFIG_GLOBAL=/dev/null \
       git -C "$dir" "$@"
 }
 

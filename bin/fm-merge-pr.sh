@@ -55,6 +55,17 @@
 #                      redirect the resolution AND the origin proof that checks
 #                      it, to the same wrong clone. The exec PINS the first two;
 #                      fm_merge_target_git scrubs the third on every remote read.
+#   the git config     the GIT_CONFIG family substitutes git's CONFIGURATION
+#                      rather than its repository, and a remote URL is
+#                      configuration: `url.<attacker>.insteadOf` rewrites what
+#                      `remote get-url` answers, so both the resolution and the
+#                      origin proof read the substituted value and agree. The
+#                      whole family is swept by PREFIX (its indices are
+#                      unbounded, so no list can cover it) and the global and
+#                      system config files - which HOME and XDG_CONFIG_HOME
+#                      choose - are pinned away with it. Unlike the row above,
+#                      this one also REFUSES: nothing sets GIT_CONFIG_COUNT by
+#                      accident.
 #   the origin proof   the resolved owner/name must equal this clone's `origin`.
 #                      A target that cannot be proven equal to origin REFUSES;
 #                      leaving origin needs a second, explicit `--allow-non-origin`
@@ -72,7 +83,8 @@
 # an authorized `yolo` posture). This script decides WHERE a merge lands, never
 # WHETHER it may happen.
 #
-# Spec: docs/specs/2026-08-31-merge-target-pin.md
+# Spec: docs/specs/2026-08-31-merge-target-pin.md,
+#       docs/specs/2026-09-02-merge-target-git-config.md
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -113,6 +125,55 @@ refuse() {
   for line in "$@"; do printf '         %s\n' "$line" >&2; done
   exit 1
 }
+
+# --- the environment, before anything else ----------------------------------
+#
+# `git remote get-url origin` is not a fact about a clone. It is a fact about a
+# clone READ THROUGH a configuration, and the GIT_CONFIG family substitutes that
+# configuration straight from the environment: `url.<attacker>.insteadOf`
+# rewrites the URL as git hands it back, so the resolution below AND the origin
+# proof that checks it would read the same substituted value and agree with each
+# other perfectly. bin/fm-merge-target-lib.sh now neutralises that on every read,
+# so the target resolved below is the honest one either way.
+#
+# This is the second half, and the fleet needs both. Something injecting git
+# configuration into a merge path is hostile or badly broken, and "we read the
+# right answer anyway" is not a reason to continue - it is a reason to stop and
+# say what was found. So the check runs FIRST, ahead of argument parsing and
+# ahead of the passthrough allowlist: nothing at all should run in an
+# environment that is substituting git's view of this repository.
+#
+# DELIBERATELY NOT THE TREATMENT GH_REPO AND GIT_DIR GET, which are pinned and
+# scrubbed but never refused on. Those are set by ordinary tooling for ordinary
+# reasons - a git hook exports GIT_DIR to every command it runs - so refusing on
+# them would refuse ordinary merges. `HOME` is on that same side of the line and
+# is neutralised rather than refused, because every environment has one. Nothing
+# sets GIT_CONFIG_COUNT by accident: its only purpose is to substitute
+# configuration, so its presence here IS the finding.
+#
+# Spec: docs/specs/2026-09-02-merge-target-git-config.md
+GIT_CONFIG_ENV=$(fm_merge_target_git_config_env)
+if [ -n "$GIT_CONFIG_ENV" ]; then
+  {
+    printf '\u25cf%s\n' "$RULE"
+    printf '\u25cf  GIT CONFIGURATION IS BEING SUBSTITUTED FROM THE ENVIRONMENT - REFUSING\n'
+    printf '\u25cf  REFUSED[env/git-config-injected]\n'
+    printf '\u25cf  These variables are set, and they replace what git believes about\n'
+    printf '\u25cf  this repository - including what "remote get-url" answers:\n'
+    printf '%s\n' "$GIT_CONFIG_ENV" | while IFS= read -r v; do
+      [ -n "$v" ] && printf '\u25cf      %s\n' "$v"
+    done
+    printf '\u25cf  A url.<other>.insteadOf here rewrites the remote URL as git hands it\n'
+    printf '\u25cf  back, so the resolved target AND the origin proof that checks it read\n'
+    printf '\u25cf  the same substituted value and agree. Every read on this path ignores\n'
+    printf '\u25cf  them, so nothing was merged anywhere - but an environment that does\n'
+    printf '\u25cf  this to a merge is hostile or broken, and passing quietly is not the\n'
+    printf '\u25cf  same as handling it.\n'
+    printf '\u25cf  Unset them and run the merge again.\n'
+    printf '\u25cf%s\n' "$RULE"
+  } >&2
+  exit 1
+fi
 
 while [ $# -gt 0 ]; do
   case "$1" in

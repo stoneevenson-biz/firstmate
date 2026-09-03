@@ -69,6 +69,7 @@
 | gate-t2-merge-duplicate-repo-flag | frozen | A merge target is named once: a repeated target flag, or a --repo and --remote that disagree, refuses instead of letting the last one win |
 | gate-t2-merge-ambiguous-remotes | frozen | A bare pull-request number in a clone with more than one remote refuses, naming every candidate, and announces no target |
 | gate-t2-merge-env-redirect | frozen | GH_REPO and GH_HOST are pinned at the exec, so an environment variable cannot redirect a merge without appearing in the argv |
+| gate-t2-merge-git-config-substitution | frozen | An injected git configuration cannot substitute the remote URL a merge target is resolved from, and does not pass quietly |
 | gate-t2-merge-origin-proof | frozen | The resolved target must be proved equal to this clone's origin, or affirmed by a flag that names no repository |
 | gate-t2-merge-argv-egress | frozen | The finished merge argv is re-read before exec and must pin the resolved target exactly once |
 | gate-t4-routed-brief-reports-to-destination | frozen | A routed item's brief reports into the destination home, not the origin |

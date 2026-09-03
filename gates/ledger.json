@@ -1058,6 +1058,23 @@
       "last_verified": "2026-09-02T10:02:50.475Z"
     },
     {
+      "id": "gate-t2-merge-git-config-substitution",
+      "title": "An injected git configuration cannot substitute the remote URL a merge target is resolved from, and does not pass quietly",
+      "observable": "against controls proving that GIT_CONFIG_COUNT/GIT_CONFIG_KEY_<n>/GIT_CONFIG_VALUE_<n> carrying url.<attacker>.insteadOf really does substitute what `git remote get-url origin` and `git ls-remote --get-url origin` answer - at index 0 and at index 63 of a 64-pair payload - that a global config chosen by HOME or XDG_CONFIG_HOME substitutes it identically, and that a repository's own `include.path = ~/.gitconfig` expands that ~ through a hostile HOME even when git's automatic global lookup is disabled, while a direct remote.origin.url override through the same mechanism does NOT and an injected remote.<name>.url the repository never defines DOES appear in `git remote`: fm_merge_target_git answers with the repository's own URL under every one of those, no injected phantom remote reaches the set the target is resolved from, fm_merge_target resolves the unchanged origin target with the substituted repository appearing nowhere, and fm-merge-pr.sh REFUSES with REFUSED[env/git-config-injected] naming the offending variables and invoking no merge tool at all - for each member of the family individually, GIT_CONFIG, GIT_CONFIG_COUNT, GIT_CONFIG_GLOBAL, GIT_CONFIG_SYSTEM, GIT_CONFIG_NOSYSTEM and GIT_CONFIG_PARAMETERS included - while the honest environment still merges into origin and a substituting HOME is neutralised rather than refused, because every environment has one; and the HOME pin is proved load-bearing rather than incidental - removing it reddens the case while removing the git-2.32-only GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM pins leaves it green, which is the same statement as the fix holding on a git older than 2.32; the prefix sweep is proved DIRECTLY by reading the environment fm_merge_target_git hands to git - GIT_CONFIG_KEY_4919, GIT_CONFIG_NONSENSE, GIT_CONFIG_PARAMETERS and GIT_DIR are all absent while GIT_CONFIG_GLOBAL and a HOME under /dev/null are present - so an implementation enumerating names cannot pass by being longer, and replacing the sweep with a hard-coded GIT_CONFIG_KEY_0..7 list reddens the case on GIT_CONFIG_KEY_4919; every member of the family is asserted to be NAMED in its own refusal rather than merely refused; and the claim's BOUNDARY is asserted rather than described - a fake git first on PATH still redirects the resolved target, because substituting the executable is code execution that no in-process check can bound, so that assertion fails deliberately if the executable is ever pinned and the threat model has to be re-read",
+      "origin_mode": "build",
+      "spec_ref": "docs/specs/2026-09-02-merge-target-git-config.md",
+      "blocked_by": [],
+      "test_ref": "bash tests/fm-merge-t2-vectors.test.sh git-config-substitution",
+      "baseline_ref": null,
+      "first_observed_red": "2026-09-03T02:21:18.240Z",
+      "mutation_verified": "2026-09-03T19:09:28.480Z",
+      "status": "frozen",
+      "vacuous": false,
+      "regression": false,
+      "created": "2026-09-02T00:00:00Z",
+      "last_verified": "2026-09-03T19:09:25.949Z"
+    },
+    {
       "id": "gate-t2-merge-origin-proof",
       "title": "The resolved target must be proved equal to this clone's origin, or affirmed by a flag that names no repository",
       "observable": "fm-merge-pr.sh refuses with REFUSED[target/not-origin] and no invocation for a named non-origin --repo, for an upstream pull-request url, and for --remote upstream; refuses a clone whose sole remote is not origin with REFUSED[target/origin-unprovable], because a proof that did not run is not a proof that passed; merges an upstream contribution once --allow-non-origin affirms it, still announcing that the target is not this clone's origin; and --allow-non-origin alone does not choose a target, so an ambiguous clone given only that flag still refuses with REFUSED[target/ambiguous-remotes]",
