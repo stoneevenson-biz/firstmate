@@ -464,6 +464,21 @@ EOF
         "GIT_CONFIG_VALUE_0=https://github.com/$EVIL_SLUG.git" git -C "$SOLO" remote get-url origin)" \
       "$EVIL_SLUG" "trap: a direct remote.origin.url override does NOT take effect - only insteadOf does"
 
+    # And the exact BOUNDARY of that trap, which is what makes it a trap rather
+    # than a curiosity: repository config wins only over a key the repository
+    # DEFINES. A remote the repository has never heard of is defined purely by
+    # the injection, so it appears - and one phantom remote turns a sole-remote
+    # clone into an ambiguous one, or supplies the only remote a clone with none
+    # would otherwise have. Same family, same door, no insteadOf involved.
+    assert_contains "$(env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.phantom.url \
+        "GIT_CONFIG_VALUE_0=https://github.com/$EVIL_SLUG.git" git -C "$SOLO" remote)" \
+      "phantom" "control: an injected remote the repository does not define really does appear"
+    assert_not_contains "$(env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.phantom.url \
+        "GIT_CONFIG_VALUE_0=https://github.com/$EVIL_SLUG.git" \
+        bash -c '. "$1"; fm_merge_target_git "$2" remote' _ \
+        "$ROOT/bin/fm-merge-target-lib.sh" "$SOLO")" \
+      "phantom" "a phantom remote cannot be injected into the set the target is resolved from"
+
     # 1. NEUTRALISED. Every git read in the merge-target path goes through
     #    fm_merge_target_git, and the directory argument is the only thing that
     #    may decide what it answers.
