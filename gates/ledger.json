@@ -1058,6 +1058,23 @@
       "last_verified": "2026-09-02T10:02:50.475Z"
     },
     {
+      "id": "gate-t2-merge-git-config-substitution",
+      "title": "An injected git configuration cannot substitute the remote URL a merge target is resolved from, and does not pass quietly",
+      "observable": "against controls proving that GIT_CONFIG_COUNT/GIT_CONFIG_KEY_<n>/GIT_CONFIG_VALUE_<n> carrying url.<attacker>.insteadOf really does substitute what `git remote get-url origin` and `git ls-remote --get-url origin` answer - at index 0 and at an index no fixed list would reach - and that a global config chosen by HOME or XDG_CONFIG_HOME substitutes it identically, while a direct remote.origin.url override through the same mechanism does NOT: fm_merge_target_git answers with the repository's own URL under every one of those, fm_merge_target resolves the unchanged origin target with the substituted repository appearing nowhere, and fm-merge-pr.sh REFUSES with REFUSED[env/git-config-injected] naming the offending variables and invoking no merge tool at all - for each member of the family individually, GIT_CONFIG, GIT_CONFIG_COUNT, GIT_CONFIG_GLOBAL, GIT_CONFIG_SYSTEM, GIT_CONFIG_NOSYSTEM and GIT_CONFIG_PARAMETERS included - while the honest environment still merges into origin and a substituting HOME is neutralised rather than refused, because every environment has one",
+      "origin_mode": "build",
+      "spec_ref": "docs/specs/2026-09-02-merge-target-git-config.md",
+      "blocked_by": [],
+      "test_ref": "bash tests/fm-merge-t2-vectors.test.sh git-config-substitution",
+      "baseline_ref": null,
+      "first_observed_red": null,
+      "mutation_verified": null,
+      "status": "unproven",
+      "vacuous": false,
+      "regression": false,
+      "created": "2026-09-02T00:00:00Z",
+      "last_verified": null
+    },
+    {
       "id": "gate-t2-merge-origin-proof",
       "title": "The resolved target must be proved equal to this clone's origin, or affirmed by a flag that names no repository",
       "observable": "fm-merge-pr.sh refuses with REFUSED[target/not-origin] and no invocation for a named non-origin --repo, for an upstream pull-request url, and for --remote upstream; refuses a clone whose sole remote is not origin with REFUSED[target/origin-unprovable], because a proof that did not run is not a proof that passed; merges an upstream contribution once --allow-non-origin affirms it, still announcing that the target is not this clone's origin; and --allow-non-origin alone does not choose a target, so an ambiguous clone given only that flag still refuses with REFUSED[target/ambiguous-remotes]",

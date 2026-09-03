@@ -40,6 +40,11 @@
 #   env-redirect            GH_REPO / GH_HOST redirecting a gh-shaped tool, and
 #                           GIT_DIR redirecting `git -C` itself, without ever
 #                           appearing in an argument
+#   git-config-substitution the GIT_CONFIG family (and the global config files
+#                           HOME/XDG_CONFIG_HOME choose) substituting the remote
+#                           URL itself via url.<other>.insteadOf, so the
+#                           resolution and the origin proof read the same
+#                           substituted value and agree
 #   origin-proof            a target that is not this clone's origin, or an
 #                           origin that cannot be read at all
 #   argv-egress             the finished argv, re-read, must pin the target once
@@ -146,7 +151,7 @@ MERGE="$ROOT/bin/fm-merge-pr.sh"
 # own rail, and reaches no merge tool. Under LEDGER_MUTATE it asserts the reverse.
 refuses_with() {
   local rail=$1 label=$2; shift 3
-  local out code
+  local out code one
   reset_record
   out=$("$MERGE" "$@" 2>&1); code=$?
   if [ "$MUTATE" = 1 ]; then
@@ -373,6 +378,165 @@ case_env_redirect() {
 }
 
 # ============================================================================
+case_git_config_substitution() {
+  # THE SECOND ENVIRONMENT SUBSTITUTION, and the one the first scrub did not
+  # cover. `env -u GIT_DIR ...` answers "which repository does git open?". It
+  # does not answer "which configuration does git believe about it" - and a
+  # remote URL is configuration. `url.<other>.insteadOf` rewrites a URL as git
+  # hands it back, so a merge path that reads `remote get-url origin` reads the
+  # substituted value, in BOTH the resolution and the origin proof that checks
+  # it. They agree with each other perfectly, which is the exact failure the
+  # scrub exists to defeat. This shipped on origin/main.
+  #
+  # TWO TRAPS LIVE IN THIS CASE, and both are asserted rather than described.
+  #
+  #   1. The payload is `insteadOf`, NOT a direct `remote.origin.url` override.
+  #      The direct override through the same mechanism does not take effect, so
+  #      a fix built by guessing which keys are dangerous tests the vector that
+  #      cannot work, watches it fail, and ships with insteadOf still open. The
+  #      control below proves this vector really does substitute the URL.
+  #   2. `GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` are unbounded in <n> and
+  #      `env -u` takes no globs, so no fixed list of names can cover the family
+  #      by construction. The high-index payload asserts the sweep is by PREFIX
+  #      over the real environment, not by enumeration.
+  #
+  # AND THE GATE IS TWO-SIDED. Neutralising is not enough: something injecting
+  # git configuration into a merge path is hostile or badly broken, and reading
+  # the honest answer anyway is not a reason to continue. The resolution must be
+  # UNCHANGED, and the merge command must REFUSE on its own named rail.
+  #
+  # Deliberately not the treatment env-redirect gives GH_REPO and GIT_DIR, which
+  # are pinned and scrubbed but never refused on: those are set by ordinary
+  # tooling for ordinary reasons (a git hook exports GIT_DIR to everything it
+  # runs), so refusing on them would refuse ordinary merges. Nothing sets
+  # GIT_CONFIG_COUNT by accident; its only purpose is to substitute
+  # configuration, so its presence in a merge path IS the finding.
+  local -a INJECT=(
+    GIT_CONFIG_COUNT=1
+    "GIT_CONFIG_KEY_0=url.https://github.com/$EVIL_SLUG.git.insteadOf"
+    "GIT_CONFIG_VALUE_0=git@github.com:$ORIGIN_SLUG.git"
+  )
+  # The same payload at an index no list would have reached for. If this one
+  # behaves differently from index 0, the fix enumerated names instead of
+  # sweeping the family.
+  local -a INJECT_HIGH=(
+    GIT_CONFIG_COUNT=8
+    "GIT_CONFIG_KEY_0=user.name" "GIT_CONFIG_VALUE_0=x"
+    "GIT_CONFIG_KEY_1=user.name" "GIT_CONFIG_VALUE_1=x"
+    "GIT_CONFIG_KEY_2=user.name" "GIT_CONFIG_VALUE_2=x"
+    "GIT_CONFIG_KEY_3=user.name" "GIT_CONFIG_VALUE_3=x"
+    "GIT_CONFIG_KEY_4=user.name" "GIT_CONFIG_VALUE_4=x"
+    "GIT_CONFIG_KEY_5=user.name" "GIT_CONFIG_VALUE_5=x"
+    "GIT_CONFIG_KEY_6=user.name" "GIT_CONFIG_VALUE_6=x"
+    "GIT_CONFIG_KEY_7=url.https://github.com/$EVIL_SLUG.git.insteadOf"
+    "GIT_CONFIG_VALUE_7=git@github.com:$ORIGIN_SLUG.git"
+  )
+  # The config FILES, chosen by an environment nothing can scrub: git needs a
+  # HOME and every environment sets one, so an `insteadOf` in the global config
+  # substitutes the URL exactly as the variables do. Closing the variables and
+  # leaving this open would be a partial fix that reads as complete.
+  local FAKEHOME="$TMP/gitconfig-home"
+  mkdir -p "$FAKEHOME/git"
+  cat > "$FAKEHOME/.gitconfig" <<EOF
+[url "https://github.com/$EVIL_SLUG.git"]
+	insteadOf = git@github.com:$ORIGIN_SLUG.git
+EOF
+  cp "$FAKEHOME/.gitconfig" "$FAKEHOME/git/config"
+
+  local out code one
+
+  if [ "$MUTATE" != 1 ]; then
+    # CONTROLS FIRST. A guard against a substitution that does not happen proves
+    # nothing, and this whole defect shipped because the vector was never run.
+    assert_contains "$(env "${INJECT[@]}" git -C "$SOLO" remote get-url origin)" "$EVIL_SLUG" \
+      "control: an injected insteadOf really does substitute the remote URL - this is the red"
+    assert_contains "$(env "${INJECT[@]}" git -C "$SOLO" ls-remote --get-url origin)" "$EVIL_SLUG" \
+      "control: ls-remote --get-url is substituted identically"
+    assert_contains "$(env "${INJECT_HIGH[@]}" git -C "$SOLO" remote get-url origin)" "$EVIL_SLUG" \
+      "control: the index is unbounded, so no fixed list of names can cover the family"
+    assert_contains "$(env HOME="$FAKEHOME" git -C "$SOLO" remote get-url origin)" "$EVIL_SLUG" \
+      "control: a global config chosen by HOME substitutes the URL the same way"
+    assert_contains "$(env HOME=/nonexistent XDG_CONFIG_HOME="$FAKEHOME" git -C "$SOLO" remote get-url origin)" "$EVIL_SLUG" \
+      "control: XDG_CONFIG_HOME chooses that same file"
+    # The trap, asserted so a later reader cannot re-derive the wrong lesson: the
+    # OBVIOUS payload is the one that does not work.
+    assert_not_contains "$(env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.url \
+        "GIT_CONFIG_VALUE_0=https://github.com/$EVIL_SLUG.git" git -C "$SOLO" remote get-url origin)" \
+      "$EVIL_SLUG" "trap: a direct remote.origin.url override does NOT take effect - only insteadOf does"
+
+    # 1. NEUTRALISED. Every git read in the merge-target path goes through
+    #    fm_merge_target_git, and the directory argument is the only thing that
+    #    may decide what it answers.
+    assert_contains "$(env "${INJECT[@]}" bash -c '. "$1"; fm_merge_target_git "$2" remote get-url origin' _ \
+        "$ROOT/bin/fm-merge-target-lib.sh" "$SOLO")" "$ORIGIN_SLUG" \
+      "the scrubbed read answers with the repository's own URL, not the substituted one"
+    assert_contains "$(env "${INJECT_HIGH[@]}" bash -c '. "$1"; fm_merge_target_git "$2" remote get-url origin' _ \
+        "$ROOT/bin/fm-merge-target-lib.sh" "$SOLO")" "$ORIGIN_SLUG" \
+      "the sweep is by prefix, so a high GIT_CONFIG_KEY_<n> index is covered too"
+    assert_contains "$(env HOME="$FAKEHOME" bash -c '. "$1"; fm_merge_target_git "$2" remote get-url origin' _ \
+        "$ROOT/bin/fm-merge-target-lib.sh" "$SOLO")" "$ORIGIN_SLUG" \
+      "the global config file is pinned away, so HOME cannot substitute the URL either"
+    assert_contains "$(env HOME=/nonexistent XDG_CONFIG_HOME="$FAKEHOME" bash -c '. "$1"; fm_merge_target_git "$2" remote get-url origin' _ \
+        "$ROOT/bin/fm-merge-target-lib.sh" "$SOLO")" "$ORIGIN_SLUG" \
+      "nor can XDG_CONFIG_HOME"
+
+    # 2. THE RESOLUTION IS UNCHANGED. The library neutralises rather than
+    #    refuses, so a caller may still ask what a merge WOULD target in a
+    #    hostile environment and get the honest answer.
+    out=$(env "${INJECT[@]}" bash "$ROOT/bin/fm-merge-target-lib.sh" "$SOLO")
+    assert_contains "$out" "OK	$ORIGIN_SLUG	sole-remote:origin" \
+      "the resolved merge target is unchanged by the injection: $out"
+    assert_not_contains "$out" "$EVIL_SLUG" "no substituted repository may appear in a resolution"
+  fi
+
+  # 3. THE GUARD REFUSES. Silent neutralisation is not the finding being
+  #    handled; it is the finding being ignored.
+  reset_record
+  out=$(env "${INJECT[@]}" "$MERGE" t2gc 5 --project "$SOLO" 2>&1); code=$?
+  if [ "$MUTATE" = 1 ]; then
+    expect_code 0 "$code" "MUTATION: an injected git config expected to merge anyway"
+    assert_contains "$(record)" "merged-into=$EVIL_SLUG" \
+      "MUTATION: the substituted repository expected to reach the merge tool"
+    return 0
+  fi
+  expect_code 1 "$code" "an injected git config must refuse the merge: $out"
+  assert_contains "$out" "REFUSED[env/git-config-injected]" \
+    "the refusal must name its own rail, not refuse generically: $out"
+  assert_contains "$out" "GIT_CONFIG_KEY_0" \
+    "the refusal must NAME what it found, so the caller can clean the environment: $out"
+  assert_no_merge "an injected git config"
+
+  # Every member of the family, one at a time - the file-selecting ones too,
+  # which carry no key/value of their own and so would be invisible to a check
+  # that only counted GIT_CONFIG_COUNT.
+  for one in GIT_CONFIG_COUNT=0 GIT_CONFIG=/dev/null GIT_CONFIG_GLOBAL=/dev/null \
+             GIT_CONFIG_SYSTEM=/dev/null GIT_CONFIG_NOSYSTEM=1 \
+             GIT_CONFIG_PARAMETERS="'user.name=x'"; do
+    reset_record
+    out=$(env "$one" "$MERGE" t2gc1 5 --project "$SOLO" 2>&1); code=$?
+    expect_code 1 "$code" "${one%%=*} in the environment must refuse: $out"
+    assert_contains "$out" "REFUSED[env/git-config-injected]" \
+      "${one%%=*} must refuse on the git-config rail: $out"
+    assert_no_merge "${one%%=*}"
+  done
+
+  # 4. THE NEGATIVE CONTROL. A guard that refuses everything is not a guard.
+  #    The honest environment still resolves and still merges, and HOME - which
+  #    every environment sets and nothing can scrub - is never itself a refusal.
+  reset_record
+  out=$("$MERGE" t2gc2 5 --project "$SOLO" 2>&1); code=$?
+  expect_code 0 "$code" "the honest environment must still merge: $out"
+  assert_contains "$(record)" "merged-into=$ORIGIN_SLUG" "the honest merge lands in origin"
+  reset_record
+  out=$(env HOME="$FAKEHOME" "$MERGE" t2gc3 5 --project "$SOLO" 2>&1); code=$?
+  expect_code 0 "$code" "a substituting HOME is neutralised, not refused - every environment has a HOME: $out"
+  assert_contains "$(record)" "merged-into=$ORIGIN_SLUG" "and the merge still lands in origin"
+  assert_not_contains "$(record)" "$EVIL_SLUG" "nothing the environment substituted may reach the merge tool"
+
+  pass "git-config-substitution: an injected git configuration cannot redirect a merge, and does not pass quietly"
+}
+
+# ============================================================================
 case_origin_proof() {
   # Being NAMED proves nothing was inferred. It does not prove the name was
   # meant. A url, a remote name and a slug can all arrive from somewhere else -
@@ -457,7 +621,7 @@ case_argv_egress() {
 # ============================================================================
 ALL_CASES="foreign-host pull-in-query pull-in-fragment trailing-path
            passthrough-repo-flag duplicate-repo-flag ambiguous-remotes
-           env-redirect origin-proof argv-egress"
+           env-redirect git-config-substitution origin-proof argv-egress"
 
 run_case() {
   case "$1" in
@@ -469,6 +633,7 @@ run_case() {
     duplicate-repo-flag)   case_duplicate_repo_flag ;;
     ambiguous-remotes)     case_ambiguous_remotes ;;
     env-redirect)          case_env_redirect ;;
+    git-config-substitution) case_git_config_substitution ;;
     origin-proof)          case_origin_proof ;;
     argv-egress)           case_argv_egress ;;
     *) fail "unknown case '$1'; known: $ALL_CASES" ;;
