@@ -158,6 +158,24 @@ LC_ALL=C
 # HOME is still NEUTRALISED rather than refused on, unlike the GIT_CONFIG family.
 # Every environment has a HOME; refusing on one would refuse every merge.
 #
+# WHAT THIS DOES NOT DEFEND, AND WHY THE LINE IS HERE. Everything above is about
+# environment that changes git's INTERPRETATION of a repository - which one it
+# opens, which configuration it applies. It is not about environment that
+# replaces the BINARY. `git` below is resolved through the inherited PATH, so a
+# fake `git` first on PATH answers every question this path asks and makes the
+# resolution and the origin proof agree on the attacker's repository, exactly as
+# an insteadOf would have. That is real and it is gated as a boundary rather than
+# described.
+#
+# It is not closed because it cannot be, from in here: substituting the
+# executable is arbitrary code execution, and the same environment could replace
+# bash or bin/fm-merge-pr.sh itself. Pinning git to a fixed absolute path either
+# refuses on machines whose git lives in /opt/homebrew, ~/.nix-profile or a
+# version manager, or falls back to PATH and closes nothing - raising the
+# apparent strength of the claim without changing what it rests on. The threat
+# model is written down instead:
+# docs/specs/2026-09-02-merge-target-git-config.md.
+#
 # NEUTRALISE HERE, REFUSE AT THE VERB. This file stays pure and side-effect free,
 # so a caller may ask what a merge WOULD target in a hostile environment and get
 # the honest answer. bin/fm-merge-pr.sh reads fm_merge_target_git_config_env

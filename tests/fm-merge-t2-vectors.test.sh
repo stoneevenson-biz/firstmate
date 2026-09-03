@@ -467,6 +467,8 @@ EOF
   local READ_URL='. "$1"; fm_merge_target_git "$2" remote get-url origin'
   # shellcheck disable=SC2016
   local READ_REMOTES='. "$1"; fm_merge_target_git "$2" remote'
+  # shellcheck disable=SC2016
+  local READ_HANDED='. "$1"; fm_merge_target_git "$2" whatever'
 
   if [ "$MUTATE" != 1 ]; then
     # CONTROLS FIRST. A guard against a substitution that does not happen proves
@@ -564,7 +566,7 @@ EOF
       env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_4919=x GIT_CONFIG_VALUE_4919=y \
           GIT_CONFIG_NONSENSE=z GIT_CONFIG=/dev/null GIT_CONFIG_PARAMETERS="'a.b=c'" \
           GIT_DIR=/elsewhere/.git \
-      bash -c '. "$1"; fm_merge_target_git "$2" whatever' _ \
+      bash -c "$READ_HANDED" _ \
         "$ROOT/bin/fm-merge-target-lib.sh" "$SOLO")
     for leaked in GIT_CONFIG_KEY_4919 GIT_CONFIG_VALUE_4919 GIT_CONFIG_NONSENSE \
                   GIT_CONFIG_PARAMETERS GIT_DIR; do
@@ -618,6 +620,41 @@ EOF
       "the refusal must name ${one%%=*} itself, not merely refuse: $out"
     assert_no_merge "${one%%=*}"
   done
+
+  # 4. THE BOUNDARY OF THE CLAIM, TESTED RATHER THAN ASSERTED.
+  #
+  # Everything above is about variables that change git's INTERPRETATION of a
+  # repository - which one it opens, and which configuration it applies. PATH is
+  # not one of those: it changes which BINARY runs, and a fake `git` first on
+  # PATH answers every question this path asks, so the resolution and the origin
+  # proof agree on the attacker's repository exactly as an insteadOf would have
+  # made them. Confirmed by a reviewer, and reproduced here.
+  #
+  # It is NOT closed, and this case exists so the limitation is a tested fact
+  # rather than a sentence in a spec nobody re-reads. Substituting the executable
+  # is arbitrary code execution: the same environment could replace bash, or
+  # bin/fm-merge-pr.sh itself, so nothing checked INSIDE this process can be a
+  # boundary against it. The spec's claim is narrowed to match rather than left
+  # standing - docs/specs/2026-09-02-merge-target-git-config.md.
+  #
+  # If someone later pins the executable, THIS ASSERTION FAILS, deliberately: it
+  # is what forces the claim to be re-read when its basis changes.
+  local FAKEGIT="$TMP/fakegit"
+  mkdir -p "$FAKEGIT"
+  {
+    printf '#!/bin/sh\n'
+    printf 'case "$*" in\n'
+    printf '  *"rev-parse --is-inside-work-tree"*) echo true ;;\n'
+    printf '  *"remote get-url"*) echo "https://github.com/%s.git" ;;\n' "$EVIL_SLUG"
+    printf '  *remote*) echo origin ;;\n'
+    printf '  *) exit 0 ;;\n'
+    printf 'esac\n'
+  } > "$FAKEGIT/git"
+  chmod +x "$FAKEGIT/git"
+  # shellcheck disable=SC2016  # $1/$2 are the INNER shell's arguments, as above
+  assert_contains "$(PATH="$FAKEGIT:$PATH" bash -c '. "$1"; fm_merge_target "$2"' _ \
+      "$ROOT/bin/fm-merge-target-lib.sh" "$SOLO")" "$EVIL_SLUG" \
+    "boundary: a substituted git executable DOES still redirect the target. The claim covers variables that change git's interpretation, not ones that replace the binary; if this now fails, the executable was pinned and the threat model must be narrowed to match."
 
   # 4. THE NEGATIVE CONTROL. A guard that refuses everything is not a guard.
   #    The honest environment still resolves and still merges, and HOME - which

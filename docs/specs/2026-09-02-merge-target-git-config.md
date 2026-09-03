@@ -83,11 +83,12 @@ That was caught by the foreign lens on the pull request that introduced it, and 
 So `HOME` and `XDG_CONFIG_HOME` are pinned at a path that cannot hold anything: `/dev/null` is a character device, so nothing can ever exist beneath it, and `~` resolves to a file git silently skips.
 That is a stronger guarantee than a directory we create and hope stays empty, and it needs no scratch state — which is what keeps the "pure and side-effect free" claim intact.
 
-**This settles the version question rather than documenting a hole in it.**
+**On git versions, claimed no wider than what was tested.**
 `GIT_CONFIG_NOSYSTEM` is ancient; `GIT_CONFIG_SYSTEM` and `GIT_CONFIG_GLOBAL` arrived in git 2.32.
 An earlier draft called the three "redundant across git versions" while the global file stayed live below 2.32 — a known bypass described as belt and braces.
-What closes that gap is not redundancy, it is the `HOME` pin, which no git version has ever ignored.
-The `GIT_CONFIG_*` pins remain because they are free and state the intent locally, but nothing rests on them, and the gate proves it: with those three pins removed the case still passes, while removing the `HOME` pin turns it red.
+
+What is actually established, on the git this repository is tested with: **the fix does not depend on the two 2.32-only pins.** Removing them leaves the case green; removing the `HOME` pin turns it red. That is a statement about which line of this code does the work, and it is the one the gate proves.
+It is *not* a test on an older git, and the previous draft equating the two experiments was wrong to. The reason to expect it to hold there is narrower and worth stating plainly: `~` expansion through `HOME` is not a 2.32 feature. That is a reason, not a result — no pre-2.32 git was run.
 
 `HOME` is **neutralised, never refused on**, unlike the `GIT_CONFIG` family — every environment has one, and refusing on it would refuse every merge.
 
@@ -113,14 +114,42 @@ Its only purpose is to substitute configuration, so its presence in a merge path
 
 `HOME` sits on the other side of that line for the same reason: it is neutralised, never refused on, because every environment has one.
 
-## What "hermetic" is claimed to mean here
+## The threat model, stated rather than implied
 
-An earlier version of this spec claimed `fm_merge_target_git` was hermetic with respect to git configuration while `include.path = ~/.gitconfig` still reached a hostile `HOME`. The claim was false and the lens said so.
+Two successive claims here were too wide, and both were caught by review rather than by me. The first said the read was hermetic with respect to git configuration while `include.path = ~/.gitconfig` still reached a hostile `HOME`. The second said **no environment variable** could redirect the target — and `PATH` can:
 
-Stated precisely, and no wider: **no environment variable can change which configuration the read sees.** The `GIT_CONFIG` family is swept by prefix; the global and system files are unreachable because `HOME`, `XDG_CONFIG_HOME` and the `GIT_CONFIG_*` file pins all point nowhere.
-What the read *does* still honour is the repository's own `.git/config`, deliberately — that is the thing being read — including an `include.path` naming an **absolute** path. That is repository content, not environment, and a caller who controls a clone's config controls the clone.
+```
+$ PATH=<dir with a fake git>:$PATH  bash -c '. bin/fm-merge-target-lib.sh; fm_merge_target <clone>'
+OK	attacker/evil	sole-remote:origin
+```
 
-This covers `bin/fm-merge-pr.sh` end to end: the resolution, the ambiguity report, and the origin proof all go through it.
+A fake `git` answers every question this path asks, so the resolution and the independent origin proof agree on the attacker's repository exactly as an `insteadOf` would have made them. Reproduced, and now gated as a **boundary** rather than described.
+
+### What is defended
+
+Environment variables that change **git's interpretation of a repository**:
+
+| lever | closed by |
+|---|---|
+| `GIT_DIR` family — which repository is opened | scrubbed |
+| `GIT_CONFIG*` — which configuration is applied, in-line | swept by prefix, and **refused** |
+| `HOME`, `XDG_CONFIG_HOME` — which config *files* are reachable, including a `~` inside the repository's own `include.path` | pinned at a path that cannot hold anything |
+
+These share a property that makes them worth a guard: they redirect **data**, with no code execution. A merely misconfigured environment — or one an attacker can influence only partially — produces a merge into the wrong repository, silently, with every cross-check agreeing.
+
+### What is not defended, and why not
+
+Environment that substitutes the **executable** or injects code into it: `PATH`, `LD_PRELOAD`, `DYLD_INSERT_LIBRARIES`, `GIT_EXEC_PATH`.
+
+This is not a smaller version of the above; it is a strictly larger compromise. An environment that can put a fake `git` on `PATH` can equally replace `bash`, `gh-axi`, or `bin/fm-merge-pr.sh` itself — so **no check running inside this process can be a boundary against it.** Pinning the git executable was considered and not done: resolving it from a fixed list of absolute paths either refuses on machines whose git is legitimately in `/opt/homebrew`, `~/.nix-profile` or a version manager, or silently falls back to `PATH` and closes nothing. Either way it would raise the apparent strength of the claim without changing what it actually rests on, which is the failure mode this spec is now on its third round of.
+
+The boundary is asserted in the gate — a fake `git` on `PATH` *does* redirect the target — so that if the executable is ever pinned, the assertion fails and this section has to be re-read.
+
+### What is deliberately still honoured
+
+The repository's own `.git/config`, including an `include.path` naming an **absolute** path. That is the thing being read; a caller who controls a clone's config controls the clone.
+
+Within the defended set, this covers `bin/fm-merge-pr.sh` end to end: the resolution, the ambiguity report, and the origin proof all go through `fm_merge_target_git`.
 
 Other git reads in `bin/` are outside the merge-target path and are not changed here.
 They are reported in the pull request rather than fixed in it, so each is judged on its own decision rather than swept along with this one.
