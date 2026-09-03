@@ -76,6 +76,13 @@ What the lens is asked to do is unchanged, and `FM_LENS_CMD` keeps its semantics
 The independent verifier is unchanged.
 The authorisation base, the gate-ledger adjudication, and the verdict grammar are unchanged.
 
+## Two doors this spec left open
+
+Both were found by a foreign lens reading the shipped implementation on 2026-09-02, both reproduced, and both are fixed and gated under `docs/specs/2026-09-02-merge-target-config-injection.md`, which carries the reasoning:
+
+- **the base was forgeable.** `fm_patch_diff_base` accepted any `refs/remotes/<anything>/<default>`, and the crewmate under review can write one - `git update-ref refs/remotes/fake/main HEAD^` hid a commit and a file of its own work behind a valid patch. A remote-tracking candidate now counts only when this clone configures that remote.
+- **the bound covered only the diff bodies.** The header carried one line per commit and one per omitted path, both unbounded: 900 files under a 2000-byte bound wrote 81,411 bytes. The budget is now split before anything is written, and a payload that still exceeds the bound is a build failure.
+
 ## Gates
 
 | gate | asserts |

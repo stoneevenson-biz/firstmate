@@ -92,12 +92,98 @@ LC_ALL=C
 # So every git read in this file goes through here, with the git environment
 # scrubbed. The directory argument is the only thing that decides which
 # repository is read.
+#
+# THE SCRUB LIST IS A BLOCKLIST, AND IT WAS INCOMPLETE. It named the GIT_DIR
+# family and stopped, so the CONFIG doors stayed open. Reproduced 2026-09-02
+# against a clone whose origin is honestly this repository:
+#
+#   GIT_CONFIG_COUNT=1 \
+#   GIT_CONFIG_KEY_0=url.https://github.com/attacker/evil.git.insteadOf \
+#   GIT_CONFIG_VALUE_0=https://github.com/stoneevenson-biz/firstmate.git \
+#     git -C <clone> remote get-url origin   ->  https://github.com/attacker/evil.git
+#
+# Resolution and the origin proof would both read the forged value and agree
+# with each other perfectly - a merge-target redirect appearing in no argument,
+# which is the exact threat this function exists to defeat.
+#
+# GIT_CONFIG_KEY_<n> is unbounded in n, so this family cannot be written as a
+# fixed `-u` list; every exported GIT_CONFIG* name is discovered instead. The
+# names come from `compgen -e`, which yields NAMES only: parsing `env` output
+# would let a newline inside some OTHER variable's value forge an entry.
 fm_merge_target_git() {
   local dir=${1:-}; shift
-  env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR -u GIT_INDEX_FILE \
-      -u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES \
-      -u GIT_NAMESPACE -u GIT_CEILING_DIRECTORIES -u GIT_DISCOVERY_ACROSS_FILESYSTEM \
-      git -C "$dir" "$@"
+  local scrub=() name
+  for name in GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE \
+              GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES \
+              GIT_NAMESPACE GIT_CEILING_DIRECTORIES GIT_DISCOVERY_ACROSS_FILESYSTEM; do
+    scrub[${#scrub[@]}]=-u
+    scrub[${#scrub[@]}]=$name
+  done
+  while IFS= read -r name; do
+    case "$name" in
+      GIT_CONFIG*)
+        scrub[${#scrub[@]}]=-u
+        scrub[${#scrub[@]}]=$name
+        ;;
+    esac
+  done <<EOF
+$(compgen -e 2>/dev/null || true)
+EOF
+  env "${scrub[@]}" git -C "$dir" "$@"
+}
+
+# AND THE SCRUB IS NOT THE FIX. Scrubbing GIT_CONFIG* alone would have been a
+# false green: `HOME=<attacker-dir>` with an `insteadOf` in that dir's
+# .gitconfig forges the same URL through the same rewrite, and HOME is not in
+# any GIT_* family. Verified alongside the reproduction above. A blocklist here
+# is a promise to have imagined every variable that can reach git's config, and
+# that promise cannot be kept.
+#
+# So the URL is read from a SCOPE instead of from an environment: `git config
+# --local` reads this clone's own .git/config and nothing else - no system, no
+# global, no GIT_CONFIG_*, no HOME - and, being `config` rather than `remote`,
+# it is not subject to `insteadOf` rewriting at all. Both properties were
+# measured against the reproduction; all three doors return the honest URL.
+#
+# It is also the more honest answer to the question actually being asked. "Which
+# repository is this clone OF" is a property of the clone, and the configured
+# URL is what the clone says it is; a rewrite is a transport preference, and a
+# legitimate one (ssh insteadOf https) never changes owner/name anyway.
+#
+# fm_merge_target_remote_url <repo-dir> <remote-name>: that remote's configured
+# URL, or return 1. Multi-URL remotes answer with the first, as `remote get-url`
+# does.
+fm_merge_target_remote_url() {
+  local dir=${1:-} name=${2:-} url
+  [ -n "$name" ] || return 1
+  url=$(fm_merge_target_git "$dir" config --local --get "remote.$name.url" 2>/dev/null) || return 1
+  [ -n "$url" ] || return 1
+  printf '%s\n' "$url"
+}
+
+# fm_merge_target_remote_names <repo-dir>: the names of the remotes THIS CLONE
+# configures, sorted, one per line.
+#
+# `git remote` is not that list. A `[remote "phantom"]` section in a global or
+# injected config is reported by `git remote` as though the clone had it -
+# measured - so a clone with one honest remote can be made to look ambiguous, or
+# a clone with none can be given a sole remote to resolve to. The local scope
+# answers with the clone's own remotes and nothing else.
+fm_merge_target_remote_names() {
+  local dir=${1:-} key name
+  {
+    while IFS= read -r key; do
+      case "$key" in
+        remote.*.url) : ;;
+        *) continue ;;
+      esac
+      name=${key#remote.}
+      name=${name%.url}
+      [ -n "$name" ] && printf '%s\n' "$name"
+    done <<EOF
+$(fm_merge_target_git "$dir" config --local --name-only --get-regexp '^remote\..*\.url$' 2>/dev/null || true)
+EOF
+  } | LC_ALL=C sort -u
 }
 
 # fm_merge_target_valid_slug <value>: true when <value> is exactly owner/name
@@ -333,7 +419,7 @@ fm_merge_target() {
   fi
 
   if [ -n "$want_remote" ]; then
-    if ! url=$(fm_merge_target_git "$dir" remote get-url "$want_remote" 2>/dev/null) || [ -z "$url" ]; then
+    if ! url=$(fm_merge_target_remote_url "$dir" "$want_remote"); then
       printf 'BADREMOTE\t%s\tno such remote\n' "$want_remote"
       return 1
     fi
@@ -350,7 +436,7 @@ fm_merge_target() {
     return 0
   fi
 
-  remotes=$(fm_merge_target_git "$dir" remote 2>/dev/null)
+  remotes=$(fm_merge_target_remote_names "$dir")
   count=0
   for name in $remotes; do count=$((count + 1)); done
 
@@ -360,7 +446,7 @@ fm_merge_target() {
   fi
 
   if [ "$count" -eq 1 ]; then
-    url=$(fm_merge_target_git "$dir" remote get-url "$remotes" 2>/dev/null || true)
+    url=$(fm_merge_target_remote_url "$dir" "$remotes" || true)
     if ! slug=$(fm_merge_target_from_url "$url"); then
       printf 'BADREMOTE\t%s\t%s\n' "$remotes" "$(fm_merge_target_redact_url "$url")"
       return 1
@@ -373,7 +459,7 @@ fm_merge_target() {
   # candidate so the refusal is actionable rather than merely negative.
   printf 'AMBIGUOUS\n'
   for name in $remotes; do
-    url=$(fm_merge_target_git "$dir" remote get-url "$name" 2>/dev/null || true)
+    url=$(fm_merge_target_remote_url "$dir" "$name" || true)
     if slug=$(fm_merge_target_from_url "$url"); then
       printf '%s\t%s\n' "$name" "$slug"
     else
@@ -410,8 +496,8 @@ fm_merge_target_pr_slug_conflict() {
 # more informative ("that is remote 'upstream'"); it never decides anything.
 fm_merge_target_remote_for() {
   local dir=${1:-} slug=${2:-} name url
-  for name in $(fm_merge_target_git "$dir" remote 2>/dev/null); do
-    url=$(fm_merge_target_git "$dir" remote get-url "$name" 2>/dev/null || true)
+  for name in $(fm_merge_target_remote_names "$dir"); do
+    url=$(fm_merge_target_remote_url "$dir" "$name" || true)
     if [ "$(fm_merge_target_from_url "$url" 2>/dev/null || true)" = "$slug" ]; then
       printf '%s\n' "$name"
       return 0
@@ -589,7 +675,7 @@ fm_merge_target_assert_argv() {
 # This is the repository a clone is OF, and it is what a merge is proved against.
 fm_merge_target_origin_slug() {
   local url
-  url=$(fm_merge_target_git "${1:-}" remote get-url origin 2>/dev/null) || return 1
+  url=$(fm_merge_target_remote_url "${1:-}" origin) || return 1
   fm_merge_target_from_url "$url"
 }
 

@@ -84,3 +84,6 @@
 | gate-t4-lens-patch-file-boundary-split | frozen | A payload over its bound drops whole named files and is still a valid patch |
 | gate-t4-lens-patch-refuses-corrupt | frozen | A payload that is not a valid patch refuses the lens instead of being passed through |
 | gate-t4-lens-patch-keeps-own-tests | frozen | The branch's own tests survive a bound that forces omission |
+| gate-t2-merge-config-injection | frozen | Git config, not just git discovery, cannot move the merge target |
+| gate-t4-lens-patch-base-from-configured-remotes | frozen | Only a remote this clone configures can move the lens base |
+| gate-t4-lens-patch-bound-covers-payload | frozen | The payload bound counts the whole artifact, header included |

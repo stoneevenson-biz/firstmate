@@ -40,6 +40,12 @@
 #   env-redirect            GH_REPO / GH_HOST redirecting a gh-shaped tool, and
 #                           GIT_DIR redirecting `git -C` itself, without ever
 #                           appearing in an argument
+#   config-injection        git CONFIG, rather than git's repository discovery,
+#                           rewriting the honest origin URL into another
+#                           repository: GIT_CONFIG_KEY_<n>, GIT_CONFIG_GLOBAL,
+#                           and a HOME whose .gitconfig carries the same
+#                           `insteadOf` - plus a remote that exists only in
+#                           global config
 #   origin-proof            a target that is not this clone's origin, or an
 #                           origin that cannot be read at all
 #   argv-egress             the finished argv, re-read, must pin the target once
@@ -455,9 +461,91 @@ case_argv_egress() {
 }
 
 # ============================================================================
+case_config_injection() {
+  # THE DOOR env-redirect LEFT OPEN. That case pinned git's DISCOVERY - GIT_DIR
+  # and its family - and stopped there. But which repository a URL names is
+  # decided twice: once by which config file git reads, and once by whether that
+  # config rewrites the URL on the way out. `url.<evil>.insteadOf = <honest>`
+  # does the second, and THREE different environment variables can deliver it.
+  # Resolution and the origin proof would both read the forged value and agree
+  # with each other perfectly, which is this suite's whole subject.
+  #
+  # Every door is confirmed as a CONTROL against real git first. A guard against
+  # a redirect that does not happen proves nothing, and this is exactly where a
+  # blocklist of variable names goes wrong: scrubbing GIT_CONFIG* alone leaves
+  # HOME, which is in no GIT_* family and forges the identical URL.
+  local evil_url="https://github.com/$EVIL_SLUG.git"
+  local honest_url ck cv gc evilhome
+  honest_url=$(git -C "$SOLO" config --local --get remote.origin.url)
+  ck="url.$evil_url.insteadOf"
+  cv="$honest_url"
+
+  gc="$TMP/evil.gitconfig"
+  printf '[url "%s"]\n\tinsteadOf = %s\n' "$evil_url" "$honest_url" > "$gc"
+  evilhome="$TMP/evilhome"
+  mkdir -p "$evilhome"
+  cp "$gc" "$evilhome/.gitconfig"
+
+  if [ "$MUTATE" != 1 ]; then
+    assert_contains \
+      "$(GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="$ck" GIT_CONFIG_VALUE_0="$cv" \
+         git -C "$SOLO" remote get-url origin)" \
+      "$EVIL_SLUG" "control: GIT_CONFIG_KEY_<n> really does forge the origin URL - this is the red"
+    assert_contains "$(GIT_CONFIG_GLOBAL="$gc" git -C "$SOLO" remote get-url origin)" \
+      "$EVIL_SLUG" "control: GIT_CONFIG_GLOBAL really does forge it too"
+    assert_contains "$(HOME="$evilhome" git -C "$SOLO" remote get-url origin)" \
+      "$EVIL_SLUG" "control: a HOME with an insteadOf forges it without any GIT_ variable at all"
+  fi
+
+  # The library's own answer, through each door. This is what decides the merge.
+  local via_keys via_global via_home
+  via_keys=$(GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="$ck" GIT_CONFIG_VALUE_0="$cv" \
+             fm_merge_target_origin_slug "$SOLO" || true)
+  via_global=$(GIT_CONFIG_GLOBAL="$gc" fm_merge_target_origin_slug "$SOLO" || true)
+  via_home=$(HOME="$evilhome" fm_merge_target_origin_slug "$SOLO" || true)
+
+  if [ "$MUTATE" = 1 ]; then
+    [ "$via_keys" = "$EVIL_SLUG" ] \
+      || fail "MUTATION: expected an injected GIT_CONFIG_KEY to forge the origin proof (got: $via_keys)"
+    return 0
+  fi
+
+  [ "$via_keys" = "$ORIGIN_SLUG" ] \
+    || fail "GIT_CONFIG_KEY_<n> must not change the origin proof (got: $via_keys)"
+  [ "$via_global" = "$ORIGIN_SLUG" ] \
+    || fail "GIT_CONFIG_GLOBAL must not change the origin proof (got: $via_global)"
+  [ "$via_home" = "$ORIGIN_SLUG" ] \
+    || fail "a HOME with an insteadOf must not change the origin proof (got: $via_home)"
+
+  # A remote that exists ONLY in global config is not this clone's remote.
+  # `git remote` reports it as though it were, which turns a clone with one
+  # honest remote into an ambiguous one - or hands a remote-less clone a sole
+  # remote to resolve to.
+  printf '[remote "phantom"]\n\turl = %s\n' "$evil_url" >> "$gc"
+  assert_contains "$(GIT_CONFIG_GLOBAL="$gc" git -C "$SOLO" remote)" "phantom" \
+    "control: git remote really does report a globally-configured remote - this is the red"
+  local names
+  names=$(GIT_CONFIG_GLOBAL="$gc" fm_merge_target_remote_names "$SOLO" | tr '\n' ' ')
+  assert_contains "$names" "origin" "the clone's own remote must still be listed"
+  assert_not_contains "$names" "phantom" "a remote only global config declares is not this clone's remote"
+
+  # End to end: the merge lands in origin through every door, and the evil
+  # repository reaches the merge tool through none of them.
+  local out code
+  reset_record
+  out=$(GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="$ck" GIT_CONFIG_VALUE_0="$cv" \
+        GIT_CONFIG_GLOBAL="$gc" HOME="$evilhome" \
+        "$MERGE" t2cfg 5 --project "$SOLO" 2>&1); code=$?
+  expect_code 0 "$code" "a config-injected environment must not stop an otherwise valid merge: $out"
+  assert_contains "$(record)" "merged-into=$ORIGIN_SLUG" "the clone's own config decides the target"
+  assert_not_contains "$(record)" "$EVIL_SLUG" "no repository a rewritten URL named may reach the merge tool"
+  pass "config-injection: insteadOf rewriting and phantom remotes cannot move the target"
+}
+
+# ============================================================================
 ALL_CASES="foreign-host pull-in-query pull-in-fragment trailing-path
            passthrough-repo-flag duplicate-repo-flag ambiguous-remotes
-           env-redirect origin-proof argv-egress"
+           env-redirect config-injection origin-proof argv-egress"
 
 run_case() {
   case "$1" in
@@ -469,6 +557,7 @@ run_case() {
     duplicate-repo-flag)   case_duplicate_repo_flag ;;
     ambiguous-remotes)     case_ambiguous_remotes ;;
     env-redirect)          case_env_redirect ;;
+    config-injection)      case_config_injection ;;
     origin-proof)          case_origin_proof ;;
     argv-egress)           case_argv_egress ;;
     *) fail "unknown case '$1'; known: $ALL_CASES" ;;

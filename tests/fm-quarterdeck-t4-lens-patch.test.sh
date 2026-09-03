@@ -28,6 +28,20 @@
 #   keeps-own-tests      the branch's own test files survive a bound that forces
 #                        omission - that omission is what made fmcmd-guard useless
 #
+# Two more were added on 2026-09-02 after a foreign lens read the SHIPPED
+# version of this code and found the same class of defect twice more. Both are
+# reproduced in their cases; neither was theorised:
+#
+#   base-from-configured-remotes
+#                        a ref under refs/remotes/ is not evidence that a remote
+#                        exists, and the crewmate under review can write one -
+#                        `git update-ref refs/remotes/fake/main HEAD^` moved the
+#                        base and hid a commit and a file of the branch's own
+#                        work behind a perfectly valid patch
+#   bound-covers-payload the bound counted only the diff bodies while the header
+#                        carried one line per commit and one per omitted path -
+#                        900 files under a 2000-byte bound wrote 81,411 bytes
+#
 # Mutation (LEDGER_MUTATE=1): every case asserts the DEFECT instead - noise in
 # the patch, a corrupt artifact, a lens run on rubbish, absent tests. A correct
 # implementation then fails the case, which is what freeze demands.
@@ -309,7 +323,11 @@ case_keeps_own_tests() {
   # tests, which is exactly what happened to fmcmd-guard.
   own_commit "$wt" 400 15
   setup_stubs
-  run_verify "$id" "$proj" "$wt" 1200 >/dev/null
+  # 4000: the bodies get 3000 of it, which the ~700-byte test diff clears and
+  # the ~15,600-byte source diff does not, and the header's share still has room
+  # to NAME what it dropped. (Under the old semantics the header was unbounded,
+  # so any body budget would do; it is budgeted now - see bound-covers-payload.)
+  run_verify "$id" "$proj" "$wt" 4000 >/dev/null
   patch="$D/$id/lens-diff.patch"
   [ -f "$patch" ] || fail "keeps-own-tests: no payload was written: $(cat "$TMP/verify.out")"
 
@@ -329,7 +347,105 @@ case_keeps_own_tests() {
 }
 
 # ============================================================================
-ALL_CASES="scoped-to-branch file-boundary-split refuses-corrupt keeps-own-tests"
+case_base_from_configured_remotes() {
+  # A ref under refs/remotes/ is not evidence that a remote exists. It is just a
+  # ref, and the crewmate whose work is under review can write one - so the
+  # author of the code being reviewed could choose where the review starts.
+  #
+  # The control comes first, against a repo with NO configured remotes at all,
+  # because a guard against a forgery that does not work proves nothing.
+  local f proj wt id=t4forge patch base1 base2 nfiles
+  f=$(fixture "$id"); proj=${f%%|*}; wt=$(printf '%s' "$f" | cut -d'|' -f2)
+  own_commit "$wt" 20 10
+  # A second commit, so there is an earlier one for a forged base to hide.
+  printf 'echo "a second commit of the branch own work"\n' >> "$wt/bin/thing.sh"
+  git -C "$wt" add bin
+  git -C "$wt" commit -qm "task: the second commit this branch owns"
+
+  # The fixture's origin is unreachable, so its remote-tracking ref is stale and
+  # refs/heads/<default> is the honest base. Strip the configured remote too, so
+  # the forged ref is the ONLY refs/remotes entry in play.
+  git -C "$proj" remote remove origin
+  git -C "$proj" update-ref -d "refs/remotes/origin/$(printf '%s' "$f" | cut -d'|' -f3)" 2>/dev/null || true
+
+  base1=$(bash "$LENS_LIB" base "$wt" 2>/dev/null)
+  [ -n "$base1" ] || fail "base-from-configured-remotes: no honest base resolved"
+
+  git -C "$wt" update-ref "refs/remotes/forged/$(printf '%s' "$f" | cut -d'|' -f3)" \
+    "$(git -C "$wt" rev-parse 'HEAD^')"
+  base2=$(bash "$LENS_LIB" base "$wt" 2>/dev/null)
+
+  if [ "$MUTATE" = 1 ]; then
+    [ "$base2" = "$(git -C "$wt" rev-parse 'HEAD^')" ] \
+      || fail "MUTATION: expected a forged remote-tracking ref to move the base"
+    return 0
+  fi
+
+  [ "$base2" = "$base1" ] \
+    || fail "a ref under refs/remotes/ whose remote this clone does not configure must not move the base (honest $base1, after forgery $base2)"
+
+  # And end to end: both of the branch's own commits still reach the lens.
+  setup_stubs
+  run_verify "$id" "$proj" "$wt" >/dev/null
+  patch="$D/$id/lens-diff.patch"
+  assert_grep "task: the work this branch actually owns" "$patch" \
+    "the earlier commit a forged base would have hidden must still be in the patch"
+  assert_grep "task: the second commit this branch owns" "$patch" \
+    "the later commit must be there too"
+  nfiles=$(grep -c '^diff --git ' "$patch" || true)
+  [ "$nfiles" -ge 2 ] || fail "the forged base hid the branch's own files (saw $nfiles)"
+  pass "base-from-configured-remotes: only a remote this clone configures can move the lens base"
+}
+
+# ============================================================================
+case_bound_covers_payload() {
+  # The bound is a promise about the ARTIFACT, not about one section of it. An
+  # earlier round budgeted only the diff bodies and then prepended a header
+  # carrying one line per commit and one line per omitted path, both unbounded:
+  # a 900-file branch under a 2000-byte bound wrote 81,411 bytes, forty times
+  # the number it claimed, every byte of it header. The lens's context is the
+  # thing being protected, so the header counts.
+  local f proj wt id=t4bound out base i bytes bound=2000
+  f=$(fixture "$id"); proj=${f%%|*}; wt=$(printf '%s' "$f" | cut -d'|' -f2)
+  mkdir -p "$wt/many"
+  for i in $(seq 1 300); do
+    printf 'one line of file %s, padded well past any per-file share of the budget\n' "$i" \
+      > "$wt/many/file-$i.txt"
+  done
+  git -C "$wt" add many
+  git -C "$wt" commit -qm "task: three hundred files"
+  base=$(git -C "$wt" rev-parse 'HEAD^')
+  out="$TMP/$id.patch"
+
+  bash "$LENS_LIB" build "$wt" "$base" "$out" "$bound" >/dev/null 2>&1 || true
+  [ -f "$out" ] || fail "bound-covers-payload: nothing was written"
+  bytes=$(wc -c < "$out" | tr -d ' ')
+
+  if [ "$MUTATE" = 1 ]; then
+    [ "$bytes" -gt "$bound" ] \
+      || fail "MUTATION: expected the payload to overrun its own bound (got $bytes <= $bound)"
+    return 0
+  fi
+
+  [ "$bytes" -le "$bound" ] \
+    || fail "the payload is $bytes bytes against a ${bound}-byte bound; a bound the artifact does not obey is not a bound"
+  assert_grep "elided to keep this payload inside its" "$out" \
+    "a header that had to stop must say how much it left out"
+
+  # The same at the real default bound, where nothing should need eliding and
+  # the artifact must still be a patch.
+  bash "$LENS_LIB" build "$wt" "$base" "$TMP/$id-full.patch" 200000 >/dev/null 2>&1 \
+    || fail "bound-covers-payload: the default bound must still produce a usable payload"
+  bytes=$(wc -c < "$TMP/$id-full.patch" | tr -d ' ')
+  [ "$bytes" -le 200000 ] || fail "the default-bound payload is $bytes bytes"
+  bash "$LENS_LIB" check "$wt" "$base" "$TMP/$id-full.patch" >/dev/null 2>&1 \
+    || fail "bound-covers-payload: the bounded payload must still be a valid patch"
+  pass "bound-covers-payload: the bound counts the whole artifact, header included"
+}
+
+# ============================================================================
+ALL_CASES="scoped-to-branch file-boundary-split refuses-corrupt keeps-own-tests
+           base-from-configured-remotes bound-covers-payload"
 
 run_case() {
   case "$1" in
@@ -337,6 +453,8 @@ run_case() {
     file-boundary-split) case_file_boundary_split ;;
     refuses-corrupt)     case_refuses_corrupt ;;
     keeps-own-tests)     case_keeps_own_tests ;;
+    base-from-configured-remotes) case_base_from_configured_remotes ;;
+    bound-covers-payload)         case_bound_covers_payload ;;
     *) fail "unknown case '$1'; known: $ALL_CASES" ;;
   esac
 }

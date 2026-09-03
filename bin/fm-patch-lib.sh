@@ -56,6 +56,24 @@ fm_patch_default_branch() {
   return 1
 }
 
+# fm_patch_configured_remotes <worktree>: the names of the remotes THIS CLONE
+# configures, one per line. Local scope only, so a remote declared in a global
+# or injected config is not mistaken for one of this clone's.
+fm_patch_configured_remotes() {
+  local wt=$1 key name
+  while IFS= read -r key; do
+    case "$key" in
+      remote.*.url) : ;;
+      *) continue ;;
+    esac
+    name=${key#remote.}
+    name=${name%.url}
+    [ -n "$name" ] && printf '%s\n' "$name"
+  done <<EOF
+$(git -C "$wt" config --local --name-only --get-regexp '^remote\..*\.url$' 2>/dev/null || true)
+EOF
+}
+
 # fm_patch_diff_base <worktree> <default-branch> [hint-commit] [hint-ref]
 #
 # THE BRANCH'S OWN BASE, WHICH IS THE FURTHEST-FORWARD ONE, AND WHY THAT IS SAFE
@@ -86,6 +104,24 @@ fm_patch_default_branch() {
 # forward onto it would hide our own work from the lens. Tags are skipped for
 # the same reason plus cost.
 #
+# AND `refs/remotes/<anything>/<default>` IS NOT NARROW ENOUGH. A ref under
+# refs/remotes/ is not evidence that a remote exists; it is just a ref, and the
+# crewmate whose work is under review can write one. Reproduced 2026-09-02 in a
+# repo with NO configured remotes at all:
+#
+#   git update-ref refs/remotes/fake/main "$(git rev-parse HEAD^)"
+#
+# moved the base one commit forward, and the patch handed to the lens dropped a
+# commit and a file of the branch's own work while remaining a perfectly valid
+# patch. That is the review artifact lying about what the branch changed - the
+# same failure the byte truncation caused, reached by a different door, and this
+# one is reachable BY THE AUTHOR OF THE CODE UNDER REVIEW.
+#
+# So a remote-tracking candidate counts only when its remote is one THIS CLONE
+# CONFIGURES, read from local config (bin/fm-merge-target-lib.sh carries the
+# long form of why a scope beats a name here). refs/heads/<default> needs no
+# such proof: it is the clone's own branch, not a claim about a remote.
+#
 # The hint (fm-verify's authorisation base) seeds the search, so the result can
 # only ever move forward from it, never behind it. A candidate that already
 # contains HEAD is skipped: its merge base IS HEAD, which would leave an empty
@@ -105,6 +141,8 @@ fm_patch_diff_base() {
     cands="refs/heads/$default"
   fi
   if [ -n "$default" ]; then
+    local configured
+    configured=" $(fm_patch_configured_remotes "$wt" | tr '\n' ' ')"
     while IFS= read -r ref; do
       [ -n "$ref" ] || continue
       case "$ref" in
@@ -116,6 +154,8 @@ fm_patch_diff_base() {
       rest=${ref#refs/remotes/}
       rest=${rest%"/$default"}
       case "$rest" in */*) continue ;; esac
+      # ...and that segment must name a remote this clone configures.
+      case "$configured" in *" $rest "*) : ;; *) continue ;; esac
       cands="$cands $ref"
     done <<EOF
 $(git -C "$wt" for-each-ref --format='%(refname)' refs/remotes 2>/dev/null)
@@ -199,9 +239,29 @@ fm_patch_check() {
 #
 # Binary files are named, never embedded: their content is worthless to a
 # reviewer, and `Binary files ... differ` is not an appliable patch anyway.
+#
+# THE BOUND COVERS THE WHOLE PAYLOAD. An earlier round budgeted only the diff
+# BODIES and then prepended a header carrying one line per commit and one line
+# per omitted path - both unbounded. Measured: a 900-file branch under a
+# 2000-byte bound produced an 81,411-byte payload, forty times the number it
+# claimed, every byte of it header. A bound that the artifact does not obey is
+# not a bound, and this one exists to protect the reviewer's context.
+#
+# So the budget is split before anything is written - a quarter to the header,
+# the rest to the bodies - and the header stops adding lines when its share runs
+# out, saying how many it elided. The split is fixed rather than clever: the
+# header cannot spend what the bodies leave over, which wastes a little and is
+# obviously terminating, where a negotiation between the two is neither. A
+# finished payload that still exceeds the bound is a build FAILURE, so "a
+# successful build never exceeds max" holds without qualification.
 fm_patch_build() {
+  # LC_ALL pinned for this function's own byte arithmetic: ${#line} counts
+  # CHARACTERS under a UTF-8 locale, and a budget measured in characters is not
+  # a budget measured in bytes. Not exported, so nothing this function runs sees it.
+  local LC_ALL=C
   local wt=$1 base=$2 out=$3 max=$4 label=${5:-} base_ref=${6:-}
   local tmp body rec adds dels path tests others f size total=0 omitted="" tab
+  local hdr hdr_budget body_budget hdr_used=0 hdr_elided=0 final
   tab=$(printf '\t')
   FM_PATCH_TOTAL=0
   FM_PATCH_INCLUDED=0
@@ -210,7 +270,13 @@ fm_patch_build() {
 
   tmp=$(mktemp -d) || { FM_PATCH_WHY="could not create a scratch directory"; return 1; }
   body="$tmp/body.patch"
+  hdr="$tmp/header"
   : > "$body"
+  : > "$hdr"
+  hdr_budget=$(( max / 4 ))
+  [ "$hdr_budget" -gt "$max" ] && hdr_budget=$max
+  body_budget=$(( max - hdr_budget ))
+  [ "$body_budget" -lt 0 ] && body_budget=0
 
   if ! git -C "$wt" diff --numstat --no-renames -z "$base" HEAD -- > "$tmp/numstat" 2>"$tmp/err"; then
     FM_PATCH_WHY="the range $base..HEAD could not be read: $(head -1 "$tmp/err")"
@@ -264,7 +330,7 @@ fm_patch_build() {
       omitted="$omitted$path - git reported it changed but produced no diff for it"$'\n'
       continue
     fi
-    if [ "$((total + size))" -gt "$max" ]; then
+    if [ "$((total + size))" -gt "$body_budget" ]; then
       omitted="$omitted$path - $size bytes; including it would exceed the ${max}-byte payload bound"$'\n'
       continue
     fi
@@ -278,21 +344,56 @@ fm_patch_build() {
   # The header is prose, every line commented, and it sits ahead of the first
   # `diff --git`: git apply skips leading text, and the `# ` prefix means no
   # line of it can ever be mistaken for patch content.
+  #
+  # hdr_put appends one line if the header's share of the budget can still hold
+  # it, and counts it as elided otherwise. The 96-byte tail reserve is for the
+  # elision notice itself, so the payload can always admit what it left out.
+  hdr_put() {
+    local line=$1 n=$(( ${#1} + 1 ))
+    if [ "$(( hdr_used + n + 96 ))" -gt "$hdr_budget" ]; then
+      hdr_elided=$(( hdr_elided + 1 ))
+      return 0
+    fi
+    printf '%s\n' "$line" >> "$hdr"
+    hdr_used=$(( hdr_used + n ))
+  }
+
+  # The three lines that make the payload self-describing go in unconditionally:
+  # what it is, what range it covers, and what it does not contain. A payload
+  # that could not afford to say that is refused below rather than shipped mute.
   {
     printf '# review patch%s\n' "${label:+ for $label}"
     printf '# range: %s..HEAD%s\n' "$base" "${base_ref:+ (base ref: $base_ref)}"
-    printf '# commits on this branch:\n'
-    (git -C "$wt" log --oneline "$base..HEAD" 2>/dev/null || true) | sed 's/^/#   /'
     printf '# files changed in this range: %s (included %s, omitted %s)\n' \
       "$FM_PATCH_TOTAL" "$FM_PATCH_INCLUDED" "$((FM_PATCH_TOTAL - FM_PATCH_INCLUDED))"
-    if [ -n "$omitted" ]; then
-      printf '# OMITTED - the following files are NOT below; you have not seen them:\n'
-      printf '%s' "$omitted" | sed 's/^/#   /'
-      printf '# Weigh your verdict accordingly: say so where an omitted file could change it.\n'
-    fi
-    printf '#\n'
-    cat "$body"
-  } > "$out"
+  } > "$hdr"
+  hdr_used=$(wc -c < "$hdr" | tr -d ' ')
+
+  hdr_put '# commits on this branch:'
+  while IFS= read -r rec; do
+    [ -n "$rec" ] || continue
+    hdr_put "#   $rec"
+  done <<EOF
+$(git -C "$wt" log --oneline "$base..HEAD" 2>/dev/null || true)
+EOF
+
+  if [ -n "$omitted" ]; then
+    hdr_put '# OMITTED - the following files are NOT below; you have not seen them:'
+    while IFS= read -r rec; do
+      [ -n "$rec" ] || continue
+      hdr_put "#   $rec"
+    done <<EOF
+$(printf '%s' "$omitted")
+EOF
+    hdr_put '# Weigh your verdict accordingly: say so where an omitted file could change it.'
+  fi
+  if [ "$hdr_elided" -gt 0 ]; then
+    printf '# %s further header line(s) elided to keep this payload inside its %s-byte bound.\n' \
+      "$hdr_elided" "$max" >> "$hdr"
+  fi
+  printf '#\n' >> "$hdr"
+
+  cat "$hdr" "$body" > "$out"
 
   if [ "$FM_PATCH_TOTAL" -eq 0 ]; then
     # An empty range is not a corrupt patch. There is nothing to apply and
@@ -308,6 +409,16 @@ fm_patch_build() {
     # points at the payload's own omission block instead of guessing which
     # rule dropped what.
     FM_PATCH_WHY="every one of the $FM_PATCH_TOTAL changed files was omitted (bound ${max} bytes, binary content, or unreadable - the payload header names each one), so it carries no diff at all"
+    rm -rf "$tmp"
+    return 1
+  fi
+
+  final=$(wc -c < "$out" | tr -d ' ')
+  if [ "$final" -gt "$max" ]; then
+    # Only reachable when max is too small to hold even the three lines that
+    # make the payload self-describing. Refusing keeps the invariant absolute:
+    # a build that returns 0 has written a file of at most max bytes.
+    FM_PATCH_WHY="the payload came to $final bytes against a ${max}-byte bound, which is too small to hold even the header that says what the patch covers"
     rm -rf "$tmp"
     return 1
   fi
