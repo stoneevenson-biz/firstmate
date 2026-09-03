@@ -26,14 +26,35 @@
 #                 bin/fm-merge-pr.sh proves a merge target with. It does not
 #                 parse, nothing happens: no check.sh, no pr= line, no side
 #                 effect of any kind.
-#   THE SEATBELT. The poll script is emitted from the PARSED COMPONENTS - a
-#                 validated owner/name slug and a digit-only number - rather
-#                 than from the argument. Not every accepted reference is inert:
-#                 a query naming no second pull request parses fine and may
-#                 still carry a quote (`.../pull/1?x=";touch ./EVIL;"`), so the
-#                 validator alone is not the whole answer. Emitting from
-#                 components means no caller byte reaches the generated shell
-#                 even if the parser is later loosened.
+#   THE SEATBELT. The poll script is emitted from the PARSED COMPONENTS, each
+#                 serialised with `printf %q`, rather than from the argument.
+#                 Not every accepted reference is inert: a query naming no
+#                 second pull request parses fine and may still carry a quote
+#                 (`.../pull/1?x=";touch ./EVIL;"`), so the validator alone is
+#                 not the whole answer.
+#
+#                 WHAT THIS DOES AND DOES NOT SURVIVE. `%q` is what makes the
+#                 shell layer independent of the parse: whatever a component
+#                 contains - a quote, a semicolon, a newline - it lands in the
+#                 generated file as exactly one word, so no caller byte can
+#                 become shell even if the parser is later loosened. Wrapping
+#                 the components in literal quotes would NOT have done that; it
+#                 would only have moved the dependency from "the parser rejects
+#                 `\"`" to "the parser rejects `'`", which is not independence.
+#                 What the gate still owns is the components' MEANING - that the
+#                 slug is a repository rather than, say, an attached `-Rowner/x`
+#                 that `gh` itself would read as a flag. Independent at the
+#                 shell layer; never a substitute for the parse.
+#
+#   THE LINE RULE. `pr=<url>` goes into a LINE-ORIENTED file that every reader
+#                 parses with `grep '^key=' | tail -1`, so a newline in the
+#                 reference is a forged meta record - a `worktree=` or
+#                 `harness=` line that WINS over the real one, because it comes
+#                 last. The parser cannot answer this: it strips the query and
+#                 fragment before validating anything, so a control character
+#                 living in either parses perfectly well. Encoding for a
+#                 line-oriented file is this script's own concern, so the rail
+#                 is here rather than in the shared parser.
 #
 # Gate: gate-t5-prcheck-ref-not-compiled.
 # Spec: docs/specs/2026-09-02-prcheck-ref-injection.md
@@ -63,6 +84,21 @@ URL=$2
 # diagnose, which is half of what a named rail saves.
 # shellcheck source=bin/fm-merge-target-lib.sh
 . "$SCRIPT_DIR/fm-merge-target-lib.sh"
+# A control character never appears in a legal url, and a newline in one is a
+# forged record in state/<id>.meta - see THE LINE RULE above. Asked before the
+# parse, because the parse strips the query and fragment without validating
+# either. LC_ALL=C is already in force: bin/fm-merge-target-lib.sh sets it so
+# every bracket range in this path is asked in one collation.
+case "$URL" in
+  *[[:cntrl:]]*)
+    {
+      printf 'REFUSED[pr-ref/control-character]: a PR reference may not contain a control character.\n'
+      printf '         A newline here would become a forged record in the task meta, which readers\n'
+      printf "         take the LAST of. Nothing was armed and no pr= was recorded.\n"
+    } >&2
+    exit 1 ;;
+esac
+
 if ! PR_PARSED=$(fm_merge_target_parse_pr_ref "$URL"); then
   {
     printf 'REFUSED[pr-ref/%s]: not a pull-request reference: %s\n' \
@@ -89,15 +125,15 @@ if [ -f "$META" ] && ! grep -qxF "pr=$URL" "$META"; then
   echo "pr=$URL" >> "$META"
 fi
 
-# THE SEATBELT. Written from the two parsed components and nothing else. Both
-# came out of the parse above: PR_NUM is digits, and PR_SLUG passed
-# fm_merge_target_valid_slug, whose character class is [A-Za-z0-9._/-] - neither
-# can contain a quote, so the single quotes here cannot be closed from the
-# outside the way the old double-quoted url could. Pinning --repo also means the
+# THE SEATBELT. Written from the two parsed components and nothing else, each
+# serialised by `printf %q` - bash's own "quote this so it re-reads as exactly
+# this one word". That is the whole independence claim and its whole limit: no
+# component can become shell whatever it contains, while what it MEANS to gh is
+# still the parser's guarantee (see the header). Pinning --repo also means the
 # poll names the repository it asks about rather than leaving `gh` to infer one
 # from whatever clone the watcher happens to be standing in.
 # shellcheck disable=SC2016  # the single quotes are the point: this format string
 # is a LITERAL, so nothing expands at write time except the two %s components.
 printf 'state=$(gh pr view %s --repo %s --json state -q .state 2>/dev/null)\n[ "$state" = "MERGED" ] && echo "merged"\n' \
-  "'$PR_NUM'" "'$PR_SLUG'" > "$STATE/$ID.check.sh"
+  "$(printf '%q' "$PR_NUM")" "$(printf '%q' "$PR_SLUG")" > "$STATE/$ID.check.sh"
 echo "armed: state/$ID.check.sh polls $URL"

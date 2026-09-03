@@ -15,7 +15,7 @@
 # it. The `~/.claude/settings.json` deny rules do not help: the payload runs
 # inside a script the watcher invokes, never as a top-level Bash tool call.
 #
-# TWO VECTORS, because one guard does not cover both:
+# THREE VECTORS, because no one guard covers all of them:
 #   A. the validator's vector - a reference that does not parse at all
 #      (`.../pull/1"; touch ./PWNED; :"` trips the `trailing-path` rail). The
 #      gate is fm_merge_target_parse_pr_ref, this repo's own single-walk parser.
@@ -23,13 +23,21 @@
 #      carries shell metacharacters, because a query naming no second pull
 #      request is accepted (`.../pull/1?x=";touch ./EVIL;"`). The validator
 #      alone lets this through; what stops it is emitting the poll script from
-#      the PARSED COMPONENTS - a validated owner/name slug and a digit-only
-#      number - so no caller byte reaches the generated shell.
+#      the PARSED COMPONENTS, each serialised with `printf %q`, so no caller
+#      byte reaches the generated shell whatever the parser later accepts.
+#   C. the line rule's vector - a NEWLINE in the query or fragment. The parse
+#      strips both before validating anything, so it returns OK, and the raw
+#      reference then goes into a line-oriented meta file as `pr=<url>`. Every
+#      reader takes `grep '^key=' | tail -1`, so the forged `worktree=` /
+#      `harness=` records that follow the newline WIN over the real ones.
+#      Neither the parser nor the seatbelt answers this; a control-character
+#      rail in fm-pr-check does.
 #
-# Mutation (LEDGER_MUTATE=1): both vectors assert the INJECTION SUCCEEDS - the
-# refused payload is expected to arm, and the accepted payload's generated
-# script is expected to create ./EVIL when run. A correct implementation
-# refuses and stays inert, failing this test.
+# Mutation (LEDGER_MUTATE=1): each vector asserts the INJECTION SUCCEEDS, and
+# each proves it by OBSERVING the injected effect rather than by observing that
+# something was armed - vector A runs the generated poll and demands ./PWNED,
+# vector B runs it and demands ./EVIL, vector C demands the forged meta record
+# win. A correct implementation refuses and stays inert, failing this test.
 set -u
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -56,7 +64,12 @@ chmod +x "$FAKEBIN/gh"
 export PATH="$FAKEBIN:$PATH"
 export GH_ARGV_LOG="$TMP/gh-argv.log"
 
-HONEST="https://github.com/example/repo/pull/7"
+# A DIFFERENT pull-request number from every other vector here. The argv log
+# accumulates across runs, so an honest-path assertion phrased against the
+# number a previous vector already polled would pass without this path ever
+# producing it - the contamination is silent, and the assertion looks fine.
+HONEST="https://github.com/example/repo/pull/12"
+NL=$'\n'
 # Vector A: does not parse - a `"` opens shell after the pull-request number.
 PAYLOAD_A='https://github.com/example/repo/pull/7"; touch ./PWNED; :"'
 # Vector B: PARSES (a query naming no second /pull/ is accepted) and still
@@ -88,8 +101,12 @@ run_poll() {
 # --- vector A: a reference that does not parse is refused ------------------
 arm inj-a "$PAYLOAD_A"
 if [ "$MUTATE" = 1 ]; then
+  # Observe the INJECTION, not merely the arming: a mutation assertion that
+  # stops at "a file was written" would pass against a poll that is inert.
   [ "$ARM_CODE" -eq 0 ] || fail "MUTATION: arming with an unparseable reference expected to succeed"
   assert_present "$S/inj-a.check.sh" "MUTATION: the poll script was expected to be armed"
+  run_poll inj-a OPEN >/dev/null
+  assert_present "$TMP/run-inj-a-OPEN/PWNED" "MUTATION: the generated poll was expected to execute the injected command"
 else
   expect_code 1 "$ARM_CODE" "an unparseable PR reference must refuse"
   assert_contains "$ARM_OUT" "REFUSED[pr-ref/" "the refusal must name the rail that stopped it"
@@ -117,7 +134,10 @@ fi
 # Stronger than "no metacharacters": the generated script must be EXACTLY what
 # the parsed components determine, so nothing caller-supplied can be in it at
 # all. Rendered here from the two components this reference yields.
-EXPECTED="state=\$(gh pr view '7' --repo 'example/repo' --json state -q .state 2>/dev/null)
+# `printf %q` leaves a word that needs no quoting bare, which is exactly the
+# point: the serialisation is decided by the CONTENT, not by a literal quote
+# this file hopes the parser never emits.
+EXPECTED="state=\$(gh pr view 7 --repo example/repo --json state -q .state 2>/dev/null)
 [ \"\$state\" = \"MERGED\" ] && echo \"merged\""
 if [ "$MUTATE" != 1 ]; then
   ACTUAL=$(cat "$S/inj-b.check.sh")
@@ -135,13 +155,35 @@ assert_present "$S/inj-ok.check.sh" "the poll script must be armed for a valid u
 assert_grep "pr=$HONEST" "$S/inj-ok.meta" "the pr url must be recorded for a valid url"
 
 if [ "$MUTATE" != 1 ]; then
+  : > "$GH_ARGV_LOG"   # only this path's own records may satisfy the pin below
   OUT_MERGED=$(run_poll inj-ok MERGED)
   [ "$OUT_MERGED" = "merged" ] || fail "the poll must print 'merged' for a MERGED PR (got: '$OUT_MERGED')"
   OUT_OPEN=$(run_poll inj-ok OPEN)
   [ -z "$OUT_OPEN" ] || fail "the poll must print nothing for an OPEN PR (got: '$OUT_OPEN')"
   # The poll names the repository it asks about, rather than leaving `gh` to
   # infer one from whatever clone the watcher happens to be standing in.
-  assert_grep "pr view 7 --repo example/repo" "$GH_ARGV_LOG" "the poll must pin the repository it asks about"
+  assert_grep "pr view 12 --repo example/repo" "$GH_ARGV_LOG" "the poll must pin the repository it asks about"
+fi
+
+
+# --- vector C: a newline may not become a meta record ----------------------
+# The parse strips query and fragment before validating, so this returns OK; the
+# refusal has to come from fm-pr-check's own control-character rail.
+NEWLINE_REF="https://github.com/example/repo/pull/7?x=${NL}worktree=/tmp/attacker${NL}harness=sh"
+arm inj-nl "$NEWLINE_REF"
+if [ "$MUTATE" = 1 ]; then
+  [ "$ARM_CODE" -eq 0 ] || fail "MUTATION: arming with a newline-bearing reference expected to succeed"
+  [ "$(grep '^worktree=' "$S/inj-nl.meta" | tail -1)" = "worktree=/tmp/attacker" ] \
+    || fail "MUTATION: the forged worktree= record was expected to win"
+else
+  expect_code 1 "$ARM_CODE" "a reference carrying a newline must refuse"
+  assert_contains "$ARM_OUT" "REFUSED[pr-ref/control-character]" "the newline refusal must name its own rail"
+  assert_absent "$S/inj-nl.check.sh" "no poll script may be written for a newline-bearing reference"
+  assert_no_grep "pr=" "$S/inj-nl.meta" "no pr= may be appended for a newline-bearing reference"
+  [ "$(grep -c '^worktree=' "$S/inj-nl.meta")" = 1 ] \
+    || fail "the meta gained a forged worktree= record"
+  [ "$(grep '^harness=' "$S/inj-nl.meta" | tail -1)" = "harness=echo" ] \
+    || fail "the meta's harness= record was overridden by a forged one"
 fi
 
 pass "fm-pr-check refuses an unparseable PR reference and compiles no caller text into the poll"
