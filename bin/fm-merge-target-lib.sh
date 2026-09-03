@@ -89,14 +89,89 @@ LC_ALL=C
 # read the attacker's clone, agree with each other perfectly, and pin a merge to
 # a repository the caller never saw.
 #
-# So every git read in this file goes through here, with the git environment
-# scrubbed. The directory argument is the only thing that decides which
-# repository is read.
+# THAT SCRUB ANSWERED THE WRONG HALF OF THE QUESTION, and shipped that way. It
+# says which repository git OPENS. It does not say which configuration git
+# BELIEVES about it - and a remote URL is configuration. `url.<other>.insteadOf`
+# rewrites a URL as git hands it back, so
+#
+#   GIT_CONFIG_COUNT=1 \
+#   GIT_CONFIG_KEY_0='url.https://github.com/attacker/evil.git.insteadOf' \
+#   GIT_CONFIG_VALUE_0='https://github.com/the/honest-one.git' \
+#   git remote get-url origin
+#
+# answers with the ATTACKER's URL, and did so straight through the `env -u` list
+# below, because none of those names is in it. `git ls-remote --get-url` is
+# rewritten identically. Same redirect, same two checks agreeing with each other
+# perfectly, different door.
+#
+# TWO TRAPS, AND THE SHAPE OF THIS FUNCTION IS BOTH OF THEM.
+#
+#   1. A direct `remote.origin.url` override through the same mechanism does NOT
+#      take effect - repository config wins. So a fix built by guessing which
+#      keys are dangerous tests the vector that cannot work, watches it fail,
+#      and ships with `insteadOf` and `pushInsteadOf` still open. No key is
+#      judged here. The whole family goes.
+#   2. `GIT_CONFIG_KEY_<n>` and `GIT_CONFIG_VALUE_<n>` are UNBOUNDED in <n>, and
+#      `env -u` takes no globs. A fixed list of names cannot cover the family by
+#      construction, however carefully it is written - an enumeration is a
+#      promise to have imagined every index, and there is no last index. So the
+#      REAL environment is swept by prefix instead.
+#
+# AND THE CONFIG FILES, NOT ONLY THE CONFIG VARIABLES. `HOME` and
+# `XDG_CONFIG_HOME` choose which file the global config is read from, and an
+# `insteadOf` in that file substitutes the URL exactly as the variables do -
+# verified the same way, a bypass of equal power. Neither can be scrubbed: git
+# needs a HOME and every environment sets one. So the global and system config
+# are PINNED AWAY instead, which is what "the directory argument is the only
+# thing that decides which repository is read" has to mean if it is to mean
+# anything. Nothing this path reads - rev-parse, remote, remote get-url - wants
+# global config; a global `insteadOf` a human relies on is deliberately not
+# applied, because the merge target must be the URL the repository RECORDS
+# rather than a rewrite of it. What goes with it is `safe.directory`, which git
+# accepts only from global and system config: a repository that needed it now
+# fails the read, surfacing as NOTAGIT and refusing - a failure, never a wrong
+# merge.
+#
+# The three pins are redundant across git versions on purpose: GIT_CONFIG_NOSYSTEM
+# is ancient, GIT_CONFIG_SYSTEM and GIT_CONFIG_GLOBAL arrived in git 2.32. Below
+# 2.32 the file half is unavailable and the variable half still holds.
+#
+# NEUTRALISE HERE, REFUSE AT THE VERB. This file stays pure and side-effect free,
+# so a caller may ask what a merge WOULD target in a hostile environment and get
+# the honest answer. bin/fm-merge-pr.sh reads fm_merge_target_git_config_env
+# itself and refuses, because reading the right value anyway is not a reason to
+# run a merge in an environment that is substituting git configuration.
+#
+# Spec: docs/specs/2026-09-02-merge-target-git-config.md
+
+# fm_merge_target_git_config_env: echo, one per line, the name of every
+# GIT_CONFIG* variable this shell can see - swept BY PREFIX over the real
+# environment, never matched against a list, for trap 2 above. Empty output
+# means nothing is substituting git configuration.
+#
+# Pure: it reads names and prints them. What to DO about them is the caller's,
+# which is what lets the library neutralise while the merge verb refuses.
+fm_merge_target_git_config_env() {
+  local name
+  for name in "${!GIT_CONFIG@}"; do
+    [ -n "$name" ] || continue
+    printf '%s\n' "$name"
+  done
+}
+
 fm_merge_target_git() {
   local dir=${1:-}; shift
-  env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR -u GIT_INDEX_FILE \
-      -u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES \
-      -u GIT_NAMESPACE -u GIT_CEILING_DIRECTORIES -u GIT_DISCOVERY_ACROSS_FILESYSTEM \
+  local name
+  local -a scrub=()
+  for name in GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE \
+              GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES \
+              GIT_NAMESPACE GIT_CEILING_DIRECTORIES GIT_DISCOVERY_ACROSS_FILESYSTEM \
+              "${!GIT_CONFIG@}"; do
+    [ -n "$name" ] || continue
+    scrub+=(-u "$name")
+  done
+  env "${scrub[@]}" \
+      GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_SYSTEM=/dev/null GIT_CONFIG_GLOBAL=/dev/null \
       git -C "$dir" "$@"
 }
 
