@@ -521,7 +521,11 @@ Scout and secondmate tasks skip the Quarterdeck (Phase 1 scope). Spec:
 For PR-based ship tasks, the ready signal depends on mode: `no-mistakes` reports `done: PR <url> checks green` after CI is green, while `direct-PR` reports `done: PR <url>` after opening the PR.
 Run `bin/fm-pr-check.sh <id> <PR url>` - it records `pr=` in the task's meta and arms the watcher's merge poll.
 Tell the captain: the PR's full URL (always the complete `https://...` link, never a bare `#number` - the captain's terminal makes a full URL clickable), a one-paragraph summary, and, for `no-mistakes`, the risk level it emitted.
-(The check contract, for any custom `state/<id>.check.sh` you write yourself: print one line only when firstmate should wake, print nothing otherwise, and finish before `FM_CHECK_TIMEOUT`.)
+(The check contract, for any custom `state/<id>.check.sh` you write yourself: print one line only when firstmate should wake, print nothing otherwise, and finish before `FM_CHECK_TIMEOUT`.
+And never interpolate a task-supplied string into it: the watcher runs that file as shell on a timer inside the session holding the helm, so a crewmate-reported url compiled into a quoted word was remote code execution that no permission rule reached.
+`bin/fm-pr-check.sh` validates the PR reference with `fm_merge_target_parse_pr_ref` and emits the poll from the parsed components, each serialised with `printf %q`, for exactly that reason.
+The same argument is also refused if it carries a control character, and every write of it uses `printf '%s\n'` rather than `echo`, because `state/<id>.meta` is line-oriented and every reader takes the LAST matching record: a newline in a task-supplied string is a forged `worktree=` or `harness=` line that wins, and under `xpg_echo` a mere backslash-n becomes one.
+Refusing the character and writing the value safely are different jobs, and a task-supplied string needs both; spec `docs/specs/2026-09-02-prcheck-ref-injection.md`.)
 
 If the captain says "merge it", run `bin/fm-merge-pr.sh <id>` yourself; that instruction is the explicit approval. If `yolo=on`, merge a green/approved PR yourself and post the required FYI.
 
