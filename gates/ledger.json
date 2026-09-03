@@ -1060,19 +1060,19 @@
     {
       "id": "gate-t2-merge-git-config-substitution",
       "title": "An injected git configuration cannot substitute the remote URL a merge target is resolved from, and does not pass quietly",
-      "observable": "against controls proving that GIT_CONFIG_COUNT/GIT_CONFIG_KEY_<n>/GIT_CONFIG_VALUE_<n> carrying url.<attacker>.insteadOf really does substitute what `git remote get-url origin` and `git ls-remote --get-url origin` answer - at index 0 and at an index no fixed list would reach - and that a global config chosen by HOME or XDG_CONFIG_HOME substitutes it identically, while a direct remote.origin.url override through the same mechanism does NOT and an injected remote.<name>.url the repository never defines DOES appear in `git remote`: fm_merge_target_git answers with the repository's own URL under every one of those, no injected phantom remote reaches the set the target is resolved from, fm_merge_target resolves the unchanged origin target with the substituted repository appearing nowhere, and fm-merge-pr.sh REFUSES with REFUSED[env/git-config-injected] naming the offending variables and invoking no merge tool at all - for each member of the family individually, GIT_CONFIG, GIT_CONFIG_COUNT, GIT_CONFIG_GLOBAL, GIT_CONFIG_SYSTEM, GIT_CONFIG_NOSYSTEM and GIT_CONFIG_PARAMETERS included - while the honest environment still merges into origin and a substituting HOME is neutralised rather than refused, because every environment has one",
+      "observable": "against controls proving that GIT_CONFIG_COUNT/GIT_CONFIG_KEY_<n>/GIT_CONFIG_VALUE_<n> carrying url.<attacker>.insteadOf really does substitute what `git remote get-url origin` and `git ls-remote --get-url origin` answer - at index 0 and at an index no fixed list would reach - that a global config chosen by HOME or XDG_CONFIG_HOME substitutes it identically, and that a repository's own `include.path = ~/.gitconfig` expands that ~ through a hostile HOME even when git's automatic global lookup is disabled, while a direct remote.origin.url override through the same mechanism does NOT and an injected remote.<name>.url the repository never defines DOES appear in `git remote`: fm_merge_target_git answers with the repository's own URL under every one of those, no injected phantom remote reaches the set the target is resolved from, fm_merge_target resolves the unchanged origin target with the substituted repository appearing nowhere, and fm-merge-pr.sh REFUSES with REFUSED[env/git-config-injected] naming the offending variables and invoking no merge tool at all - for each member of the family individually, GIT_CONFIG, GIT_CONFIG_COUNT, GIT_CONFIG_GLOBAL, GIT_CONFIG_SYSTEM, GIT_CONFIG_NOSYSTEM and GIT_CONFIG_PARAMETERS included - while the honest environment still merges into origin and a substituting HOME is neutralised rather than refused, because every environment has one; and the HOME pin is proved load-bearing rather than incidental - removing it reddens the case while removing the git-2.32-only GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM pins leaves it green, which is the same statement as the fix holding on a git older than 2.32",
       "origin_mode": "build",
       "spec_ref": "docs/specs/2026-09-02-merge-target-git-config.md",
       "blocked_by": [],
       "test_ref": "bash tests/fm-merge-t2-vectors.test.sh git-config-substitution",
       "baseline_ref": null,
       "first_observed_red": "2026-09-03T02:21:18.240Z",
-      "mutation_verified": "2026-09-03T02:21:40.958Z",
+      "mutation_verified": "2026-09-03T18:30:06.979Z",
       "status": "frozen",
       "vacuous": false,
       "regression": false,
       "created": "2026-09-02T00:00:00Z",
-      "last_verified": "2026-09-03T02:21:19.086Z"
+      "last_verified": "2026-09-03T18:30:05.127Z"
     },
     {
       "id": "gate-t2-merge-origin-proof",

@@ -120,21 +120,43 @@ LC_ALL=C
 # AND THE CONFIG FILES, NOT ONLY THE CONFIG VARIABLES. `HOME` and
 # `XDG_CONFIG_HOME` choose which file the global config is read from, and an
 # `insteadOf` in that file substitutes the URL exactly as the variables do -
-# verified the same way, a bypass of equal power. Neither can be scrubbed: git
-# needs a HOME and every environment sets one. So the global and system config
-# are PINNED AWAY instead, which is what "the directory argument is the only
-# thing that decides which repository is read" has to mean if it is to mean
-# anything. Nothing this path reads - rev-parse, remote, remote get-url - wants
-# global config; a global `insteadOf` a human relies on is deliberately not
-# applied, because the merge target must be the URL the repository RECORDS
-# rather than a rewrite of it. What goes with it is `safe.directory`, which git
-# accepts only from global and system config: a repository that needed it now
-# fails the read, surfacing as NOTAGIT and refusing - a failure, never a wrong
-# merge.
+# verified the same way, a bypass of equal power.
 #
-# The three pins are redundant across git versions on purpose: GIT_CONFIG_NOSYSTEM
-# is ancient, GIT_CONFIG_SYSTEM and GIT_CONFIG_GLOBAL arrived in git 2.32. Below
-# 2.32 the file half is unavailable and the variable half still holds.
+# THE FILES ARE CLOSED AT THE ENVIRONMENT, NOT AT THE LOOKUP, and the difference
+# is the whole of this paragraph. Disabling git's automatic global lookup with
+# GIT_CONFIG_GLOBAL was tried first and is NOT sufficient: it stops git going
+# looking for a global config, and does nothing about a `~` inside a path the
+# REPOSITORY's own config names. `include.path = ~/.gitconfig` is an ordinary
+# thing for a clone to carry, repository config is trusted here by design, and
+# that `~` expands through HOME - so an attacker holding only the environment got
+# the same insteadOf back through a file this path still trusts, and the
+# resolution and the origin proof agreed on it exactly as before. Verified, after
+# it walked through the first version of this fix.
+#
+# So HOME and XDG_CONFIG_HOME are PINNED at a path that cannot hold anything:
+# `/dev/null` is a character device, so nothing can ever exist beneath it, and
+# `~` resolves to a file git silently skips. That is a stronger promise than any
+# directory we could create and hope stayed empty, and it needs no scratch state,
+# which is what keeps the "pure and side-effect free" claim above true.
+#
+# It also settles the version question rather than documenting a hole in it.
+# GIT_CONFIG_NOSYSTEM is ancient; GIT_CONFIG_SYSTEM and GIT_CONFIG_GLOBAL arrived
+# in git 2.32, and an earlier version of this comment called the three
+# "redundant across versions" while the global file stayed live below 2.32 - a
+# known bypass described as belt and braces. It is not redundancy that closes
+# that gap, it is the HOME pin, which no git version has ever ignored. The
+# GIT_CONFIG_* pins stay because they are free and they say the intent locally,
+# but nothing rests on them.
+#
+# Nothing this path reads - rev-parse, remote, remote get-url - wants global
+# config; a global `insteadOf` a human relies on is deliberately not applied,
+# because the merge target must be the URL the repository RECORDS rather than a
+# rewrite of it. What goes with it is `safe.directory`, which git accepts only
+# from global and system config: a repository that needed it now fails the read,
+# surfacing as NOTAGIT and refusing - a failure, never a wrong merge.
+#
+# HOME is still NEUTRALISED rather than refused on, unlike the GIT_CONFIG family.
+# Every environment has a HOME; refusing on one would refuse every merge.
 #
 # NEUTRALISE HERE, REFUSE AT THE VERB. This file stays pure and side-effect free,
 # so a caller may ask what a merge WOULD target in a hostile environment and get
@@ -143,6 +165,11 @@ LC_ALL=C
 # run a merge in an environment that is substituting git configuration.
 #
 # Spec: docs/specs/2026-09-02-merge-target-git-config.md
+
+# A home directory that cannot exist. `/dev/null` is a character device, so no
+# path beneath it can ever be created - which makes this a stronger guarantee
+# than an empty directory, and one that needs no scratch state to maintain.
+FM_MERGE_TARGET_NO_HOME=/dev/null/fm-merge-target-has-no-home
 
 # fm_merge_target_git_config_env: echo, one per line, the name of every
 # GIT_CONFIG* variable this shell can see - swept BY PREFIX over the real
@@ -171,6 +198,7 @@ fm_merge_target_git() {
     scrub+=(-u "$name")
   done
   env "${scrub[@]}" \
+      HOME="$FM_MERGE_TARGET_NO_HOME" XDG_CONFIG_HOME="$FM_MERGE_TARGET_NO_HOME" \
       GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_SYSTEM=/dev/null GIT_CONFIG_GLOBAL=/dev/null \
       git -C "$dir" "$@"
 }

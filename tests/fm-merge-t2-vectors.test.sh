@@ -532,6 +532,7 @@ EOF
     # git-2.32-and-later feature; pinning HOME is not, so this is also what makes
     # the fix hold on a git too old for GIT_CONFIG_GLOBAL. A `~` that still
     # resolved into a real home would prove the wrong thing was doing the work.
+    # shellcheck disable=SC2016  # $1/$2 are the INNER shell's arguments, as above
     assert_not_contains "$(env HOME="$FAKEHOME" bash -c '. "$1"; fm_merge_target_git "$2" config --show-origin --get-all url.https://github.com/'"$EVIL_SLUG"'.git.insteadOf' _ \
         "$ROOT/bin/fm-merge-target-lib.sh" "$INCLUDER" 2>/dev/null || true)" "$EVIL_SLUG" \
       "no substituted rewrite rule is visible to the scrubbed read at all"
