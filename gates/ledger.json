@@ -1315,7 +1315,7 @@
     {
       "id": "gate-t5-prcheck-ref-not-compiled",
       "title": "A PR reference that does not parse is refused, never compiled into the watcher's poll script",
-      "observable": "fm-pr-check refuses `https://github.com/example/repo/pull/7\"; touch ./PWNED; :\"` with REFUSED[pr-ref/...], writing no state/<id>.check.sh and appending no pr= to the meta; a reference that parses but carries shell metacharacters in its query arms a poll whose generated script is byte-identical to the components-only %q rendering and creates no file when run; a reference carrying a newline refuses as control-character, leaving the meta with exactly one worktree= and its original harness=; a valid url still arms a poll that prints 'merged' for a MERGED PR, nothing for an OPEN one, and pins --repo in the gh argv.",
+      "observable": "fm-pr-check refuses `https://github.com/example/repo/pull/7\"; touch ./PWNED; :\"` with REFUSED[pr-ref/...], writing no state/<id>.check.sh and appending no pr= to the meta; a reference that parses but carries shell metacharacters in its query arms a poll byte-identical to the components-only rendering that creates no file when run; a reference carrying a newline refuses as control-character, and one carrying a literal backslash-n still leaves exactly one worktree= and the original harness= even under xpg_echo; fm_poll_render serialises a hostile component into exactly one unchanged gh argument that executes nothing; and a valid url still arms a poll that prints 'merged' for a MERGED PR, nothing for an OPEN one, and pins --repo.",
       "origin_mode": "build",
       "spec_ref": "docs/specs/2026-09-02-prcheck-ref-injection.md",
       "blocked_by": [],
@@ -1326,8 +1326,8 @@
       "vacuous": false,
       "regression": false,
       "created": "2026-09-02T00:00:00Z",
-      "last_verified": "2026-09-03T18:45:13.717Z",
-      "mutation_verified": "2026-09-03T18:50:19.708Z"
+      "last_verified": "2026-09-03T19:33:40.685Z",
+      "mutation_verified": "2026-09-03T19:42:41.100Z"
     }
   ]
 }

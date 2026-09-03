@@ -2,7 +2,7 @@
 
 Status: implemented, 2026-09-02.
 Gate: `gate-t5-prcheck-ref-not-compiled`.
-Implementation: `bin/fm-pr-check.sh`, calling `fm_merge_target_parse_pr_ref` in `bin/fm-merge-target-lib.sh`.
+Implementation: `bin/fm-pr-check.sh` and `bin/fm-poll-lib.sh`, calling `fm_merge_target_parse_pr_ref` in `bin/fm-merge-target-lib.sh`.
 
 ## The defect
 
@@ -62,16 +62,22 @@ Designing a second PR-reference rule beside the existing one is how the two woul
 
 The refusal names the rail that produced it - `REFUSED[pr-ref/trailing-path]` and the rest of the parser's reason vocabulary - because a refusal that says only "invalid" costs another cycle to diagnose.
 
-### 2. The seatbelt: emit from the components, serialised with `%q`
+### 2. The seatbelt: emit from the components, serialised with `%q`, from a library
 
 Validation alone is not the whole answer, and the reason is concrete: the parser deliberately accepts an optional query and fragment that name no second pull request.
 So `https://github.com/o/r/pull/1?x=";touch ./EVIL;"` **parses**, and under the old writer it would still have injected.
 
-The poll script is therefore rendered from the two values the parse yields, each serialised by `printf %q`:
+The poll script is therefore rendered from the two values the parse yields, each serialised by `printf %q`.
 
-```sh
-printf 'state=$(gh pr view %s --repo %s --json state -q .state 2>/dev/null)\n[ "$state" = "MERGED" ] && echo "merged"\n' \
-  "$(printf '%q' "$PR_NUM")" "$(printf '%q' "$PR_SLUG")" > "$STATE/$ID.check.sh"
+That rendering lives in `bin/fm-poll-lib.sh` rather than inline in the writer, and the reason is that **inline, it was untestable**.
+The caller upstream is `fm_merge_target_parse_pr_ref`, which only ever yields a digits-only number and a `[A-Za-z0-9._/-]` slug - so `%q` was never handed anything that needed quoting, both calls could be deleted, and every assertion still passed.
+A defence whose removal no gate can detect is not a defence.
+At its own seam a test can hand the rule a separator, a quote, a space, a command substitution and a newline directly, and prove each arrives at `gh` as one unchanged argument:
+
+```
+$ bash bin/fm-poll-lib.sh 7 '; touch ./OWNED; :'
+state=$(gh pr view 7 --repo \;\ touch\ ./OWNED\;\ : --json state -q .state 2>/dev/null)
+[ "$state" = "MERGED" ] && echo "merged"
 ```
 
 **`%q` is what makes this half independent, and wrapping the components in literal quotes would not have been.**
@@ -117,6 +123,19 @@ harness  -> sh
 Encoding for a line-oriented file is `bin/fm-pr-check.sh`'s own concern rather than the shared parser's, so the rail lives here: any control character in the reference refuses as `REFUSED[pr-ref/control-character]`, ahead of the parse and ahead of every side effect.
 `bin/fm-merge-target-lib.sh` stays unedited.
 
+**And refusing the character is only half the job.**
+The first version of this rail was paired with `echo "pr=$URL" >> "$META"`, which reopened the same hole by a different door: with `xpg_echo` set - a shell option `BASHOPTS` carries in from the environment into any non-interactive bash - the `echo` builtin expands backslash escapes, so a reference whose query holds the two characters `\` and `n` has **no control character to refuse**, passes the rail, passes the parse, and becomes real newlines at the moment of the write.
+
+```
+reference:  https://github.com/example/repo/pull/7?x=\nworktree=/tmp/pwn\nharness=sh
+
+with echo under xpg_echo ->  worktree -> /tmp/pwn      harness -> sh
+with printf '%s\n'       ->  worktree -> <unchanged>   harness -> echo
+```
+
+The inconsistency was the bug: the poll script was already written with a literal format and the value as data, and the meta line was not.
+It is now `printf '%s\n' "pr=$URL"`, which holds whatever the shell's options happen to be rather than relying on this file having imagined them.
+
 ### What is still recorded raw
 
 `pr=<url>` in `state/<id>.meta` keeps the reference as given - but only a reference that has both cleared the control-character rail and parsed, so it can no longer be more than one line.
@@ -138,7 +157,12 @@ It proves three vectors and the honest path:
 - **A, the validator's**: an unparseable reference refuses with a named rail, writing no `check.sh` and appending no `pr=`;
 - **B, the seatbelt's**: an **accepted** reference carrying shell metacharacters in its query arms a poll whose generated script is byte-identical to the components-only rendering, and which creates no file when run;
 - **C, the line rule's**: a reference carrying a newline refuses as `control-character`, and the meta keeps exactly one `worktree=` and its original `harness=`;
+- **D, the line rule's other half**: a reference carrying a literal `\` `n` - no control character, so correctly *not* refused - still leaves exactly one `worktree=` and the original `harness=` when the script is run under `env BASHOPTS=xpg_echo`. The vector proves the option is actually on before relying on it, since a bash that ignored `BASHOPTS` would make it vacuous. (`env`, not a `BASHOPTS=... cmd` prefix: `BASHOPTS` is readonly inside a running bash, so the prefix form fails the assignment and runs with the option off.)
+- **E, the seatbelt at its own seam**: `fm_poll_render` is handed a separator, a quote, a double quote, a command substitution, a space and a newline, and for each the rendered poll is valid shell, executes nothing, and delivers the component to `gh` as exactly one argument compared byte for byte with `cmp`;
 - the honest path: a valid url still arms a poll that prints `merged` for a `MERGED` PR, prints nothing for an `OPEN` one, and pins `--repo` in the `gh` argv. That last assertion polls a pull-request number no other vector uses and truncates the recorded argv first, so another vector's identical invocation cannot satisfy it.
+
+Every byte-for-byte claim is made with `cmp` against a file, never with `[ "$(cat ...)" = ... ]`: command substitution strips trailing newlines, so a string comparison accepts a file missing its terminal newline or carrying extra blank lines and still calls the result byte-identical.
 
 Under `LEDGER_MUTATE=1` each vector asserts the injection **succeeds**, and each proves it by *observing the injected effect* rather than by observing that something was armed: A runs the generated poll and demands `./PWNED`, B runs it and demands `./EVIL`, C demands the forged `worktree=` record win.
 Run against the actual pre-fix revision those mutation branches pass, which is what makes them a proof rather than a formality; against a correct implementation they fail, which is what `ledger freeze` requires.
+Vectors D and E were each proved non-vacuous the same way, by removing the single defence each one covers and watching the gate go red: restoring `echo` for the meta write fails D (`xpg_echo expanded the escape into a forged worktree= record`), and deleting both `%q` calls fails E (`a hostile component executed: ; touch ./OWNED; :`).

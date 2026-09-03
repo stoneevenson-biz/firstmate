@@ -32,12 +32,25 @@
 #      `harness=` records that follow the newline WIN over the real ones.
 #      Neither the parser nor the seatbelt answers this; a control-character
 #      rail in fm-pr-check does.
+#   D. the line rule's OTHER half - the two characters `\` `n` in the query.
+#      There is no control character to refuse, so the rail correctly allows it;
+#      what forged the records was writing the value with `echo` under
+#      `xpg_echo`, a shell option BASHOPTS carries in from the environment into
+#      any non-interactive bash. Refusing a character and writing a value safely
+#      are different jobs, and this vector is the one that only the second does.
+#   E. the seatbelt itself, asked DIRECTLY. Under the real parser `%q` is only
+#      ever handed a digits-only number and a [A-Za-z0-9._/-] slug, so nothing
+#      above can tell whether it is there: both calls could be deleted and every
+#      other assertion here would still pass. So the rule is exercised at its
+#      own seam, bin/fm-poll-lib.sh, with components a loosened parser might
+#      emit - a separator, a quote, a space, a command substitution, a newline.
 #
 # Mutation (LEDGER_MUTATE=1): each vector asserts the INJECTION SUCCEEDS, and
 # each proves it by OBSERVING the injected effect rather than by observing that
-# something was armed - vector A runs the generated poll and demands ./PWNED,
-# vector B runs it and demands ./EVIL, vector C demands the forged meta record
-# win. A correct implementation refuses and stays inert, failing this test.
+# something was armed - A runs the generated poll and demands ./PWNED, B runs it
+# and demands ./EVIL, C and D demand the forged meta record win, E demands a
+# hostile component execute. A correct implementation refuses and stays inert,
+# failing this test.
 set -u
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -57,7 +70,17 @@ export FM_GUARD_GRACE=999999
 FAKEBIN=$(fm_fakebin "$TMP")
 cat > "$FAKEBIN/gh" <<'SH'
 #!/usr/bin/env bash
-printf '%s\n' "$*" >> "$GH_ARGV_LOG"
+printf '%s\n' "$*" >> "${GH_ARGV_LOG:-/dev/null}"
+# Record the --repo VALUE as its own bytes when asked. `$*` joins argv with a
+# space, which cannot answer "did this arrive as one argument, unchanged?" -
+# the question `printf %q` exists to make answerable.
+if [ -n "${GH_REPO_ARG:-}" ]; then
+  prev=""
+  for a in "$@"; do
+    [ "$prev" = "--repo" ] && printf '%s' "$a" > "$GH_REPO_ARG"
+    prev=$a
+  done
+fi
 printf '%s\n' "${GH_FAKE_STATE:-OPEN}"
 SH
 chmod +x "$FAKEBIN/gh"
@@ -137,12 +160,17 @@ fi
 # `printf %q` leaves a word that needs no quoting bare, which is exactly the
 # point: the serialisation is decided by the CONTENT, not by a literal quote
 # this file hopes the parser never emits.
-EXPECTED="state=\$(gh pr view 7 --repo example/repo --json state -q .state 2>/dev/null)
-[ \"\$state\" = \"MERGED\" ] && echo \"merged\""
+#
+# Compared with `cmp`, not with `[ "$(cat ...)" = ... ]`. Command substitution
+# strips trailing newlines, so a string comparison would accept a file missing
+# its terminal newline or carrying extra blank lines and still call the result
+# byte-identical. This reads every byte.
 if [ "$MUTATE" != 1 ]; then
-  ACTUAL=$(cat "$S/inj-b.check.sh")
-  [ "$ACTUAL" = "$EXPECTED" ] || fail \
-    "the generated script is not the components-only rendering"$'\n'"--- expected ---"$'\n'"$EXPECTED"$'\n'"--- actual ---"$'\n'"$ACTUAL"
+  # shellcheck disable=SC2016  # a literal format: this is the expected FILE, not a command
+  printf 'state=$(gh pr view 7 --repo example/repo --json state -q .state 2>/dev/null)\n[ "$state" = "MERGED" ] && echo "merged"\n' \
+    > "$TMP/expected-check.sh"
+  cmp -s "$TMP/expected-check.sh" "$S/inj-b.check.sh" || fail \
+    "the generated script is not byte-identical to the components-only rendering"$'\n'"--- expected ---"$'\n'"$(cat "$TMP/expected-check.sh")"$'\n'"--- actual ---"$'\n'"$(cat "$S/inj-b.check.sh")"
 fi
 
 
@@ -185,5 +213,94 @@ else
   [ "$(grep '^harness=' "$S/inj-nl.meta" | tail -1)" = "harness=echo" ] \
     || fail "the meta's harness= record was overridden by a forged one"
 fi
+
+
+# --- vector D: `\` `n` is not a control character, and must still not be one --
+# The rail correctly allows this reference; what used to forge the records was
+# `echo` expanding the escape at write time under xpg_echo. BASHOPTS reaches a
+# non-interactive bash, so this runs the real script under the real option.
+ESCAPE_REF='https://github.com/example/repo/pull/7?x=\nworktree=/tmp/pwn\nharness=sh'
+case "$ESCAPE_REF" in
+  *[[:cntrl:]]*) fail "fixture error: vector D must carry NO control character" ;;
+esac
+rm -f "$S/inj-xpg.meta" "$S/inj-xpg.check.sh" "$S/inj-xpg.verdict"
+fm_write_meta "$S/inj-xpg.meta" \
+  "window=firstmate:fm-inj-xpg" "worktree=$TMP/wt" "project=$TMP/proj" \
+  "harness=echo" "kind=ship" "mode=no-mistakes" "yolo=off"
+fm_verdict_append "$S" inj-xpg approve "verified"
+# `env`, not a `BASHOPTS=... cmd` prefix: BASHOPTS is READONLY inside a running
+# bash, so the prefix form fails the assignment and the command runs with the
+# option OFF - a vector that silently proves nothing. Proven on, not assumed:
+# a bash that ignored BASHOPTS would make this whole vector vacuous.
+env BASHOPTS=xpg_echo bash -c 'shopt -q xpg_echo' \
+  || fail "fixture error: BASHOPTS did not enable xpg_echo, so vector D would prove nothing"
+env BASHOPTS=xpg_echo "$ROOT/bin/fm-pr-check.sh" inj-xpg "$ESCAPE_REF" >/dev/null 2>&1 \
+  || fail "vector D must still ARM - the escape is legal url text, not a refusal"
+
+if [ "$MUTATE" = 1 ]; then
+  [ "$(grep '^worktree=' "$S/inj-xpg.meta" | tail -1)" = "worktree=/tmp/pwn" ] \
+    || fail "MUTATION: the forged worktree= record was expected to win under xpg_echo"
+else
+  [ "$(grep -c '^worktree=' "$S/inj-xpg.meta")" = 1 ] \
+    || fail "xpg_echo expanded the escape into a forged worktree= record"
+  [ "$(grep '^harness=' "$S/inj-xpg.meta" | tail -1)" = "harness=echo" ] \
+    || fail "xpg_echo expanded the escape into a forged harness= record"
+  [ "$(grep -c '^pr=' "$S/inj-xpg.meta")" = 1 ] \
+    || fail "the reference became more than one meta record"
+fi
+
+
+# --- vector E: the seatbelt asked directly, with what a loosened parser emits --
+# Nothing above can see whether `%q` is there, because the real parser only ever
+# hands it safe components. This asks bin/fm-poll-lib.sh itself.
+# shellcheck source=bin/fm-poll-lib.sh
+. "$ROOT/bin/fm-poll-lib.sh"
+
+HOSTILE_SEPARATOR='; touch ./OWNED; :'
+# shellcheck disable=SC2016  # these are hostile INPUTS; expansion is what they must not get
+HOSTILE_COMPONENTS=(
+  "$HOSTILE_SEPARATOR"          # a command separator
+  "'; touch ./OWNED; :'"        # a single quote, which literal-quoting could not survive
+  '" ; touch ./OWNED ; "'       # a double quote, which the original defect turned on
+  '$(touch ./OWNED)'            # command substitution
+  'a b'                         # a plain space: one word, or two?
+  "x${NL}touch ./OWNED"         # a newline inside the component
+)
+
+# render_and_run <component> <cwd>: write what the library says for that slug,
+# run it with a gh stub that records the --repo argument it actually received.
+render_and_run() {
+  local component=$1 cwd=$2
+  mkdir -p "$cwd"
+  fm_poll_render 7 "$component" > "$cwd/poll.sh"
+  bash -n "$cwd/poll.sh" || fail "the rendered poll is not valid shell for: $component"
+  ( cd "$cwd" && GH_FAKE_STATE=OPEN GH_REPO_ARG="$cwd/repo-arg" GH_ARGV_LOG=/dev/null \
+      bash "$cwd/poll.sh" >/dev/null 2>&1 )
+}
+
+i=0
+for component in "${HOSTILE_COMPONENTS[@]}"; do
+  i=$((i + 1))
+  cwd="$TMP/seatbelt-$i"
+  render_and_run "$component" "$cwd"
+  if [ "$MUTATE" = 1 ]; then
+    # Only the separator case is asserted under mutation: it is the one that
+    # breaks out with NO quoting at all, so it detects deletion of %q without
+    # depending on which quoting a mutant might have left behind.
+    if [ "$component" = "$HOSTILE_SEPARATOR" ]; then
+      assert_present "$cwd/OWNED" "MUTATION: a hostile component was expected to execute"
+    fi
+  else
+    assert_absent "$cwd/OWNED" "a hostile component executed: $component"
+    # Stronger than "nothing ran": gh received it as exactly ONE argument, byte
+    # for byte. That is what `%q` promises, and a string comparison would not
+    # see a lost trailing newline, so this compares bytes.
+    assert_present "$cwd/repo-arg" "the poll never reached gh for: $component"
+    printf '%s' "$component" > "$cwd/repo-want"
+    cmp -s "$cwd/repo-want" "$cwd/repo-arg" || fail \
+      "the component did not survive as one exact argument: $component"
+  fi
+done
+
 
 pass "fm-pr-check refuses an unparseable PR reference and compiles no caller text into the poll"

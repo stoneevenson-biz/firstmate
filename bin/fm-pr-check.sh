@@ -27,7 +27,8 @@
 #                 parse, nothing happens: no check.sh, no pr= line, no side
 #                 effect of any kind.
 #   THE SEATBELT. The poll script is emitted from the PARSED COMPONENTS, each
-#                 serialised with `printf %q`, rather than from the argument.
+#                 serialised with `printf %q` by bin/fm-poll-lib.sh, rather than
+#                 from the argument.
 #                 Not every accepted reference is inert: a query naming no
 #                 second pull request parses fine and may still carry a quote
 #                 (`.../pull/1?x=";touch ./EVIL;"`), so the validator alone is
@@ -54,7 +55,11 @@
 #                 fragment before validating anything, so a control character
 #                 living in either parses perfectly well. Encoding for a
 #                 line-oriented file is this script's own concern, so the rail
-#                 is here rather than in the shared parser.
+#                 is here rather than in the shared parser - and it takes TWO
+#                 halves, because refusing the character is not the same as
+#                 writing the value safely: `echo` under `xpg_echo` turns a
+#                 backslash-n that the rail correctly allowed into a real
+#                 newline, so the write itself is `printf '%s\n'`.
 #
 # Gate: gate-t5-prcheck-ref-not-compiled.
 # Spec: docs/specs/2026-09-02-prcheck-ref-injection.md
@@ -120,20 +125,28 @@ PR_NUM=${PR_PARSED##*	}
 . "$SCRIPT_DIR/fm-verdict-lib.sh"
 fm_verdict_require_approve "$STATE" "$ID" fm-pr-check
 
+# `printf '%s\n'`, NOT `echo`. The control-character rail above stops a literal
+# newline, and that is not enough on its own: with `xpg_echo` set - a shell
+# option BASHOPTS carries in from the environment into any non-interactive bash -
+# the echo builtin expands backslash escapes, so a reference whose query contains
+# the two characters `\` `n` has no control character to refuse, passes the rail,
+# passes the parse, and then becomes REAL newlines at the moment of the write.
+# Verified: it forged `worktree=` and `harness=` records that won, exactly as a
+# literal newline did. So the same discipline the poll script gets applies here -
+# a literal format string, the value as data - and it holds whatever the shell's
+# options happen to be, rather than relying on this file having imagined them.
 META="$STATE/$ID.meta"
 if [ -f "$META" ] && ! grep -qxF "pr=$URL" "$META"; then
-  echo "pr=$URL" >> "$META"
+  printf '%s\n' "pr=$URL" >> "$META"
 fi
 
-# THE SEATBELT. Written from the two parsed components and nothing else, each
-# serialised by `printf %q` - bash's own "quote this so it re-reads as exactly
-# this one word". That is the whole independence claim and its whole limit: no
-# component can become shell whatever it contains, while what it MEANS to gh is
-# still the parser's guarantee (see the header). Pinning --repo also means the
-# poll names the repository it asks about rather than leaving `gh` to infer one
-# from whatever clone the watcher happens to be standing in.
-# shellcheck disable=SC2016  # the single quotes are the point: this format string
-# is a LITERAL, so nothing expands at write time except the two %s components.
-printf 'state=$(gh pr view %s --repo %s --json state -q .state 2>/dev/null)\n[ "$state" = "MERGED" ] && echo "merged"\n' \
-  "$(printf '%q' "$PR_NUM")" "$(printf '%q' "$PR_SLUG")" > "$STATE/$ID.check.sh"
-echo "armed: state/$ID.check.sh polls $URL"
+# THE SEATBELT. Written from the two parsed components and nothing else, through
+# bin/fm-poll-lib.sh, which owns the `printf %q` serialisation and states its
+# claim and its limit. It is a library rather than four lines here because
+# inline it was untestable: the parser upstream only ever yields safe
+# components, so nothing could hand the rule a quote or a separator and prove it
+# still holds.
+# shellcheck source=bin/fm-poll-lib.sh
+. "$SCRIPT_DIR/fm-poll-lib.sh"
+fm_poll_render "$PR_NUM" "$PR_SLUG" > "$STATE/$ID.check.sh"
+printf '%s\n' "armed: state/$ID.check.sh polls $URL"
