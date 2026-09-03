@@ -638,12 +638,30 @@ fi
 # Inferring readiness from a cwd change is what left two secondmates as dead
 # bare shells on 2026-08-26. The proof is positive: a marker echoed back on a
 # line of its own, so the command echo cannot pass for the output.
-if [ "${FM_SKIP_SHELL_READY:-0}" != 1 ] && ! fm_herdr_wait_shell_ready "$T"; then
-  echo "error: pane $T never reached a ready shell prompt; refusing to launch" >&2
-  echo "  typing the launch command into a busy shell is what leaves a dead, un-launched pane" >&2
+if [ "${FM_SKIP_SHELL_READY:-0}" != 1 ]; then
+  if ! fm_herdr_wait_shell_ready "$T"; then
+    echo "error: pane $T never reached a ready shell prompt; refusing to launch" >&2
+    echo "  typing the launch command into a busy shell is what leaves a dead, un-launched pane" >&2
+    exit 1
+  fi
+  # Ready is not empty. The readiness gate proves a shell ran a command; this
+  # proves nothing this script typed is still sitting unconsumed in the pane.
+  # An Enter that is still queued is an Enter fm-spawn cannot say who will
+  # consume, and the first thing a fresh claude pane renders is the trust
+  # dialog, whose default option is `No, exit`.
+  if ! fm_herdr_input_drained "$T"; then
+    echo "error: pane $T did not drain its input queue; refusing to launch" >&2
+    echo "  a keystroke fm-spawn cannot account for can be answered by the agent's trust dialog" >&2
+    exit 1
+  fi
+fi
+# Text, then proof the pane took it, then Enter - never both in one blind call.
+launch_rc=0
+fm_herdr_launch_line "$T" "$LAUNCH" || launch_rc=$?
+if [ "$launch_rc" -ne 0 ]; then
+  echo "error: the launch line was not submitted in $T; pane left for inspection" >&2
   exit 1
 fi
-fm_herdr_run "$T" "$LAUNCH"
 
 # The launch either started an agent or landed in the shell as text. Say which.
 sleep "${FM_LAUNCH_VERIFY_SLEEP:-1.5}"
