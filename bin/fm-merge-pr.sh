@@ -269,7 +269,7 @@ fi
 # rule would silently let --repo win, and "silently let one win" is what merged
 # into upstream on 2026-08-29. So they must agree, and disagreement stops.
 if [ "$WANT_REPO_SET" -ge 1 ] && [ "$WANT_REMOTE_SET" -ge 1 ]; then
-  REMOTE_SLUG=$(fm_merge_target_from_url "$(fm_merge_target_git "$PROJ" remote get-url "$WANT_REMOTE" 2>/dev/null || true)" 2>/dev/null || true)
+  REMOTE_SLUG=$(fm_merge_target_from_url "$(fm_merge_target_remote_url "$PROJ" "$WANT_REMOTE" || true)" 2>/dev/null || true)
   if [ -z "$REMOTE_SLUG" ] || [ "$REMOTE_SLUG" != "$WANT_REPO" ]; then
     refuse target/conflicting-flags "--repo $WANT_REPO and --remote $WANT_REMOTE do not name the same repository." \
       "remote \"$WANT_REMOTE\" is ${REMOTE_SLUG:-not a usable GitHub repository}." \
