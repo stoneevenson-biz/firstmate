@@ -29,6 +29,14 @@
 # pid, so it can never touch another home's watcher. NEVER `pkill -f
 # bin/fm-watch.sh`: that pattern matches every firstmate home's watcher
 # (secondmate homes run the same script) and would kill siblings.
+# The decision comes from fm_watch_lock_classify, one reading of the lock, and a
+# kill happens ONLY on `ours-live` - a live pid whose recorded home, watcher path
+# and pid identity all prove it is this home's watcher. A live pid whose record
+# is incomplete (`unidentified`) or names another home (`foreign`) is REFUSED
+# out loud: nothing is signalled and no replacement is forked, because a kill
+# there would be a kill of something unproven. A dead pid, or a live pid the
+# record contradicts (a reused pid), is `stale`: the record is cleared and a
+# fresh watcher claims, and again nothing is signalled.
 #
 # --status: read-only snapshot (relayed verbatim into the boot context by
 # bin/fm-boot-context.sh, which runs it with FM_WAKE_LIB_READONLY=1 so sourcing
@@ -143,10 +151,15 @@ if [ "$mode" = restart ]; then
   # shellcheck source=bin/fm-lock-lib.sh
   . "$SCRIPT_DIR/fm-lock-lib.sh"
   fm_lock_require_helm "$STATE" "fm-watch-arm --restart" || exit 1
-  # Home-scoped stop: only the watcher pid recorded in THIS home's lock.
+  # Home-scoped stop, decided by ONE reading of the lock. A kill needs positive
+  # proof that the live pid is this home's own watcher; everything short of that
+  # proof kills nothing. That is what keeps a restart from ever widening into
+  # "stop a watcher" - the `pkill -f bin/fm-watch.sh` this script exists instead
+  # of, which reaches every firstmate home on the machine including every
+  # secondmate's.
   lock_pid=$(cat "$WATCH_LOCK/pid" 2>/dev/null || true)
-  if fm_pid_alive "$lock_pid"; then
-    if watch_lock_matches_pid "$lock_pid"; then
+  case "$(fm_watch_lock_classify "$WATCH_LOCK" "$FM_HOME" "$WATCH")" in
+    ours-live)
       kill -TERM "$lock_pid" 2>/dev/null || true
       # Wait for it to actually exit before relaunching, so the fresh watcher
       # either takes a released lock or reclaims a now-dead-pid stale lock instead
@@ -156,10 +169,24 @@ if [ "$mode" = restart ]; then
         sleep 0.1
         i=$((i + 1))
       done
-    else
+      ;;
+    stale)
+      # No live watcher to stop: either the pid is dead, or it is alive and the
+      # record proves it is NOT the watcher (a reused pid). Clear the record and
+      # let the fresh watcher claim; signal nothing.
       clear_stale_recorded_watcher_lock
-    fi
-  fi
+      ;;
+    none)
+      : ;;
+    foreign)
+      echo "watcher: REFUSED --restart - $WATCH_LOCK names live pid $lock_pid as another home's watcher ($(cat "$WATCH_LOCK/fm-home" 2>/dev/null || true) / $(cat "$WATCH_LOCK/watcher-path" 2>/dev/null || true)). Nothing was signalled. Restart it from ITS home." >&2
+      exit 1
+      ;;
+    unidentified)
+      echo "watcher: REFUSED --restart - $WATCH_LOCK names live pid $lock_pid but carries no complete identity record, so it cannot be proven to be this home's watcher. Nothing was signalled. Stop that process yourself, or remove $WATCH_LOCK once you have confirmed what it is." >&2
+      exit 1
+      ;;
+  esac
 fi
 
 # If a genuinely live+fresh watcher already holds the lock, do not start a second

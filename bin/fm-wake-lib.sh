@@ -54,6 +54,82 @@ fm_path_age() {
   echo $(( $(date +%s) - m ))
 }
 
+# --- the watcher lock's identity record --------------------------------------
+#
+# THE DEFECT THIS EXISTS FOR. `fm-watch-arm.sh --restart` is documented to stop
+# ONLY this home's watcher, and it proves ownership from four files in the lock:
+# the pid, the home, the watcher path, and the pid's identity (start time +
+# command, which is what tells a live watcher apart from an unrelated process
+# that later reused its pid). Every one of those was written best-effort with a
+# trailing `|| true`, so a watcher could - and was observed to - run behind an
+# EMPTY record. A watcher nobody can identify is a watcher nobody can stop: the
+# restart cannot prove the pid is its own, so it correctly declines to signal it,
+# and then forks a replacement that cannot take the still-held lock either. The
+# home ends with a watcher it can neither use nor replace.
+#
+# So the record is written and READ BACK, and a watcher that cannot complete it
+# refuses to run rather than running unidentifiable. And the restart's decision
+# is taken from ONE classifier, below, rather than from four ad-hoc reads - which
+# is what keeps "stop this home's watcher" from ever widening into "stop a
+# watcher", the failure mode a `pkill -f bin/fm-watch.sh` would be.
+
+# fm_watch_lock_record_identity <lockdir> <fm-home> <watcher-path> <pid>:
+# write the three descriptive fields and verify each landed. 0 iff complete.
+fm_watch_lock_record_identity() {
+  local lockdir=$1 home=$2 path=$3 pid=$4 identity
+  identity=$(fm_pid_identity "$pid") || return 1
+  [ -n "$identity" ] || return 1
+  printf '%s\n' "$home" > "$lockdir/fm-home" 2>/dev/null || return 1
+  printf '%s\n' "$path" > "$lockdir/watcher-path" 2>/dev/null || return 1
+  printf '%s\n' "$identity" > "$lockdir/pid-identity" 2>/dev/null || return 1
+  [ "$(cat "$lockdir/pid" 2>/dev/null || true)" = "$pid" ] || return 1
+  [ "$(cat "$lockdir/fm-home" 2>/dev/null || true)" = "$home" ] || return 1
+  [ "$(cat "$lockdir/watcher-path" 2>/dev/null || true)" = "$path" ] || return 1
+  [ "$(cat "$lockdir/pid-identity" 2>/dev/null || true)" = "$identity" ] || return 1
+  return 0
+}
+
+# fm_watch_lock_classify <lockdir> <fm-home> <watcher-path>: print exactly one
+# word saying what the lock is, so every caller acts on one reading of it.
+#   none          nothing holds the lock
+#   ours-live     a live process the record proves is THIS home's watcher
+#   stale         the record names no live watcher (dead pid, or a complete
+#                 record whose identity the live pid contradicts - a reused pid)
+#   foreign       a live pid whose record names a different home or watcher
+#   unidentified  a live pid with an incomplete record: ownership is unprovable
+# Only `ours-live` may be signalled. `stale` may be cleared. `foreign` and
+# `unidentified` may be neither - a kill there is a kill of something unproven.
+fm_watch_lock_classify() {
+  local lockdir=$1 home=$2 path=$3 pid lock_home lock_path lock_identity identity
+  if [ ! -e "$lockdir" ] && [ ! -L "$lockdir" ]; then
+    printf 'none\n'
+    return 0
+  fi
+  pid=$(cat "$lockdir/pid" 2>/dev/null || true)
+  if ! fm_pid_alive "$pid"; then
+    printf 'stale\n'
+    return 0
+  fi
+  lock_home=$(cat "$lockdir/fm-home" 2>/dev/null || true)
+  lock_path=$(cat "$lockdir/watcher-path" 2>/dev/null || true)
+  lock_identity=$(cat "$lockdir/pid-identity" 2>/dev/null || true)
+  if [ -z "$lock_home" ] || [ -z "$lock_path" ] || [ -z "$lock_identity" ]; then
+    printf 'unidentified\n'
+    return 0
+  fi
+  if [ "$lock_home" != "$home" ] || [ "$lock_path" != "$path" ]; then
+    printf 'foreign\n'
+    return 0
+  fi
+  identity=$(fm_pid_identity "$pid" 2>/dev/null || true)
+  if [ -n "$identity" ] && [ "$identity" = "$lock_identity" ]; then
+    printf 'ours-live\n'
+  else
+    printf 'stale\n'
+  fi
+  return 0
+}
+
 fm_lock_clean_known_files() {
   local lockdir=$1
   rm -f \

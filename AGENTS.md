@@ -88,7 +88,7 @@ state/               volatile runtime signals; gitignored
   .wake-queue        durable queued wakes: epoch<TAB>seq<TAB>kind<TAB>key<TAB>payload
   .afk               durable away-mode flag; present = sub-supervisor may inject escalations (set by /afk, cleared on user return)
   .watch.lock .wake-queue.lock watcher singleton and queue serialization locks
-  .hash-* .count-* .stale-* .seen-* .last-* .heartbeat-streak   watcher internals; never touch
+  .hash-* .count-* .stale-* .seen-* .last-* .heartbeat-streak   watcher internals; never touch. The per-task ones are minted and pruned through one rule (`bin/fm-state-lib.sh`), so teardown leaves none behind
   .last-watcher-beat watcher liveness beacon, touched every poll; fm-guard.sh reads it
   .subsuper-* .supervise-daemon.*   sub-supervisor internals; never touch
 .no-mistakes/        local validation state and evidence; gitignored
@@ -561,7 +561,15 @@ bin/fm-teardown.sh <id>
 ```
 
 The script refuses if the worktree holds unpushed work; treat a refusal as a stop-and-investigate, not an obstacle.
-Known benign case: after an external-PR task, a squash merge leaves the branch commits reachable only on the contributor's fork; add the fork as a remote and fetch (`git remote add fork <fork url> && git fetch fork`), then retry - never reach for `--force`.
+
+**A squash merge is no longer a refusal, because teardown proves it.**
+Squash-merging with `--delete-branch` replays the whole branch as one new commit on the default branch and deletes the branch, so not one of the branch's own commits stays reachable from any remote - and teardown used to read that as unpushed work.
+It refused six merged worktrees on 2026-09-02, the treehouse pool ran to zero available slots, and the next dispatch died with `treehouse get did not enter a worktree within 60s`.
+Teardown now synthesises the commit the squash would have produced and asks whether an equivalent patch is already on the authoritative default branch, refreshing a stale remote-tracking ref once before it concludes anything.
+This is a proof, never an assumption: content that was changed on the way in, a branch that was never merged, and any uncommitted change all still refuse, and the refusal says the squash check was made and proved nothing.
+Spec: `docs/specs/2026-09-02-fleet-hygiene-code-enforced.md`.
+Known benign case that still needs a hand: after an external-PR task, the branch commits may be reachable only on the contributor's fork; add the fork as a remote and fetch (`git remote add fork <fork url> && git fetch fork`), then retry - never reach for `--force`.
+Teardown also prunes every state file and watcher marker the finished task owned, so a recycled task id or pooled pane id can never inherit a suppressor that silences its first real wake.
 After a successful PR-based teardown, it also runs `bin/fm-fleet-sync.sh` for that project, best-effort, so the clone's local default catches up to the merge and the just-merged branch, now gone on the remote and free of its worktree, is pruned immediately.
 Then update the backlog using the teardown reminder: run `tasks-axi done` when the compatible tool is available, otherwise move the task to Done in `data/backlog.md` manually with the full `https://...` PR URL or local merge note and date and keep Done to the 10 most recent.
 Re-evaluate the queue and dispatch only queued work whose blockers are gone and whose time/date gate, if any, has arrived.
@@ -606,6 +614,8 @@ The watcher is singleton-safe: acquisition is race-proof, so under any number of
 If one is already alive with a fresh liveness beacon, another invocation exits cleanly instead of creating a duplicate watcher; if the live holder's beacon is stale, the new invocation exits with an actionable failure.
 Re-arming is the primary model: just run `bin/fm-watch-arm.sh` and let the singleton lock no-op when a healthy watcher is already alive.
 If a forced restart is ever genuinely needed, use `bin/fm-watch-arm.sh --restart`, which stops only this home's watcher (the pid recorded in this home's `state/.watch.lock`) and starts a fresh one.
+That scoping is proven, not promised: the kill happens only when the lock's recorded home, watcher path and pid identity all prove the live pid is this home's watcher, and a live pid the record cannot account for is refused out loud rather than signalled.
+A watcher that cannot write that record does not start, because a watcher nobody can identify is a watcher nobody can stop.
 Never `pkill -f bin/fm-watch.sh`: that pattern matches every firstmate home's watcher, including secondmate homes that run the same script, so a broad pkill from one home kills sibling homes' watchers.
 Away-mode supervision is provided by the `/afk` skill and its daemon; while `state/.afk` exists, the daemon owns the watcher.
 Waiting on the watcher is intentionally silent.

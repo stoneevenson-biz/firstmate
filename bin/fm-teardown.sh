@@ -7,6 +7,9 @@
 # REFUSES if the worktree holds work not on any remote, because treehouse return
 # hard-resets the worktree and kills its processes. A fork counts as a remote,
 # so upstream-contribution PRs pushed to a fork satisfy this in any mode.
+# Work whose commits were SQUASHED away by the merge is landed even though no
+# remote holds those commits; teardown proves that by patch-id rather than
+# assuming it (see "proving landed work whose commits were squashed away").
 # local-only projects additionally accept work merged into the local default
 # branch (firstmate performs that merge on the captain's approval) as a fallback
 # for the common case where there is no remote at all.
@@ -43,6 +46,12 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 . "$SCRIPT_DIR/fm-herdr.sh"
 # shellcheck source=bin/fm-tasks-axi-lib.sh
 . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
+# Which state files a finished task owns is not this script's own knowledge:
+# bin/fm-watch.sh mints half of them, so the naming rule has one owner and both
+# sides ask it. Teardown that knew only its own half is what left 195 entries in
+# the captain's state/ with 9 belonging to live work.
+# shellcheck source=bin/fm-state-lib.sh
+. "$SCRIPT_DIR/fm-state-lib.sh"
 "$FM_ROOT/bin/fm-guard.sh" || true
 # THE HELM. A second session on this home reads, reasons and drafts freely; it
 # may not DRIVE. This is the writer-only seam - refused at the verb, at the
@@ -91,6 +100,111 @@ default_branch() {
 meta_value() {
   local meta=$1 key=$2
   grep "^$key=" "$meta" | cut -d= -f2- || true
+}
+
+# --- proving landed work whose commits were squashed away ---------------------
+#
+# THE DEFECT THIS EXISTS FOR. The unpushed-work check asks whether HEAD is
+# reachable from a remote-tracking branch. Squash-merging a PR with
+# --delete-branch answers NO for work that is fully landed: the merge replays the
+# branch as ONE new commit on the default branch and deletes the branch, so not
+# one of the branch's own commits is reachable from any remote ever again.
+# Observed 2026-09-02: six merged worktrees all refused with "has work not on any
+# remote", the treehouse pool reached zero available slots, and the next dispatch
+# died with `treehouse get did not enter a worktree within 60s`. The check was
+# right in intent and wrong for the commonest merge button in the fleet.
+#
+# The fix does NOT relax the check into "assume landed". The content is PROVEN to
+# be on the default branch, by the only evidence a squash leaves behind - the
+# patch itself:
+#
+#   1. Take the branch's fork point from the default branch (its merge-base).
+#   2. Synthesise the commit a squash WOULD produce: the branch's tree, parented
+#      on that fork point. Its diff is exactly the diff the merge applied.
+#   3. Ask `git cherry` whether an equivalent patch is already on the default
+#      branch. It compares patch-ids, which are independent of commit ids,
+#      author, message and line numbers - so the squash commit matches while an
+#      unrelated commit does not.
+#
+# Anything less than a patch-id match REFUSES, and that is the whole point: a
+# rebase that changed the content, a conflict resolved differently, a branch that
+# was never merged at all, and a merge into some other repo all fail to prove it.
+# Uncommitted changes are never eligible - no merge can have landed a diff that
+# only exists in the working tree.
+#
+# The default branch is read from the remote-tracking ref where there is one,
+# because a pooled clone's LOCAL default is frozen at clone time and would never
+# contain the merge. If the proof fails on the ref as it stands, the ref is
+# refreshed once and the proof retried, since the merge that landed this work is
+# usually newer than the last fetch.
+
+landed_base_ref() {
+  local default=$1
+  if git -C "$PROJ" remote get-url origin >/dev/null 2>&1 \
+     && git -C "$WT" rev-parse --verify --quiet "refs/remotes/origin/$default^{commit}" >/dev/null 2>&1; then
+    printf 'origin/%s\n' "$default"
+  else
+    printf '%s\n' "$default"
+  fi
+}
+
+refresh_landed_base_ref() {
+  local default=$1
+  git -C "$PROJ" remote get-url origin >/dev/null 2>&1 || return 1
+  # Update the remote-tracking ref itself, not just FETCH_HEAD.
+  git -C "$WT" fetch --quiet origin "+refs/heads/$default:refs/remotes/origin/$default" 2>/dev/null
+}
+
+# content_is_on <base-ref>: 0 iff HEAD's whole contribution over its fork point
+# is already present on <base-ref>, by patch-id.
+content_is_on() {
+  local base=$1 mb tree synth
+  git -C "$WT" rev-parse --verify --quiet "$base^{commit}" >/dev/null 2>&1 || return 1
+  mb=$(git -C "$WT" merge-base "$base" HEAD 2>/dev/null) || return 1
+  [ -n "$mb" ] || return 1
+  # NO PATCH, NO PROOF. A branch whose diff against its fork point is empty has
+  # no patch for the base to be carrying, so there is nothing here to prove and
+  # this returns false. That reads as over-strict - nothing would be lost by
+  # returning the worktree - but "the diff is empty" is also what a branch of
+  # empty commits looks like, and accepting it turns the only test that stops
+  # this becoming "always tear down" into a test of nothing. The existing gate
+  # in tests/fm-teardown.test.sh caught exactly that: its truly-unpushed case
+  # commits with --allow-empty, and an empty-diff shortcut here tore it down.
+  tree=$(git -C "$WT" rev-parse --verify --quiet 'HEAD^{tree}') || return 1
+  # An explicit identity: commit-tree needs a committer and the ambient git
+  # config may supply none. The object is a throwaway probe, never referenced.
+  synth=$(git -C "$WT" -c user.name=firstmate -c user.email=firstmate@invalid \
+            commit-tree "$tree" -p "$mb" -m 'fm-teardown squash probe' 2>/dev/null) || return 1
+  # `git cherry <upstream> <head>` prints "- <sha>" when an equivalent patch is
+  # already upstream, "+ <sha>" when it is not.
+  case "$(git -C "$WT" cherry "$base" "$synth" 2>/dev/null | head -1)" in
+    -*) return 0 ;;
+  esac
+  return 1
+}
+
+# landed_by_squash <default-branch> <scope>: 0 iff the branch's content is
+# provably on the default branch even though its commits are not.
+#
+# <scope> is `remote` or `local`, and it decides WHICH default branch counts,
+# exactly as the reachability check above already does. A PR-mode task is landed
+# only when the content is on the REMOTE default; accepting a local-only merge
+# there would let teardown discard a branch whose work never left the clone.
+# A local-only task is landed when it is on the LOCAL default - that is what
+# bin/fm-merge-local.sh writes and the only default some of those projects have -
+# and, since a fork counts as a remote for local-only work too, on the remote
+# default as well.
+landed_by_squash() {
+  local default=$1 scope=${2:-remote} base
+  [ -n "$default" ] || return 1
+  if [ "$scope" = local ]; then
+    content_is_on "$default" && return 0
+  fi
+  base=$(landed_base_ref "$default")
+  content_is_on "$base" && return 0
+  refresh_landed_base_ref "$default" || return 1
+  base=$(landed_base_ref "$default")
+  content_is_on "$base"
 }
 
 backlog_refresh_reminder() {
@@ -402,7 +516,7 @@ cleanup_firstmate_home_children() {
         safe_rm_rf_child_worktree "$child_wt" "$child_proj"
       fi
     fi
-    rm -f "$sub_state/$child_id.status" "$sub_state/$child_id.turn-ended" "$sub_state/$child_id.check.sh" "$sub_state/$child_id.meta" "$sub_state/$child_id.pi-ext.ts" "$sub_state/$child_id.verifying"
+    fm_state_prune_task "$sub_state" "$child_id" "$child_t"
   done
 }
 
@@ -464,18 +578,43 @@ if [ -d "$WT" ] && [ "$FORCE" != "--force" ]; then
       DEFAULT=$(default_branch) || { echo "REFUSED: cannot determine default branch for $PROJ; expected origin/HEAD, main, or master." >&2; exit 1; }
       unmerged=$(git -C "$WT" log --oneline HEAD --not "$DEFAULT" -- 2>/dev/null | head -5 || true)
       if [ -n "$dirty" ] || [ -n "$unmerged" ]; then
-        echo "REFUSED: local-only worktree $WT has work not yet merged into $DEFAULT and not on any remote." >&2
-        [ -n "$dirty" ] && echo "uncommitted changes present" >&2
-        [ -n "$unmerged" ] && printf 'commits not yet on %s:\n%s\n' "$DEFAULT" "$unmerged" >&2
-        echo "Merge the branch into local $DEFAULT first (bin/fm-merge-local.sh after the captain approves), or push to a fork/remote, or get the captain's explicit OK to discard, then --force." >&2
-        exit 1
+        if [ -z "$dirty" ] && landed_by_squash "$DEFAULT" local; then
+          echo "teardown $ID: commits are not on $DEFAULT, but their content is - squash-merged. Proceeding."
+        else
+          echo "REFUSED: local-only worktree $WT has work not yet merged into $DEFAULT and not on any remote." >&2
+          if [ -n "$dirty" ]; then
+            echo "uncommitted changes present" >&2
+          else
+            echo "checked for a squash merge too: the branch's content is not on $DEFAULT, nor on $(landed_base_ref "$DEFAULT"), by patch-id." >&2
+          fi
+          if [ -n "$unmerged" ]; then
+            printf 'commits not yet on %s:\n%s\n' "$DEFAULT" "$unmerged" >&2
+          fi
+          echo "Merge the branch into local $DEFAULT first (bin/fm-merge-local.sh after the captain approves), or push to a fork/remote, or get the captain's explicit OK to discard, then --force." >&2
+          exit 1
+        fi
       fi
     elif [ -n "$dirty" ] || [ -n "$unpushed" ]; then
-      echo "REFUSED: worktree $WT has work not on any remote." >&2
-      [ -n "$dirty" ] && echo "uncommitted changes present" >&2
-      [ -n "$unpushed" ] && printf 'unpushed commits:\n%s\n' "$unpushed" >&2
-      echo "Push the branch (or get the captain's explicit OK to discard, then --force)." >&2
-      exit 1
+      # A squash merge deletes the branch and leaves its commits on no remote,
+      # so "not on a remote" is not yet "not landed". Prove it either way.
+      SQUASH_DEFAULT=$(default_branch || true)
+      if [ -z "$dirty" ] && landed_by_squash "$SQUASH_DEFAULT" remote; then
+        echo "teardown $ID: commits are on no remote, but their content is on $(landed_base_ref "$SQUASH_DEFAULT") - squash-merged. Proceeding."
+      else
+        echo "REFUSED: worktree $WT has work not on any remote." >&2
+        if [ -n "$dirty" ]; then
+          echo "uncommitted changes present" >&2
+        elif [ -n "$SQUASH_DEFAULT" ]; then
+          echo "checked for a squash merge too: the branch's content is not on $(landed_base_ref "$SQUASH_DEFAULT") by patch-id." >&2
+        else
+          echo "could not check for a squash merge: no default branch for $PROJ (expected origin/HEAD, main, or master)." >&2
+        fi
+        if [ -n "$unpushed" ]; then
+          printf 'unpushed commits:\n%s\n' "$unpushed" >&2
+        fi
+        echo "Push the branch (or get the captain's explicit OK to discard, then --force)." >&2
+        exit 1
+      fi
     fi
   fi
 fi
@@ -554,8 +693,28 @@ if [ "$KIND" = secondmate ]; then
   remove_firstmate_home "$HOME_PATH" "secondmate home" "$ID"
   remove_secondmate_registry_entry "$ID"
 fi
-rm -f "$STATE/$ID.status" "$STATE/$ID.turn-ended" "$STATE/$ID.check.sh" "$STATE/$ID.meta" "$STATE/$ID.pi-ext.ts" "$STATE/$ID.verifying"
-if [ "$CLOSE_OK" = 1 ]; then rm -f "$STATE/$ID.orphan-pane"; fi
+# Everything this task owns goes, including every marker the watcher minted for
+# it - the `.seen-*` signal suppressors and the per-pane `.hash-`/`.count-`/
+# `.stale-` trio. Leaving those behind is not untidiness: they are suppressors,
+# so a recycled task id or pooled pane id inherits a marker that silences its
+# first real wake.
+#
+# The one exception is the orphan-pane record on a close that failed, which is
+# kept because it is the only durable thing naming the leftover pane.
+if [ "$CLOSE_OK" = 1 ]; then
+  fm_state_prune_task "$STATE" "$ID" "$T"
+else
+  fm_state_prune_task "$STATE" "$ID" "$T" "$ID.orphan-pane"
+fi
+# Self-checking, not merely disciplined: the residue oracle SCANS state/ for
+# anything still named after this task rather than re-reading the prune list, so
+# a state file added to the fleet tomorrow and forgotten in that list surfaces
+# here instead of accumulating silently for another 195 entries.
+RESIDUE=$(fm_state_task_residue "$STATE" "$ID" "$T" | grep -vFx "${ORPHAN_PATH:-/dev/null}" || true)
+if [ -n "$RESIDUE" ]; then
+  echo "warning: teardown left state named after $ID; these belong to no live task and suppress its next wake if the id or pane comes back:" >&2
+  printf '%s\n' "$RESIDUE" | sed 's/^/  /' >&2
+fi
 if [ "$KIND" != scout ] && [ "$KIND" != secondmate ] && [ "$MODE" != local-only ]; then
   "$FM_ROOT/bin/fm-fleet-sync.sh" "$PROJ" || true
 fi

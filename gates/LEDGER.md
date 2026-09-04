@@ -84,3 +84,6 @@
 | gate-t4-lens-patch-file-boundary-split | frozen | A payload over its bound drops whole named files and is still a valid patch |
 | gate-t4-lens-patch-refuses-corrupt | frozen | A payload that is not a valid patch refuses the lens instead of being passed through |
 | gate-t4-lens-patch-keeps-own-tests | frozen | The branch's own tests survive a bound that forces omission |
+| gate-t4-state-residue | frozen | Teardown leaves zero state markers for the torn-down task's id |
+| gate-t4-restart-scope | frozen | fm-watch-arm --restart stops only this home's watcher, proven against a second home |
+| gate-t4-squash-landed | frozen | A squash-merged branch is torn down by proof; unproven work is still refused |
